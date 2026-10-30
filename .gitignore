@@ -1,0 +1,54 @@
+# Local design documents
+/docs/
+
+# Go build and profiling output
+/bin/
+/build/
+/dist/
+*.exe
+*.test
+*.prof
+coverage*.out
+
+# Vue / Node dependencies and build output
+**/node_modules/
+**/dist/
+**/.vite/
+**/coverage/
+*.tsbuildinfo
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Persistent runtime data, backups, and temporary output
+/data/
+/runtime/
+/backups/
+/logs/
+/tmp/
+/cache/
+/deploy/data/
+/deploy/runtime/
+/deploy/backups/
+*.log
+*.tmp
+
+# Editors and operating systems
+.idea/
+.vscode/
+.vs/
+*.suo
+*.user
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini
