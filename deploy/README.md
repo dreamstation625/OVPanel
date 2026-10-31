@@ -1,7 +1,7 @@
 # OVPanel 部署与运行
 
-本目录提供 Dockerfile、部署前检查、环境变量示例与运行手册；严格双容器部署入口
-是项目根目录的 `compose.yaml`。
+本目录提供 Dockerfile、部署前检查与运行手册；严格双容器部署入口是项目根目录的
+`compose.yaml`，环境变量示例是根目录的 `.env.example`。
 
 **范围限制：OpenVPN 容器只运行健康检查与数据面能力代理，尚未启动 OpenVPN。
 面板侧的用户、证书与导出已经可用，但运行代理的实际准入、CRL 应用、断连、限流
@@ -16,7 +16,6 @@ deploy/
   Dockerfile.openvpn      OpenVPN 2.7.7 与运行代理骨架
   entrypoint-panel.sh     修正数据目录所有权后降权运行
   check-host.sh           宿主 Docker、TUN、nft、tc、内核模块检查
-  .env.example            环境变量示例
 ```
 
 部署入口是项目根目录的 `compose.yaml`；运行数据与证书默认保存在根目录的
@@ -39,7 +38,7 @@ deploy/
 ## 首次启动
 
 ```bash
-cp deploy/.env.example .env
+cp .env.example .env
 docker compose up -d --build
 docker compose ps
 ```
@@ -195,4 +194,4 @@ go run ./cmd/panel
 ```
 
 面板默认数据目录为相对路径 `data/`；可用 `OVPANEL_DATA_DIR` 指定其他位置。
-完整环境变量见 `internal/config/config.go` 与 `deploy/.env.example`。
+完整环境变量见 `internal/config/config.go` 与根目录的 `.env.example`。

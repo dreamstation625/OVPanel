@@ -49,7 +49,7 @@ go run ./cmd/panel
 ## Docker 部署
 
 ```bash
-cp deploy/.env.example .env
+cp .env.example .env
 ./deploy/check-host.sh --data-dir ./data
 docker compose up -d --build
 ```
@@ -82,6 +82,7 @@ docker compose up -d --build
 
 ```text
 compose.yaml       严格双容器部署入口
+.env.example       环境变量示例
 cmd/panel/         面板进程入口（Web + 内嵌前端）
 cmd/vpn-agent/     OpenVPN 容器进程（运行代理）
 internal/accounts/ 用户、配置、证书与导出编排
