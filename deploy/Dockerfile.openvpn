@@ -8,8 +8,12 @@
 #
 # Go 构建固定在 BUILDPLATFORM 上原生执行，按 TARGETARCH 交叉编译；
 # 只有运行阶段的 apk 安装会落到目标架构。
+#
+# 所有基础镜像参数必须在第一个 FROM 之前声明，否则后续 FROM 无法引用。
 
 ARG GO_IMAGE=golang:1.27-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb
+ARG RUNTIME_IMAGE=alpine@sha256:020dfcbaaf4cc1078bf2d9c7ba31a8466e334061dcd2f248001d68f79e52c000
+
 FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS build
 
 WORKDIR /src
@@ -28,7 +32,6 @@ RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
       -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.buildTime=${BUILD_TIME}" \
       -o /out/vpn-agent ./cmd/vpn-agent
 
-ARG RUNTIME_IMAGE=alpine@sha256:020dfcbaaf4cc1078bf2d9c7ba31a8466e334061dcd2f248001d68f79e52c000
 FROM ${RUNTIME_IMAGE}
 
 RUN apk add --no-cache \
