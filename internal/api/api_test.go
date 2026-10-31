@@ -13,9 +13,12 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/dreamstation625/ovpanel/internal/accounts"
 	"github.com/dreamstation625/ovpanel/internal/auth"
 	"github.com/dreamstation625/ovpanel/internal/config"
 	"github.com/dreamstation625/ovpanel/internal/logging"
+	"github.com/dreamstation625/ovpanel/internal/pki"
+	"github.com/dreamstation625/ovpanel/internal/secretbox"
 	"github.com/dreamstation625/ovpanel/internal/store"
 )
 
@@ -43,6 +46,12 @@ func newTestServer(t *testing.T) *Server {
 	if _, err := st.Migrate(context.Background()); err != nil {
 		t.Fatalf("迁移失败：%v", err)
 	}
+	masterKey, err := secretbox.LoadOrCreate(filepath.Join(dir, "master.key"), "")
+	if err != nil {
+		t.Fatalf("生成主密钥失败：%v", err)
+	}
+	pkiService := pki.New(st, masterKey)
+	accountsService := accounts.New(st, pkiService, masterKey)
 
 	webFS := fstest.MapFS{
 		"index.html": {Data: []byte("<!doctype html><title>OVPanel</title>")},
@@ -57,6 +66,8 @@ func newTestServer(t *testing.T) *Server {
 			SessionTTL: time.Hour,
 		},
 		Store:          st,
+		Accounts:       accountsService,
+		PKI:            pkiService,
 		Log:            logging.New(io.Discard, "error"),
 		Build:          BuildInfo{Version: "test"},
 		BootstrapToken: "test-bootstrap-token",
@@ -88,6 +99,9 @@ func doJSON(t *testing.T, h http.Handler, method, path, remoteAddr string, body 
 	}
 	for _, c := range cookies {
 		req.AddCookie(c)
+		if c.Name == csrfCookie && method != http.MethodGet && method != http.MethodHead {
+			req.Header.Set(csrfHeader, c.Value)
+		}
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -116,6 +130,20 @@ func sessionCookieFrom(t *testing.T, rec *httptest.ResponseRecorder) *http.Cooki
 	}
 	t.Fatal("响应未设置会话 Cookie")
 	return nil
+}
+
+func authCookiesFrom(t *testing.T, rec *httptest.ResponseRecorder) []*http.Cookie {
+	t.Helper()
+	out := make([]*http.Cookie, 0, 2)
+	for _, c := range rec.Result().Cookies() {
+		if (c.Name == sessionCookie || c.Name == csrfCookie) && c.Value != "" {
+			out = append(out, c)
+		}
+	}
+	if len(out) != 2 {
+		t.Fatalf("响应未同时设置会话与 CSRF Cookie：%v", out)
+	}
+	return out
 }
 
 func TestHealthBeforeInitialization(t *testing.T) {
@@ -242,12 +270,12 @@ func TestLoginFlow(t *testing.T) {
 	if logoutSetup.Code != http.StatusOK {
 		t.Fatalf("登录失败：%d %s", logoutSetup.Code, logoutSetup.Body.String())
 	}
-	cookie := sessionCookieFrom(t, logoutSetup)
+	cookies := authCookiesFrom(t, logoutSetup)
 
-	if rec := doJSON(t, h, http.MethodPost, "/api/logout", "127.0.0.1:5001", nil, cookie); rec.Code != http.StatusOK {
+	if rec := doJSON(t, h, http.MethodPost, "/api/logout", "127.0.0.1:5001", nil, cookies...); rec.Code != http.StatusOK {
 		t.Fatalf("退出失败：%d", rec.Code)
 	}
-	if rec := doJSON(t, h, http.MethodGet, "/api/me", "127.0.0.1:5001", nil, cookie); rec.Code != http.StatusUnauthorized {
+	if rec := doJSON(t, h, http.MethodGet, "/api/me", "127.0.0.1:5001", nil, cookies...); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("退出后应 401，实际 %d", rec.Code)
 	}
 }

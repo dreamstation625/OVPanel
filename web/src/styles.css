@@ -211,6 +211,27 @@ a {
   color: var(--ok);
 }
 
+.chip--warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.chip--danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.chip--neutral {
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+
+.muted {
+  color: var(--text-3);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
 .dot {
   display: inline-block;
   width: 6px;

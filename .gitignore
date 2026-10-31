@@ -34,6 +34,7 @@ web/dist/*
 
 # Persistent runtime data, backups, and temporary output
 /data/
+/certs/
 /runtime/
 /backups/
 /logs/

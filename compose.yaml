@@ -4,7 +4,8 @@
 #   openvpn  OpenVPN 与运行代理
 #
 # 只有 panel 发布管理端口；openvpn 不发布管理端口，也不挂载 Docker Socket。
-# 数据库与运行状态保存在宿主目录，容器重建不会丢失。
+# 数据库、证书与运行状态默认保存在项目根目录的 ./data 与 ./certs，
+# 容器重建不会丢失。
 
 name: ovpanel
 
@@ -12,7 +13,7 @@ services:
   panel:
     image: ${OVPANEL_PANEL_IMAGE:-ovpanel-panel:dev}
     build:
-      context: ..
+      context: .
       dockerfile: deploy/Dockerfile.panel
       args:
         VERSION: ${OVPANEL_VERSION:-dev}
@@ -38,6 +39,7 @@ services:
       OVPANEL_TLS_KEY: ${OVPANEL_TLS_KEY:-}
       OVPANEL_DEV_SELF_SIGNED: ${OVPANEL_DEV_SELF_SIGNED:-false}
       OVPANEL_BOOTSTRAP_TOKEN: ${OVPANEL_BOOTSTRAP_TOKEN:-}
+      OVPANEL_MASTER_KEY: ${OVPANEL_MASTER_KEY:-}
     ports:
       # 默认只绑定回环地址。公网访问前必须配置 HTTPS 并显式修改绑定地址。
       - "${OVPANEL_ADMIN_BIND:-127.0.0.1}:${OVPANEL_ADMIN_PORT:-8080}:8080"
@@ -67,7 +69,7 @@ services:
   openvpn:
     image: ${OVPANEL_OPENVPN_IMAGE:-ovpanel-openvpn:dev}
     build:
-      context: ..
+      context: .
       dockerfile: deploy/Dockerfile.openvpn
       args:
         VERSION: ${OVPANEL_VERSION:-dev}

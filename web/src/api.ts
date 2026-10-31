@@ -1,3 +1,5 @@
+import { notifyUnauthorized } from './session'
+
 export interface SetupStatus {
   initialized: boolean
   setupAllowed: boolean
@@ -25,6 +27,10 @@ export interface SystemInfo {
   tlsEnabled: boolean
   schemaVersion: number
   sessions: number
+  users: number
+  profiles: number
+  activeCertificates: number
+  revokedCertificates: number
   uptimeSeconds: number
   dataStore: string
 }
@@ -38,6 +44,123 @@ export interface Operation {
   errorCode?: string
   startedAt: string
   finishedAt?: string
+}
+
+export type AuthType = 'certificate' | 'certificate_password' | 'password'
+export type UserStatus = 'active' | 'disabled'
+export type EffectiveStatus =
+  | 'active'
+  | 'user_disabled'
+  | 'profile_disabled'
+  | 'certificate_missing'
+  | 'certificate_revoked'
+  | 'certificate_expired'
+  | 'expired'
+
+export interface User {
+  id: string
+  displayName: string
+  notes: string
+  tags: string[]
+  status: UserStatus
+  profileCount: number
+  activeProfileCount: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface CertificateInfo {
+  id: string
+  serialNumber: string
+  fingerprint: string
+  commonName: string
+  status: string
+  issuedAt: string
+  expiresAt: string
+  revokedAt?: string
+  revokeReason?: string
+}
+
+export interface Profile {
+  id: string
+  userId: string
+  userDisplayName: string
+  name: string
+  authType: AuthType
+  username?: string
+  status: UserStatus
+  effectiveStatus: EffectiveStatus
+  statusReason: string
+  expiresAt?: string
+  certificate?: CertificateInfo
+  createdAt: string
+  updatedAt: string
+}
+
+export interface UserDetail {
+  user: User
+  profiles: Profile[]
+}
+
+export interface ProfileInput {
+  name: string
+  authType: AuthType
+  username?: string
+  password?: string
+  expiresAt?: string
+}
+
+export interface CreateUserInput {
+  displayName: string
+  notes: string
+  tags: string[]
+  profile?: ProfileInput
+}
+
+export interface CreateUserResult {
+  user: User
+  profile?: Profile
+  password?: string
+}
+
+export interface AddProfileResult {
+  profile: Profile
+  password?: string
+}
+
+export interface PKIStatus {
+  caExists: boolean
+  activeCertificates: number
+  revokedCertificates: number
+  expiredCertificates: number
+  users: number
+  profiles: number
+  ca?: {
+    subject: string
+    serial: string
+    fingerprint: string
+    notBefore: string
+    notAfter: string
+  }
+}
+
+export interface ExportSettings {
+  configured: boolean
+  host: string
+  port: number
+  proto: 'udp' | 'tcp'
+}
+
+export interface UserPatch {
+  displayName?: string
+  notes?: string
+  tags?: string[]
+  status?: UserStatus
+}
+
+export interface ProfilePatch {
+  name?: string
+  status?: UserStatus
 }
 
 export class ApiError extends Error {
@@ -62,10 +185,39 @@ interface ErrorEnvelope {
   }
 }
 
+function csrfHeader(): Record<string, string> {
+  const match = document.cookie.match(/(?:^|;\s*)ovpanel_csrf=([^;]+)/)
+  return match?.[1] ? { 'X-CSRF-Token': decodeURIComponent(match[1]) } : {}
+}
+
+async function parseError(response: Response): Promise<ApiError> {
+  const text = await response.text()
+  let envelope: ErrorEnvelope | null = null
+  if (text) {
+    try {
+      envelope = JSON.parse(text) as ErrorEnvelope
+    } catch {
+      envelope = null
+    }
+  }
+  return new ApiError(
+    envelope?.error?.message ?? `请求失败（HTTP ${response.status}）`,
+    envelope?.error?.code ?? 'http_error',
+    response.status,
+    envelope?.error?.requestId ?? '',
+  )
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers)
   if (init.body !== undefined && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json')
+  }
+  const method = (init.method ?? 'GET').toUpperCase()
+  if (method !== 'GET' && method !== 'HEAD') {
+    for (const [key, value] of Object.entries(csrfHeader())) {
+      headers.set(key, value)
+    }
   }
 
   let response: Response
@@ -75,31 +227,30 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new ApiError('无法连接面板服务', 'network_error', 0)
   }
 
-  const text = await response.text()
-  let payload: unknown = null
-  if (text) {
-    try {
-      payload = JSON.parse(text)
-    } catch {
-      payload = null
-    }
+  if (response.status === 401 && path !== '/api/login' && path !== '/api/setup' && path !== '/api/me') {
+    notifyUnauthorized()
   }
-
   if (!response.ok) {
-    const envelope = payload as ErrorEnvelope | null
-    throw new ApiError(
-      envelope?.error?.message ?? `请求失败（HTTP ${response.status}）`,
-      envelope?.error?.code ?? 'http_error',
-      response.status,
-      envelope?.error?.requestId ?? '',
-    )
+    throw await parseError(response)
   }
 
-  return payload as T
+  const text = await response.text()
+  if (!text) {
+    return null as T
+  }
+  try {
+    return JSON.parse(text) as T
+  } catch {
+    throw new ApiError('服务返回了无法解析的响应', 'invalid_response', response.status)
+  }
 }
 
 function post<T>(path: string, body: unknown): Promise<T> {
   return request<T>(path, { method: 'POST', body: JSON.stringify(body) })
+}
+
+function patch<T>(path: string, body: unknown): Promise<T> {
+  return request<T>(path, { method: 'PATCH', body: JSON.stringify(body) })
 }
 
 export const api = {
@@ -113,4 +264,70 @@ export const api = {
   me: () => request<Admin>('/api/me'),
   system: () => request<SystemInfo>('/api/system'),
   operations: () => request<{ operations: Operation[] }>('/api/operations'),
+
+  listUsers: (query = '', status = '') => {
+    const params = new URLSearchParams()
+    if (query) params.set('query', query)
+    if (status) params.set('status', status)
+    const suffix = params.toString()
+    return request<{ users: User[] }>(`/api/users${suffix ? '?' + suffix : ''}`)
+  },
+  createUser: (input: CreateUserInput) => post<CreateUserResult>('/api/users', input),
+  getUser: (id: string) => request<UserDetail>(`/api/users/${encodeURIComponent(id)}`),
+  updateUser: (id: string, patchBody: UserPatch) =>
+    patch<UserDetail>(`/api/users/${encodeURIComponent(id)}`, patchBody),
+  addProfile: (userId: string, input: ProfileInput) =>
+    post<AddProfileResult>(`/api/users/${encodeURIComponent(userId)}/profiles`, input),
+
+  getProfile: (id: string) => request<Profile>(`/api/profiles/${encodeURIComponent(id)}`),
+  updateProfile: (id: string, patchBody: ProfilePatch) =>
+    patch<Profile>(`/api/profiles/${encodeURIComponent(id)}`, patchBody),
+  resetProfilePassword: (id: string, adminPassword: string, password = '') =>
+    post<{ profile: Profile; password: string }>(`/api/profiles/${encodeURIComponent(id)}/password`, {
+      adminPassword,
+      password,
+    }),
+  rotateCertificate: (id: string, adminPassword: string) =>
+    post<{ profile: Profile }>(`/api/profiles/${encodeURIComponent(id)}/certificate/rotate`, {
+      adminPassword,
+    }),
+  revokeCertificate: (id: string, adminPassword: string, reason = 'manual') =>
+    post<{ profile: Profile }>(`/api/profiles/${encodeURIComponent(id)}/certificate/revoke`, {
+      adminPassword,
+      reason,
+    }),
+  exportProfile: async (id: string, adminPassword: string) => {
+    const headers = new Headers({ 'Content-Type': 'application/json', ...csrfHeader() })
+    let response: Response
+    try {
+      response = await fetch(`/api/profiles/${encodeURIComponent(id)}/export`, {
+        method: 'POST',
+        headers,
+        credentials: 'same-origin',
+        body: JSON.stringify({ adminPassword }),
+      })
+    } catch {
+      throw new ApiError('无法连接面板服务', 'network_error', 0)
+    }
+    if (response.status === 401) {
+      notifyUnauthorized()
+    }
+    if (!response.ok) {
+      throw await parseError(response)
+    }
+    const blob = await response.blob()
+    const disposition = response.headers.get('Content-Disposition') ?? ''
+    const match = /filename="([^"]+)"/.exec(disposition)
+    return { blob, filename: match?.[1] ?? 'ovpanel.ovpn' }
+  },
+
+  pkiStatus: () => request<PKIStatus>('/api/pki'),
+  getExportSettings: () => request<ExportSettings>('/api/settings/export'),
+  saveExportSettings: (settings: { host: string; port: number; proto: string }) =>
+    request<ExportSettings>('/api/settings/export', {
+      method: 'PUT',
+      body: JSON.stringify(settings),
+    }),
+  changeAdminPassword: (currentPassword: string, newPassword: string) =>
+    post<{ ok: boolean }>('/api/admin/password', { currentPassword, newPassword }),
 }

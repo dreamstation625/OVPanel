@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { RouterView } from 'vue-router'
 import { NButton, NConfigProvider, darkTheme } from 'naive-ui'
 import BrandMark from './components/BrandMark.vue'
 import ThemeToggle from './components/ThemeToggle.vue'
+import AppShell from './components/AppShell.vue'
 import LoginView from './views/LoginView.vue'
 import SetupView from './views/SetupView.vue'
-import DashboardView from './views/DashboardView.vue'
 import { api, ApiError, type SetupStatus } from './api'
+import { registerUnauthorizedHandler } from './session'
 import { resolvedTheme, themeOverrides } from './theme'
 
 type Phase = 'boot' | 'setup' | 'login' | 'app'
@@ -71,6 +73,8 @@ function handleExpired() {
   phase.value = 'login'
 }
 
+registerUnauthorizedHandler(handleExpired)
+
 onMounted(bootstrap)
 </script>
 
@@ -102,12 +106,9 @@ onMounted(bootstrap)
 
       <LoginView v-else-if="phase === 'login'" :notice="loginNotice" @done="handleLoginDone" />
 
-      <DashboardView
-        v-else-if="phase === 'app'"
-        :username="username"
-        @logout="handleLogout"
-        @expired="handleExpired"
-      />
+      <AppShell v-else-if="phase === 'app'" :username="username" @logout="handleLogout">
+        <RouterView />
+      </AppShell>
     </div>
   </NConfigProvider>
 </template>

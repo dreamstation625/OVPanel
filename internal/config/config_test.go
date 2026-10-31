@@ -12,7 +12,7 @@ func clearEnv(t *testing.T) {
 	t.Helper()
 	for _, k := range []string{
 		EnvDataDir, EnvListen, EnvTLSCert, EnvTLSKey,
-		EnvDevSelfSigned, EnvBootstrapToken, EnvLogLevel, EnvSessionTTL,
+		EnvDevSelfSigned, EnvBootstrapToken, EnvMasterKey, EnvLogLevel, EnvSessionTTL,
 	} {
 		t.Setenv(k, "")
 		os.Unsetenv(k)

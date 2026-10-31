@@ -21,6 +21,7 @@ const (
 	EnvTLSKey         = "OVPANEL_TLS_KEY"
 	EnvDevSelfSigned  = "OVPANEL_DEV_SELF_SIGNED"
 	EnvBootstrapToken = "OVPANEL_BOOTSTRAP_TOKEN"
+	EnvMasterKey      = "OVPANEL_MASTER_KEY"
 	EnvLogLevel       = "OVPANEL_LOG_LEVEL"
 	EnvSessionTTL     = "OVPANEL_SESSION_TTL"
 )
@@ -42,6 +43,7 @@ type Config struct {
 	TLSKeyFile     string
 	DevSelfSigned  bool
 	BootstrapToken string
+	MasterKey      string
 	LogLevel       string
 	SessionTTL     time.Duration
 }
@@ -54,6 +56,7 @@ func Load() (Config, error) {
 		TLSCertFile:    getString(EnvTLSCert, ""),
 		TLSKeyFile:     getString(EnvTLSKey, ""),
 		BootstrapToken: getString(EnvBootstrapToken, ""),
+		MasterKey:      getString(EnvMasterKey, ""),
 		LogLevel:       strings.ToLower(getString(EnvLogLevel, defaultLogLevel)),
 		SessionTTL:     defaultSessionTTL,
 	}
@@ -134,6 +137,12 @@ func (c Config) DBPath() string {
 // BootstrapTokenPath 返回首次初始化引导口令的落盘位置。
 func (c Config) BootstrapTokenPath() string {
 	return joinPath(c.DataDir, "bootstrap-token")
+}
+
+// MasterKeyPath 返回本地主密钥文件位置。生产建议通过环境变量注入，
+// 未注入时在该路径生成 32 字节密钥；文件与数据目录同等敏感。
+func (c Config) MasterKeyPath() string {
+	return joinPath(c.DataDir, "master.key")
 }
 
 func getString(key, def string) string {
