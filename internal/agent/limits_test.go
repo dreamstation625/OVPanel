@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/dreamstation625/ovpanel/internal/admission"
+	"github.com/dreamstation625/ovpanel/internal/agentusage"
 	"github.com/dreamstation625/ovpanel/internal/netpolicy"
 	"github.com/dreamstation625/ovpanel/internal/telemetry"
 	"github.com/dreamstation625/ovpanel/internal/traffic"
@@ -191,6 +192,45 @@ func TestDisconnectCommandEndsOnlyTargetCID(t *testing.T) {
 	}
 	if _, ok := rt.sessions["2"]; !ok {
 		t.Fatal("其他连接不应被断开")
+	}
+}
+
+func TestRestoreUsageCommandImportsCheckpoint(t *testing.T) {
+	stateDir, controlDir := t.TempDir(), t.TempDir()
+	source := agentusage.New(stateDir, controlDir, "source-gen",
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := source.Load(); err != nil {
+		t.Fatal(err)
+	}
+	source.Record("A", "source-gen:1", 300, 120)
+	if _, err := source.AppendEvent(telemetry.Event{Kind: telemetry.EventSessionStart, SessionID: "source-gen:1", ProfileID: "A"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.Save(); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint, err := os.ReadFile(filepath.Join(controlDir, telemetry.CheckpointFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rt, _, targetControl := newLimitRuntime(t, certAuth(admission.Profile{ID: "A"}))
+	if err := os.WriteFile(filepath.Join(targetControl, telemetry.RestoreFile), checkpoint, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(targetControl, commandFile),
+		[]byte(`{"id":"restore-1","action":"restore-usage"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.handleCommand(context.Background()); err != nil {
+		t.Fatalf("执行账本恢复失败：%v", err)
+	}
+	if usage := rt.usage.Usage("A"); usage != 420 {
+		t.Fatalf("恢复后用量 = %d，期望 420", usage)
+	}
+	status := rt.Status()
+	if status.UsageRestoredAt == nil || !status.UsageHealthy {
+		t.Fatalf("恢复状态未回传：%+v", status)
 	}
 }
 

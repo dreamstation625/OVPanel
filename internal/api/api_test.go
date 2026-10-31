@@ -15,6 +15,7 @@ import (
 
 	"github.com/dreamstation625/ovpanel/internal/accounts"
 	"github.com/dreamstation625/ovpanel/internal/auth"
+	"github.com/dreamstation625/ovpanel/internal/backup"
 	"github.com/dreamstation625/ovpanel/internal/config"
 	"github.com/dreamstation625/ovpanel/internal/logging"
 	"github.com/dreamstation625/ovpanel/internal/pki"
@@ -57,6 +58,18 @@ func newTestServer(t *testing.T) *Server {
 	controlDir := filepath.Join(dir, "control")
 	runtimeService := vpnruntime.New(st, pkiService, accountsService, controlDir)
 	statisticsService := statistics.New(st, controlDir, logging.New(io.Discard, "error"))
+	backupService := backup.New(backup.Options{
+		Store:         st,
+		PKI:           pkiService,
+		Accounts:      accountsService,
+		Runtime:       runtimeService,
+		MasterKey:     masterKey,
+		MasterKeyPath: filepath.Join(dir, "master.key"),
+		DataDir:       dir,
+		ControlDir:    controlDir,
+		Version:       "test",
+		Log:           logging.New(io.Discard, "error"),
+	})
 
 	webFS := fstest.MapFS{
 		"index.html": {Data: []byte("<!doctype html><title>OVPanel</title>")},
@@ -75,6 +88,7 @@ func newTestServer(t *testing.T) *Server {
 		PKI:            pkiService,
 		Runtime:        runtimeService,
 		Statistics:     statisticsService,
+		Backups:        backupService,
 		Log:            logging.New(io.Discard, "error"),
 		Build:          BuildInfo{Version: "test"},
 		BootstrapToken: "test-bootstrap-token",

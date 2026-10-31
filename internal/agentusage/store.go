@@ -95,6 +95,9 @@ func (s *Store) Load() error {
 	data, err := os.ReadFile(s.statePath)
 	if errors.Is(err, os.ErrNotExist) {
 		s.pruneEventFilesLocked()
+		if err := s.writeCheckpointLocked(); err != nil {
+			s.log.Warn("write initial usage checkpoint failed", "error", err)
+		}
 		return nil
 	}
 	if err != nil {
@@ -116,14 +119,105 @@ func (s *Store) Load() error {
 		profile.Sessions = map[string]*sessionState{}
 	}
 	s.pruneEventFilesLocked()
+	if err := s.writeCheckpointLocked(); err != nil {
+		s.log.Warn("write usage checkpoint on load failed", "error", err)
+	}
 	return nil
 }
 
-// Save 原子写入检查点。
+// Save 原子写入本地检查点，并导出可被面板备份的副本。
 func (s *Store) Save() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.saveLocked()
+	if err := s.saveLocked(); err != nil {
+		return err
+	}
+	return s.writeCheckpointLocked()
+}
+
+// Import 用备份中的账本替换当前状态；会话高水位清空，VPN 应处于停止状态。
+func (s *Store) Import(data []byte) error {
+	var state stateFile
+	if err := json.Unmarshal(data, &state); err != nil {
+		return fmt.Errorf("解析恢复账本: %w", err)
+	}
+	if state.SchemaVersion != stateSchema {
+		return fmt.Errorf("恢复账本版本不兼容：%d", state.SchemaVersion)
+	}
+	if state.Profiles == nil {
+		state.Profiles = map[string]*profileState{}
+	}
+	for _, profile := range state.Profiles {
+		profile.Sessions = map[string]*sessionState{}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.seq = state.Seq
+	s.profiles = state.Profiles
+	// 恢复点之后的事件属于已回退的状态，必须清理；否则面板恢复旧游标后
+	// 会把备份之后的用量再次补传，覆盖恢复结果。
+	s.clearEventFilesLocked()
+	if err := s.saveLocked(); err != nil {
+		return err
+	}
+	return s.writeCheckpointLocked()
+}
+
+func (s *Store) clearEventFilesLocked() {
+	entries, err := os.ReadDir(s.controlDir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() ||
+			!strings.HasPrefix(name, telemetry.EventFilePrefix) ||
+			!strings.HasSuffix(name, telemetry.EventFileSuffix) {
+			continue
+		}
+		if err := os.Remove(filepath.Join(s.controlDir, name)); err != nil {
+			s.log.Warn("remove replaced usage event file failed", "file", name, "error", err)
+		}
+	}
+}
+
+// writeCheckpointLocked 把完整账本写到控制目录，供面板备份；不含凭据材料。
+func (s *Store) writeCheckpointLocked() error {
+	if err := os.MkdirAll(s.controlDir, 0o700); err != nil {
+		return fmt.Errorf("创建控制目录: %w", err)
+	}
+	payload, err := json.MarshalIndent(stateFile{
+		SchemaVersion: stateSchema,
+		Seq:           s.seq,
+		Profiles:      s.profiles,
+		UpdatedAt:     s.now().Format(time.RFC3339),
+	}, "", "  ")
+	if err != nil {
+		return fmt.Errorf("编码用量检查点: %w", err)
+	}
+	path := filepath.Join(s.controlDir, telemetry.CheckpointFile)
+	tmp, err := os.CreateTemp(s.controlDir, ".checkpoint-*.tmp")
+	if err != nil {
+		return fmt.Errorf("创建用量检查点临时文件: %w", err)
+	}
+	name := tmp.Name()
+	defer os.Remove(name)
+	if err := tmp.Chmod(0o644); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(payload); err != nil {
+		tmp.Close()
+		return fmt.Errorf("写入用量检查点: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(name, path); err != nil {
+		return fmt.Errorf("替换用量检查点: %w", err)
+	}
+	return os.Chmod(path, 0o644)
 }
 
 func (s *Store) saveLocked() error {

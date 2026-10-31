@@ -21,6 +21,7 @@ import (
 
 	"github.com/dreamstation625/ovpanel/internal/accounts"
 	"github.com/dreamstation625/ovpanel/internal/api"
+	"github.com/dreamstation625/ovpanel/internal/backup"
 	"github.com/dreamstation625/ovpanel/internal/bootstrap"
 	"github.com/dreamstation625/ovpanel/internal/config"
 	"github.com/dreamstation625/ovpanel/internal/devtls"
@@ -95,6 +96,20 @@ func run() error {
 	accountsService := accounts.New(st, pkiService, masterKey)
 	runtimeService := vpnruntime.New(st, pkiService, accountsService, cfg.ControlDir)
 	statisticsService := statistics.New(st, cfg.ControlDir, log)
+	backupService := backup.New(backup.Options{
+		Store:         st,
+		PKI:           pkiService,
+		Accounts:      accountsService,
+		Runtime:       runtimeService,
+		MasterKey:     masterKey,
+		MasterKeyPath: cfg.MasterKeyPath(),
+		MasterKeyEnv:  cfg.MasterKey != "",
+		DataDir:       cfg.DataDir,
+		ControlDir:    cfg.ControlDir,
+		Version:       version,
+		Commit:        commit,
+		Log:           log,
+	})
 	log.Info("runtime control ready", "dir", cfg.ControlDir)
 	log.Info("master key ready",
 		"path", cfg.MasterKeyPath(),
@@ -130,6 +145,7 @@ func run() error {
 		PKI:        pkiService,
 		Runtime:    runtimeService,
 		Statistics: statisticsService,
+		Backups:    backupService,
 		Log:        log,
 		Build: api.BuildInfo{
 			Version:   version,
@@ -156,6 +172,11 @@ func run() error {
 	go func() {
 		defer cleanupWG.Done()
 		syncStatistics(ctx, statisticsService, log)
+	}()
+	cleanupWG.Add(1)
+	go func() {
+		defer cleanupWG.Done()
+		runBackupSchedule(ctx, backupService, log)
 	}()
 
 	httpServer := &http.Server{
@@ -223,6 +244,29 @@ func run() error {
 	}
 	log.Info("panel stopped")
 	return nil
+}
+
+// runBackupSchedule 每 30 秒检查一次定时备份；同一天最多执行一次。
+func runBackupSchedule(ctx context.Context, service *backup.Service, log *slog.Logger) {
+	runOnce := func() {
+		runCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		if err := service.RunScheduled(runCtx); err != nil {
+			log.Warn("scheduled backup failed", "error", err)
+		}
+	}
+
+	runOnce()
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			runOnce()
+		}
+	}
 }
 
 // syncStatistics 每 5 秒把运行代理的事件日志补传到面板数据库。

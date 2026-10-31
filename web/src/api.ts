@@ -229,6 +229,77 @@ export interface ProfilePatch {
   allowedInternal?: string[]
 }
 
+export type BackupKind = 'manual' | 'scheduled' | 'pre_restore'
+
+export interface BackupSettings {
+  configured: boolean
+  enabled: boolean
+  scheduleTime: string
+  retentionCount: number
+  updatedAt: string
+  nextRunAt?: string
+}
+
+export interface BackupItem {
+  id: string
+  filename: string
+  kind: BackupKind
+  note: string
+  sizeBytes: number
+  sha256: string
+  appVersion: string
+  configRevision: number
+  agentGeneration?: string
+  usageSeq: number
+  createdAt: string
+}
+
+export interface BackupListResponse {
+  settings: BackupSettings
+  backups: BackupItem[]
+  storageBytes: number
+  maxPackageSize: number
+}
+
+export interface BackupManifest {
+  schemaVersion: number
+  kind: BackupKind
+  createdAt: string
+  appVersion: string
+  commit?: string
+  panelSchema: number
+  configRevision: number
+  configHash?: string
+  users: number
+  profiles: number
+  validCertificates: number
+  revokedCertificates: number
+  expiredCertificates: number
+  quotaResets: number
+  adminUpdatedAt?: string
+  agentPresent: boolean
+  agentStopped: boolean
+  agentGeneration?: string
+  usageSeq: number
+  masterKeyFingerprint: string
+}
+
+export interface RestorePreview {
+  token: string
+  manifest: BackupManifest
+  warnings: string[]
+  expiresAt: string
+  sha256: string
+}
+
+export interface RestoreResult {
+  restoredAt: string
+  preRestoreBackupId: string
+  vpnStarted: boolean
+  reloginRequired: boolean
+  warnings: string[]
+}
+
 export interface ProfileLimitsInput {
   expiresAt: string
   concurrentLimit: number
@@ -408,6 +479,57 @@ export const api = {
   logout: () => post<{ ok: boolean }>('/api/logout', {}),
   me: () => request<Admin>('/api/me'),
   system: () => request<SystemInfo>('/api/system'),
+  listBackups: () => request<BackupListResponse>('/api/backups'),
+  saveBackupSettings: (input: {
+    adminPassword: string
+    backupPassword?: string
+    enabled: boolean
+    scheduleTime: string
+    retentionCount: number
+  }) => put<{ settings: BackupSettings }>('/api/backups/settings', input),
+  createBackup: (adminPassword: string, note: string) =>
+    post<{ backup: BackupItem }>('/api/backups', { adminPassword, note }),
+  deleteBackup: (id: string, adminPassword: string) =>
+    post<{ ok: boolean }>(`/api/backups/${encodeURIComponent(id)}/delete`, { adminPassword }),
+  downloadBackup: async (id: string, adminPassword: string) => {
+    const response = await fetch(`/api/backups/${encodeURIComponent(id)}/download`, {
+      method: 'POST',
+      headers: new Headers({ 'Content-Type': 'application/json', ...csrfHeader() }),
+      credentials: 'same-origin',
+      body: JSON.stringify({ adminPassword }),
+    })
+    if (response.status === 401) {
+      notifyUnauthorized()
+    }
+    if (!response.ok) {
+      throw await parseError(response)
+    }
+    const blob = await response.blob()
+    const disposition = response.headers.get('Content-Disposition') ?? ''
+    const match = /filename="([^"]+)"/.exec(disposition)
+    return { blob, filename: match?.[1] ?? 'ovpanel-backup.ovpbak' }
+  },
+  previewRestore: async (file: File, adminPassword: string, backupPassword: string) => {
+    const form = new FormData()
+    form.append('adminPassword', adminPassword)
+    form.append('backupPassword', backupPassword)
+    form.append('file', file, file.name)
+    const response = await fetch('/api/backups/restore/preview', {
+      method: 'POST',
+      headers: new Headers(csrfHeader()),
+      credentials: 'same-origin',
+      body: form,
+    })
+    if (response.status === 401) {
+      notifyUnauthorized()
+    }
+    if (!response.ok) {
+      throw await parseError(response)
+    }
+    return (await response.json()) as RestorePreview
+  },
+  executeRestore: (token: string, adminPassword: string) =>
+    post<RestoreResult>('/api/backups/restore/execute', { token, adminPassword }),
   overview: () => request<Overview>('/api/overview'),
   operations: () => request<{ operations: Operation[] }>('/api/operations'),
   connections: () => request<ConnectionsResponse>('/api/connections'),

@@ -70,9 +70,11 @@ func (s *Service) AgentStatus() (map[string]any, bool) {
 	return status, true
 }
 
-// Command 写入启停/重启控制命令。
+// Command 写入启停、重启或备份/恢复相关控制命令。
 func (s *Service) Command(action string) error {
-	if action != "start" && action != "stop" && action != "restart" {
+	switch action {
+	case "start", "stop", "restart", "checkpoint", "restore-usage":
+	default:
 		return fmt.Errorf("未知控制命令：%q", action)
 	}
 	return s.writeCommand(map[string]string{

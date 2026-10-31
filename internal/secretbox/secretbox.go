@@ -9,6 +9,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -69,6 +70,22 @@ func LoadOrCreate(path, encoded string) (Key, error) {
 		return Key{}, err
 	}
 	return key, nil
+}
+
+// Encode 返回可持久化的主密钥文本。调用方必须按密钥材料保护它。
+func (k Key) Encode() string {
+	return base64.RawURLEncoding.EncodeToString(k.bytes[:])
+}
+
+// Fingerprint 返回主密钥的 SHA-256 指纹，用于备份清单核对，不泄露密钥。
+func (k Key) Fingerprint() string {
+	sum := sha256.Sum256(k.bytes[:])
+	return hex.EncodeToString(sum[:])
+}
+
+// Parse 解析 LoadOrCreate 接受的同一组编码格式。
+func Parse(value string) (Key, error) {
+	return parseEncoded(strings.TrimSpace(value))
 }
 
 // Seal 加密明文，返回包含随机 nonce 的密文。

@@ -118,9 +118,10 @@ func withSameOrigin(next http.Handler) http.Handler {
 }
 
 // withBodyLimit 限制请求体读取大小。
+// 备份上传使用独立的流式限制，避免把大文件按 JSON 上限拒绝。
 func withBodyLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Body != nil {
+		if r.Body != nil && !strings.HasPrefix(r.URL.Path, "/api/backups/restore/preview") {
 			r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 		}
 		next.ServeHTTP(w, r)

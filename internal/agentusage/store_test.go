@@ -104,6 +104,46 @@ func TestSaveLoadKeepsTotalsAndDropsSessionHighWater(t *testing.T) {
 	}
 }
 
+func TestImportReplacesLedgerAndClearsOldEvents(t *testing.T) {
+	source, _, sourceControl := testStore(t)
+	source.Record("p1", "gen-1:1", 500, 250)
+	source.SyncEpochs(admission.Snapshot{Profiles: []admission.Profile{{ID: "p1", QuotaEpoch: 3}}})
+	if _, err := source.AppendEvent(telemetry.Event{Kind: telemetry.EventSessionStart, SessionID: "gen-1:1", ProfileID: "p1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.Save(); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint, err := os.ReadFile(filepath.Join(sourceControl, telemetry.CheckpointFile))
+	if err != nil {
+		t.Fatalf("读取检查点失败：%v", err)
+	}
+
+	target, _, targetControl := testStore(t)
+	if _, err := target.AppendEvent(telemetry.Event{Kind: telemetry.EventSessionStart, SessionID: "old:1", ProfileID: "p1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := target.Import(checkpoint); err != nil {
+		t.Fatalf("导入检查点失败：%v", err)
+	}
+	if stats := target.ProfileStats()[0]; stats.TotalBytes != 750 || stats.QuotaEpoch != 3 || stats.UsageBytes != 0 {
+		t.Fatalf("导入后账本异常：%+v", stats)
+	}
+	if target.CurrentSeq() == 0 {
+		t.Fatal("导入后事件序号应为备份值")
+	}
+	// 旧事件文件必须清理，避免面板按恢复后的游标再次补传。
+	entries, err := os.ReadDir(targetControl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "events") {
+			t.Fatalf("恢复后仍存在旧事件文件：%s", entry.Name())
+		}
+	}
+}
+
 func TestAppendEventIsolatesPartialTail(t *testing.T) {
 	store, _, controlDir := testStore(t)
 	if err := os.WriteFile(filepath.Join(controlDir, activeEvents), []byte(`{"partial":`), 0o644); err != nil {

@@ -15,6 +15,7 @@ import (
 
 	"github.com/dreamstation625/ovpanel/internal/accounts"
 	"github.com/dreamstation625/ovpanel/internal/auth"
+	"github.com/dreamstation625/ovpanel/internal/backup"
 	"github.com/dreamstation625/ovpanel/internal/config"
 	"github.com/dreamstation625/ovpanel/internal/pki"
 	"github.com/dreamstation625/ovpanel/internal/statistics"
@@ -48,6 +49,7 @@ type Options struct {
 	PKI            *pki.Service
 	Runtime        *vpnruntime.Service
 	Statistics     *statistics.Service
+	Backups        *backup.Service
 	Log            *slog.Logger
 	Build          BuildInfo
 	BootstrapToken string
@@ -65,6 +67,7 @@ type Server struct {
 	pki             *pki.Service
 	runtime         *vpnruntime.Service
 	statistics      *statistics.Service
+	backups         *backup.Service
 	log             *slog.Logger
 	build           BuildInfo
 	bootstrapToken  string
@@ -87,6 +90,7 @@ func New(opts Options) *Server {
 		pki:             opts.PKI,
 		runtime:         opts.Runtime,
 		statistics:      opts.Statistics,
+		backups:         opts.Backups,
 		log:             opts.Log,
 		build:           opts.Build,
 		bootstrapToken:  opts.BootstrapToken,
@@ -147,6 +151,14 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/server/config/draft", s.requireSession(http.HandlerFunc(s.handleSaveServerDraft)))
 	mux.Handle("POST /api/server/config/apply", s.requireSession(http.HandlerFunc(s.handleApplyServerConfig)))
 	mux.Handle("POST /api/server/command", s.requireSession(http.HandlerFunc(s.handleServerCommand)))
+
+	mux.Handle("GET /api/backups", s.requireSession(http.HandlerFunc(s.handleListBackups)))
+	mux.Handle("PUT /api/backups/settings", s.requireSession(http.HandlerFunc(s.handleSaveBackupSettings)))
+	mux.Handle("POST /api/backups", s.requireSession(http.HandlerFunc(s.handleCreateBackup)))
+	mux.Handle("POST /api/backups/{id}/download", s.requireSession(http.HandlerFunc(s.handleDownloadBackup)))
+	mux.Handle("POST /api/backups/{id}/delete", s.requireSession(http.HandlerFunc(s.handleDeleteBackup)))
+	mux.Handle("POST /api/backups/restore/preview", s.requireSession(http.HandlerFunc(s.handleRestorePreview)))
+	mux.Handle("POST /api/backups/restore/execute", s.requireSession(http.HandlerFunc(s.handleRestoreExecute)))
 
 	// 未匹配的 API 路径必须返回 JSON 404，不能落到单页应用回退。
 	mux.HandleFunc("/api/", s.handleAPINotFound)

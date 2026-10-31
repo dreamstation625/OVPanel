@@ -41,6 +41,9 @@ services:
       OVPANEL_BOOTSTRAP_TOKEN: ${OVPANEL_BOOTSTRAP_TOKEN:-}
       OVPANEL_MASTER_KEY: ${OVPANEL_MASTER_KEY:-}
       OVPANEL_CONTROL_DIR: /control
+      # 备份清单记录部署镜像固定值；不参与运行逻辑。
+      OVPANEL_PANEL_IMAGE_REF: ${OVPANEL_PANEL_IMAGE:-ovpanel-panel:dev}
+      OVPANEL_OPENVPN_IMAGE_REF: ${OVPANEL_OPENVPN_IMAGE:-ovpanel-openvpn:dev}
     ports:
       # 默认只绑定回环地址。公网访问前必须配置 HTTPS 并显式修改绑定地址。
       - "${OVPANEL_ADMIN_BIND:-127.0.0.1}:${OVPANEL_ADMIN_PORT:-8080}:8080"

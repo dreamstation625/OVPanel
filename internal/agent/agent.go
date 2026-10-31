@@ -82,6 +82,8 @@ type Status struct {
 	UsageSeq            uint64     `json:"usageSeq"`
 	UsageHealthy        bool       `json:"usageHealthy"`
 	UsageError          string     `json:"usageError,omitempty"`
+	UsageCheckpointAt   *time.Time `json:"usageCheckpointAt,omitempty"`
+	UsageRestoredAt     *time.Time `json:"usageRestoredAt,omitempty"`
 	LastError           string     `json:"lastError,omitempty"`
 	RolledBack          bool       `json:"rolledBack,omitempty"`
 	RollbackReason      string     `json:"rollbackReason,omitempty"`
@@ -118,6 +120,8 @@ type Runtime struct {
 	trafficActive       bool
 	usageHealthy        bool
 	usageError          string
+	usageCheckpointAt   time.Time
+	usageRestoredAt     time.Time
 	lastError           string
 	appliedAt           time.Time
 
@@ -264,6 +268,33 @@ func (r *Runtime) handleCommand(ctx context.Context) error {
 		}
 		r.setStopped(true)
 		r.log.Warn("OpenVPN stopped by panel command")
+	case "checkpoint":
+		if err := r.usage.Save(); err != nil {
+			return fmt.Errorf("导出用量检查点: %w", err)
+		}
+		now := r.now()
+		r.mu.Lock()
+		r.usageCheckpointAt = now
+		r.mu.Unlock()
+		r.log.Info("usage checkpoint written")
+	case "restore-usage":
+		data, err := os.ReadFile(filepath.Join(r.controlDir, telemetry.RestoreFile))
+		if err != nil {
+			return fmt.Errorf("读取恢复账本: %w", err)
+		}
+		// 恢复期间不应有任何在线会话；停止进程后导入备份账本并清理旧事件。
+		r.stopProcess()
+		if err := r.usage.Import(data); err != nil {
+			return err
+		}
+		_ = os.Remove(filepath.Join(r.controlDir, telemetry.RestoreFile))
+		now := r.now()
+		r.mu.Lock()
+		r.usageRestoredAt = now
+		r.usageHealthy = true
+		r.usageError = ""
+		r.mu.Unlock()
+		r.log.Warn("usage ledger restored from backup")
 	case "disconnect":
 		if command.CID == "" {
 			return fmt.Errorf("断开命令缺少 CID")
@@ -1552,6 +1583,8 @@ func (r *Runtime) Status() Status {
 		UsageSeq:            r.usage.CurrentSeq(),
 		UsageHealthy:        r.usageHealthy,
 		UsageError:          r.usageError,
+		UsageCheckpointAt:   timePtr(r.usageCheckpointAt),
+		UsageRestoredAt:     timePtr(r.usageRestoredAt),
 		LastError:           r.lastError,
 		RolledBack:          r.rolledBack,
 		RollbackReason:      r.rollbackReason,

@@ -17,6 +17,11 @@ const (
 	EventFilePrefix = "events"
 	EventFileSuffix = ".jsonl"
 
+	// CheckpointFile 是供面板备份读取的完整账本检查点。
+	CheckpointFile = "usage-state-export.json"
+	// RestoreFile 是恢复时面板写入、代理导入的账本检查点。
+	RestoreFile = "usage-restore.json"
+
 	EventSessionStart   = "session_start"
 	EventSessionAddress = "session_address"
 	EventUsage          = "usage"

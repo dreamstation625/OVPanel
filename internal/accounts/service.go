@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -88,6 +89,7 @@ type ExportResult struct {
 type Service struct {
 	store *store.Store
 	pki   *pki.Service
+	keyMu sync.RWMutex
 	key   secretbox.Key
 	now   func() time.Time
 }
@@ -95,6 +97,27 @@ type Service struct {
 // New 创建账号服务。
 func New(st *store.Store, pkiService *pki.Service, key secretbox.Key) *Service {
 	return &Service{store: st, pki: pkiService, key: key, now: func() time.Time { return time.Now().UTC() }}
+}
+
+// SetKey 在恢复备份后替换内存中的主密钥。
+func (s *Service) SetKey(key secretbox.Key) {
+	s.keyMu.Lock()
+	s.key = key
+	s.keyMu.Unlock()
+}
+
+func (s *Service) seal(plaintext, aad []byte) ([]byte, error) {
+	s.keyMu.RLock()
+	key := s.key
+	s.keyMu.RUnlock()
+	return key.Seal(plaintext, aad)
+}
+
+func (s *Service) open(blob, aad []byte) ([]byte, error) {
+	s.keyMu.RLock()
+	key := s.key
+	s.keyMu.RUnlock()
+	return key.Open(blob, aad)
 }
 
 // CreateUser 创建没有配置的用户。
@@ -398,7 +421,7 @@ func (s *Service) Export(ctx context.Context, profileID string) (ExportResult, e
 	if !ok {
 		return ExportResult{}, ErrExportNotConfigured
 	}
-	tlsKey, err := s.key.Open(setting.TLSCryptCiphertext, []byte(tlsCryptAAD))
+	tlsKey, err := s.open(setting.TLSCryptCiphertext, []byte(tlsCryptAAD))
 	if err != nil {
 		return ExportResult{}, fmt.Errorf("解密 tls-crypt 密钥: %w", err)
 	}
@@ -442,7 +465,7 @@ func (s *Service) TLSCryptKey(ctx context.Context) (string, error) {
 	if !ok {
 		return "", ErrExportNotConfigured
 	}
-	key, err := s.key.Open(setting.TLSCryptCiphertext, []byte(tlsCryptAAD))
+	key, err := s.open(setting.TLSCryptCiphertext, []byte(tlsCryptAAD))
 	if err != nil {
 		return "", fmt.Errorf("解密 tls-crypt 密钥: %w", err)
 	}
@@ -477,7 +500,7 @@ func (s *Service) SaveExportSettings(ctx context.Context, input ExportSettings) 
 		if err != nil {
 			return ExportSettings{}, err
 		}
-		ciphertext, err = s.key.Seal([]byte(tlsKey), []byte(tlsCryptAAD))
+		ciphertext, err = s.seal([]byte(tlsKey), []byte(tlsCryptAAD))
 		if err != nil {
 			return ExportSettings{}, err
 		}

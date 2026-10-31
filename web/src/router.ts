@@ -10,6 +10,7 @@ export const router = createRouter({
     { path: '/users', component: () => import('./views/UsersView.vue'), meta: { title: '用户与客户端' } },
     { path: '/users/:id', component: () => import('./views/UserDetailView.vue'), meta: { title: '用户详情' } },
     { path: '/server', component: () => import('./views/ServerView.vue'), meta: { title: '服务端' } },
+    { path: '/backups', component: () => import('./views/BackupView.vue'), meta: { title: '备份' } },
     {
       path: '/profiles/:id',
       component: () => import('./views/ProfileDetailView.vue'),

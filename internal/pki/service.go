@@ -55,6 +55,7 @@ type CAInfo struct {
 // Service 负责 CA 与客户端证书。
 type Service struct {
 	store *store.Store
+	keyMu sync.RWMutex
 	key   secretbox.Key
 	now   func() time.Time
 
@@ -64,6 +65,27 @@ type Service struct {
 // New 创建 PKI 服务。
 func New(st *store.Store, key secretbox.Key) *Service {
 	return &Service{store: st, key: key, now: func() time.Time { return time.Now().UTC() }}
+}
+
+// SetKey 在恢复备份后替换内存中的主密钥；磁盘主密钥由恢复流程同步更新。
+func (s *Service) SetKey(key secretbox.Key) {
+	s.keyMu.Lock()
+	s.key = key
+	s.keyMu.Unlock()
+}
+
+func (s *Service) seal(plaintext, aad []byte) ([]byte, error) {
+	s.keyMu.RLock()
+	key := s.key
+	s.keyMu.RUnlock()
+	return key.Seal(plaintext, aad)
+}
+
+func (s *Service) open(blob, aad []byte) ([]byte, error) {
+	s.keyMu.RLock()
+	key := s.key
+	s.keyMu.RUnlock()
+	return key.Open(blob, aad)
 }
 
 // Check 在启动时验证已有 CA 可用；不存在时不做任何事。
@@ -145,7 +167,7 @@ func (s *Service) BuildClientCertificate(ctx context.Context, profileID, commonN
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 
 	certID := uuid.NewString()
-	ciphertext, err := s.key.Seal(keyPEM, []byte(certKeyAAD+certID))
+	ciphertext, err := s.seal(keyPEM, []byte(certKeyAAD+certID))
 	if err != nil {
 		return store.CertificateRecord{}, "", err
 	}
@@ -248,7 +270,7 @@ func (s *Service) ExportMaterial(ctx context.Context, profileID string) (caPEM, 
 		return "", "", "", ErrNoActiveCertificate
 	}
 
-	keyDER, err := s.key.Open(cert.KeyCiphertext, []byte(certKeyAAD+cert.ID))
+	keyDER, err := s.open(cert.KeyCiphertext, []byte(certKeyAAD+cert.ID))
 	if err != nil {
 		return "", "", "", fmt.Errorf("解密客户端私钥: %w", err)
 	}
@@ -262,7 +284,7 @@ func (s *Service) EnsureServerCertificate(ctx context.Context) (certPEM, keyPEM 
 	if existing, ok, err := s.store.ServerCertificate(ctx); err != nil {
 		return "", "", err
 	} else if ok && existing.ExpiresAt.After(now.Add(24*time.Hour)) {
-		keyDER, err := s.key.Open(existing.KeyCiphertext, []byte(serverKeyAAD))
+		keyDER, err := s.open(existing.KeyCiphertext, []byte(serverKeyAAD))
 		if err == nil {
 			if _, parseErr := x509.ParsePKCS8PrivateKey(keyDER); parseErr == nil {
 				// 复用已有证书时也必须输出 PEM。直接返回 DER 会让 OpenVPN
@@ -308,7 +330,7 @@ func (s *Service) EnsureServerCertificate(ctx context.Context) (certPEM, keyPEM 
 	if err != nil {
 		return "", "", fmt.Errorf("编码服务端私钥: %w", err)
 	}
-	ciphertext, err := s.key.Seal(keyDER, []byte(serverKeyAAD))
+	ciphertext, err := s.seal(keyDER, []byte(serverKeyAAD))
 	if err != nil {
 		return "", "", err
 	}
@@ -375,7 +397,7 @@ func (s *Service) ensureCA(ctx context.Context) (*x509.Certificate, crypto.Signe
 	if err != nil {
 		return nil, nil, "", fmt.Errorf("编码 CA 私钥: %w", err)
 	}
-	ciphertext, err := s.key.Seal(keyDER, []byte(caKeyAAD))
+	ciphertext, err := s.seal(keyDER, []byte(caKeyAAD))
 	if err != nil {
 		return nil, nil, "", err
 	}
@@ -394,7 +416,7 @@ func (s *Service) ensureCA(ctx context.Context) (*x509.Certificate, crypto.Signe
 }
 
 func (s *Service) loadCA(ca store.CA) (*x509.Certificate, crypto.Signer, error) {
-	keyDER, err := s.key.Open(ca.KeyCiphertext, []byte(caKeyAAD))
+	keyDER, err := s.open(ca.KeyCiphertext, []byte(caKeyAAD))
 	if err != nil {
 		return nil, nil, fmt.Errorf("解密 CA 私钥（主密钥可能不匹配）: %w", err)
 	}
