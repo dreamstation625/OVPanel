@@ -1,18 +1,23 @@
 # OVPanel OpenVPN 容器镜像。
 #
-# P02 镜像只包含运行代理骨架与数据面工具，不启动 OpenVPN；
+# P02 镜像只包含运行代理与数据面工具，不启动 OpenVPN；
 # 配置、PKI、准入与网络规则在后续阶段接入。
 #
-# 基础镜像使用 P00 固定的 alpine:edge digest（OpenVPN 2.7.7），
-# 同一 digest 同时覆盖 amd64 与 arm64。
+# OpenVPN 由官方 GitHub Release 源码编译，不使用发行版软件包：
+#   https://github.com/OpenVPN/openvpn/releases
+# 构建时先校验源码包 sha256 再编译。该 tar.gz 与 Alpine aports 固定的
+# build.openvpn.net 制品是同一文件（sha512 一致）。
 #
-# Go 构建固定在 BUILDPLATFORM 上原生执行，按 TARGETARCH 交叉编译；
-# 只有运行阶段的 apk 安装会落到目标架构。
+# 基础镜像使用 P00 固定的 alpine:edge digest，amd64/arm64 通用。
+# Go 构建固定在 BUILDPLATFORM 上原生执行；OpenVPN 是 C 源码，必须在目标
+# 架构上编译，arm64 构建会走 QEMU 模拟。
 #
 # 所有基础镜像参数必须在第一个 FROM 之前声明，否则后续 FROM 无法引用。
 
 ARG GO_IMAGE=golang:1.27-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb
 ARG RUNTIME_IMAGE=alpine@sha256:020dfcbaaf4cc1078bf2d9c7ba31a8466e334061dcd2f248001d68f79e52c000
+ARG OPENVPN_VERSION=2.7.7
+ARG OPENVPN_SHA256=3ab8f48fd6c26d49ba2333a092433949afdb5c85c0e6a1ff265784fbc04a2463
 
 FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS build
 
@@ -32,20 +37,67 @@ RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
       -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.buildTime=${BUILD_TIME}" \
       -o /out/vpn-agent ./cmd/vpn-agent
 
+FROM ${RUNTIME_IMAGE} AS openvpn-build
+
+ARG OPENVPN_VERSION
+ARG OPENVPN_SHA256
+
+RUN apk add --no-cache --virtual .build-deps \
+      build-base \
+      linux-headers \
+      openssl-dev \
+      lzo-dev \
+      lz4-dev \
+      pkcs11-helper-dev \
+      libnl3-dev \
+      libcap-ng-dev \
+      curl \
+      tar \
+ && mkdir -p /src \
+ && curl -fsSL -o /tmp/openvpn.tar.gz \
+      "https://github.com/OpenVPN/openvpn/releases/download/v${OPENVPN_VERSION}/openvpn-${OPENVPN_VERSION}.tar.gz" \
+ && echo "${OPENVPN_SHA256}  /tmp/openvpn.tar.gz" | sha256sum -c - \
+ && tar -xzf /tmp/openvpn.tar.gz -C /src --strip-components=1
+
+WORKDIR /src
+
+# 编译参数与 Alpine aports 的 main/openvpn 保持一致：启用 DCO 与 pkcs11，
+# 关闭默认的 DNS up/down 脚本（由 OVPanel 自行控制配置）。
+RUN ./configure \
+      --prefix=/usr \
+      --mandir=/usr/share/man \
+      --sysconfdir=/etc/openvpn \
+      --enable-dco \
+      --enable-pkcs11 \
+      --disable-dns-updown-by-default \
+ && make -j"$(nproc)" \
+ && make DESTDIR=/out install \
+ && strip /out/usr/sbin/openvpn
+
 FROM ${RUNTIME_IMAGE}
 
+ARG OPENVPN_VERSION
+
 RUN apk add --no-cache \
-      openvpn \
+      libssl3 \
+      libcrypto3 \
+      lzo \
+      lz4-libs \
+      pkcs11-helper \
+      libnl3 \
+      libcap-ng \
       nftables \
       iproute2 \
       iputils \
       ca-certificates \
       tzdata \
- && test "$(openvpn --version | awk 'NR==1 {print $2}')" = "2.7.7" \
  && mkdir -p /var/lib/ovpanel /etc/openvpn/ovpanel \
  && chmod 0700 /var/lib/ovpanel
 
+COPY --from=openvpn-build /out/usr/sbin/openvpn /usr/sbin/openvpn
 COPY --from=build /out/vpn-agent /usr/local/bin/vpn-agent
+
+RUN test "$(openvpn --version | awk 'NR==1 {print $2}')" = "${OPENVPN_VERSION}"
 
 LABEL org.opencontainers.image.title="OVPanel OpenVPN runtime" \
       org.opencontainers.image.description="OVPanel OpenVPN container with runtime agent" \
