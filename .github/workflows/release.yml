@@ -134,6 +134,10 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.panel_tags }}
+          # 不生成 provenance/SBOM 证明清单：每个 index 会多出两三条无标签的
+          # 小 manifest，dev 覆盖重建后全部变成无法自动回收的残留。
+          provenance: false
+          sbom: false
           build-args: |
             VERSION=${{ needs.prepare.outputs.tag }}
             COMMIT=${{ github.sha }}
@@ -152,6 +156,8 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.openvpn_tags }}
+          provenance: false
+          sbom: false
           build-args: |
             VERSION=${{ needs.prepare.outputs.tag }}
             COMMIT=${{ github.sha }}
