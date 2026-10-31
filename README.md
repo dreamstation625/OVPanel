@@ -49,9 +49,8 @@ go run ./cmd/panel
 ## Docker 部署
 
 ```bash
-cd deploy
-cp .env.example .env
-./check-host.sh --data-dir ./data
+cp deploy/.env.example .env
+./deploy/check-host.sh --data-dir ./data
 docker compose up -d --build
 ```
 
@@ -82,6 +81,7 @@ docker compose up -d --build
 ## 目录
 
 ```text
+compose.yaml       严格双容器部署入口
 cmd/panel/         面板进程入口（Web + 内嵌前端）
 cmd/vpn-agent/     OpenVPN 容器进程（运行代理）
 internal/accounts/ 用户、配置、证书与导出编排
@@ -97,5 +97,5 @@ internal/runtimeenv/容器数据面能力探测
 internal/secretbox/主密钥与私密材料加密
 internal/store/    SQLite 与迁移
 web/               Vue 3 + Vue Router 源码，构建产物内嵌
-deploy/            Dockerfile、Compose、宿主检查、运行手册
+deploy/            Dockerfile、环境变量示例、宿主检查、运行手册
 ```

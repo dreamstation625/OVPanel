@@ -21,6 +21,7 @@ dist
 web/dist
 
 # 运行数据、证书、环境文件与密钥不得进入镜像。
+certs
 deploy/data
 deploy/certs
 deploy/.env

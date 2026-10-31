@@ -1,7 +1,7 @@
 # OVPanel 部署与运行
 
-本目录提供面板、初始化流程、HTTPS、持久化目录、部署前检查、用户/配置/证书管理、
-客户端配置导出和严格双容器部署文件。
+本目录提供 Dockerfile、部署前检查、环境变量示例与运行手册；严格双容器部署入口
+是项目根目录的 `compose.yaml`。
 
 **范围限制：OpenVPN 容器只运行健康检查与数据面能力代理，尚未启动 OpenVPN。
 面板侧的用户、证书与导出已经可用，但运行代理的实际准入、CRL 应用、断连、限流
@@ -12,15 +12,15 @@
 
 ```text
 deploy/
-  compose.yaml            严格两个服务
   Dockerfile.panel        Vue 构建 + Go 内嵌 + 非 root 运行
   Dockerfile.openvpn      OpenVPN 2.7.7 与运行代理骨架
   entrypoint-panel.sh     修正数据目录所有权后降权运行
   check-host.sh           宿主 Docker、TUN、nft、tc、内核模块检查
   .env.example            环境变量示例
-  data/                   运行时数据（Git 忽略，首次启动创建）
-  certs/                  HTTPS 证书挂载目录（Git 忽略）
 ```
+
+部署入口是项目根目录的 `compose.yaml`；运行数据与证书默认保存在根目录的
+`data/`、`certs/`（Git 忽略，首次启动创建）。以下命令都在项目根目录执行。
 
 ## 前置条件
 
@@ -31,8 +31,7 @@ deploy/
 先运行检查：
 
 ```bash
-cd deploy
-./check-host.sh --data-dir ./data
+./deploy/check-host.sh --data-dir ./data
 ```
 
 检查必须没有 `[fail]`。脚本只读取宿主信息；加载缺失内核模块需要 root。
@@ -40,8 +39,7 @@ cd deploy
 ## 首次启动
 
 ```bash
-cd deploy
-cp .env.example .env
+cp deploy/.env.example .env
 docker compose up -d --build
 docker compose ps
 ```
@@ -51,13 +49,12 @@ docker compose ps
 也可以不本地构建，直接使用 Docker Hub 上的发布镜像：
 
 ```dotenv
-# deploy/.env
+# 项目根目录的 .env
 OVPANEL_PANEL_IMAGE=dreamstation625/ovpanel:0.0.1
 OVPANEL_OPENVPN_IMAGE=dreamstation625/ovpanel-openvpn:0.0.1
 ```
 
 ```bash
-cd deploy
 docker compose pull
 docker compose up -d --no-build
 ```
@@ -84,10 +81,10 @@ docker compose up -d --no-build
 
 ```bash
 mkdir -p certs
-# 将 panel.crt 与 panel.key 放入 deploy/certs/
+# 将 panel.crt 与 panel.key 放入项目根目录的 certs/
 ```
 
-在 `deploy/.env` 中设置：
+在项目根目录的 `.env` 中设置：
 
 ```dotenv
 OVPANEL_ADMIN_BIND=0.0.0.0
@@ -112,7 +109,7 @@ docker compose up -d --no-deps --force-recreate panel
 
 ## 数据与持久化
 
-宿主持久目录由 `OVPANEL_DATA_ROOT` 控制，默认 `deploy/data`：
+宿主持久目录由 `OVPANEL_DATA_ROOT` 控制，默认项目根目录下的 `data`：
 
 ```text
 data/
@@ -136,8 +133,7 @@ data/
 宿主侧：
 
 ```bash
-cd deploy
-./check-host.sh --data-dir ./data
+./deploy/check-host.sh --data-dir ./data
 ```
 
 容器侧（不发布端口，只在容器网络内访问）：
@@ -156,7 +152,6 @@ docker compose exec openvpn wget -qO- http://127.0.0.1:9443/v1/environment
 P02 只提供手工升级基线，不提供网页自更新：
 
 ```bash
-cd deploy
 # 1. 先按 P06 提供的方式备份（P06 前不要依赖未实现的备份命令）
 # 2. 固定新的 OVPANEL_PANEL_IMAGE 或版本
 # 3. 只重建 panel
@@ -200,4 +195,4 @@ go run ./cmd/panel
 ```
 
 面板默认数据目录为相对路径 `data/`；可用 `OVPANEL_DATA_DIR` 指定其他位置。
-完整环境变量见 `internal/config/config.go` 与 `.env.example`。
+完整环境变量见 `internal/config/config.go` 与 `deploy/.env.example`。
