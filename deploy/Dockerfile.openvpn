@@ -42,9 +42,11 @@ FROM ${RUNTIME_IMAGE} AS openvpn-build
 ARG OPENVPN_VERSION
 ARG OPENVPN_SHA256
 
+# linux-pam-dev 只用于构建平台默认启用的 auth-pam 插件，插件不拷入运行镜像。
 RUN apk add --no-cache --virtual .build-deps \
       build-base \
       linux-headers \
+      linux-pam-dev \
       openssl-dev \
       lzo-dev \
       lz4-dev \
