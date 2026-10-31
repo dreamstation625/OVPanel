@@ -68,6 +68,23 @@ func passwordIncoming(username, password string) Incoming {
 	return Incoming{Username: username, Password: password}
 }
 
+func TestSerialMatchesOpenVPNFormats(t *testing.T) {
+	const stored = "5FAA1D9924DD64A665000C418CD5C83A52225B2E"
+	const decimal = "546147828280510867565033957221463861557700221742"
+	if !SerialMatches(stored, "5f:aa:1d:99:24:dd:64:a6:65:00:0c:41:8c:d5:c8:3a:52:22:5b:2e") {
+		t.Fatal("OpenVPN 冒号分组的十六进制序列号应能匹配")
+	}
+	if !SerialMatches(stored, decimal) {
+		t.Fatal("十进制序列号应能匹配")
+	}
+	if !SerialMatches(stored, "0x5faa1d9924dd64a665000c418cd5c83a52225b2e") {
+		t.Fatal("0x 前缀序列号应能匹配")
+	}
+	if SerialMatches(stored, "5f:aa:1d:99:24:dd:64:a6:65:00:0c:41:8c:d5:c8:3a:52:22:5b:2f") {
+		t.Fatal("不同序列号不应匹配")
+	}
+}
+
 func TestDecideAllowsThreeAuthTypes(t *testing.T) {
 	snapshot := testSnapshot(t)
 	now := time.Now().UTC()

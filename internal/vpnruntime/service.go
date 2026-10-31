@@ -15,10 +15,12 @@ import (
 
 	"github.com/dreamstation625/ovpanel/internal/accounts"
 	"github.com/dreamstation625/ovpanel/internal/agentproto"
+	"github.com/dreamstation625/ovpanel/internal/netpolicy"
 	"github.com/dreamstation625/ovpanel/internal/pki"
 	"github.com/dreamstation625/ovpanel/internal/runtimeauth"
 	"github.com/dreamstation625/ovpanel/internal/serverconfig"
 	"github.com/dreamstation625/ovpanel/internal/store"
+	"github.com/google/uuid"
 )
 
 // BundleFileName 是控制包文件名。
@@ -55,7 +57,59 @@ type Result struct {
 	AgentPending bool
 }
 
-// Apply 生成控制包并原子写入控制目录。
+// AgentStatus 读取运行代理写入控制目录的状态；尚未写入时返回 ok=false。
+func (s *Service) AgentStatus() (map[string]any, bool) {
+	data, err := os.ReadFile(filepath.Join(s.controlDir, "status.json"))
+	if err != nil {
+		return nil, false
+	}
+	var status map[string]any
+	if err := json.Unmarshal(data, &status); err != nil {
+		return nil, false
+	}
+	return status, true
+}
+
+// Command 写入启停/重启控制命令。
+func (s *Service) Command(action string) error {
+	if action != "start" && action != "stop" && action != "restart" {
+		return fmt.Errorf("未知控制命令：%q", action)
+	}
+	if err := os.MkdirAll(s.controlDir, 0o700); err != nil {
+		return fmt.Errorf("创建控制目录: %w", err)
+	}
+	payload, err := json.Marshal(map[string]string{
+		"id":       uuid.NewString(),
+		"action":   action,
+		"issuedAt": s.now().Format(time.RFC3339),
+	})
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(s.controlDir, ".command-*.tmp")
+	if err != nil {
+		return fmt.Errorf("创建控制命令文件: %w", err)
+	}
+	name := tmp.Name()
+	defer os.Remove(name)
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(payload); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(name, filepath.Join(s.controlDir, "command.json")); err != nil {
+		return fmt.Errorf("写入控制命令: %w", err)
+	}
+	return nil
+}
+
+// Apply 使用当前生效配置（没有时用默认值）生成控制包。
 func (s *Service) Apply(ctx context.Context) (Result, error) {
 	state, err := s.store.ServerConfigState(ctx)
 	if err != nil {
@@ -70,8 +124,16 @@ func (s *Service) Apply(ctx context.Context) (Result, error) {
 		}
 		revision = state.Active.Revision
 	}
+	return s.ApplyConfig(ctx, config, revision)
+}
 
-	rendered, configHash, err := serverconfig.Render(config)
+// ApplyConfig 用指定配置生成控制包并原子写入控制目录。
+func (s *Service) ApplyConfig(ctx context.Context, config serverconfig.Config, revision int64) (Result, error) {
+	prepared, err := serverconfig.Prepare(config)
+	if err != nil {
+		return Result{}, err
+	}
+	rendered, configHash, err := serverconfig.Render(prepared)
 	if err != nil {
 		return Result{}, err
 	}
@@ -119,8 +181,16 @@ func (s *Service) Apply(ctx context.Context) (Result, error) {
 		ServerKeyPEM:   serverKey,
 		TLSCryptKey:    tlsKey,
 		CRLPEM:         crlPEM,
-		Snapshot:       snapshot,
-		IssuedAt:       s.now(),
+		Policy: netpolicy.Policy{
+			VPNPool:          prepared.VPNNetwork,
+			TunDevice:        "tun0",
+			AllowInterClient: prepared.AllowInterClient,
+			GlobalExit:       prepared.RouteMode == serverconfig.RouteGlobal,
+			BlockIPv6:        prepared.BlockIPv6,
+			AllowedInternal:  prepared.AllowedInternal,
+		},
+		Snapshot: snapshot,
+		IssuedAt: s.now(),
 	}
 	payload, err := json.MarshalIndent(bundle, "", "  ")
 	if err != nil {

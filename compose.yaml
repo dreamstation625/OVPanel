@@ -98,7 +98,7 @@ services:
     volumes:
       - "${OVPANEL_DATA_ROOT:-./data}/openvpn:/var/lib/ovpanel"
       - "${OVPANEL_DATA_ROOT:-./data}/openvpn-config:/etc/openvpn/ovpanel"
-      - "${OVPANEL_DATA_ROOT:-./data}/control:/control:ro"
+      - "${OVPANEL_DATA_ROOT:-./data}/control:/control"
     healthcheck:
       # 健康状态包含数据面环境检查；缺 TUN/模块时容器会显示 unhealthy。
       test:

@@ -1,7 +1,8 @@
 // Package agent 在 OpenVPN 容器内应用面板下发的控制包并执行准入。
 //
-// 控制包由面板写入共享控制目录；本包只读该目录，不接收网络控制请求。
-// OpenVPN 管理接口只绑定容器内 Unix Socket，准入由本代理完成。
+// 控制包由面板写入共享控制目录；本包不接收网络控制请求，只读取控制包、
+// 执行启停命令并回写状态。OpenVPN 管理接口只绑定容器内 Unix Socket，
+// 准入由本代理完成。
 package agent
 
 import (
@@ -24,11 +25,16 @@ import (
 
 	"github.com/dreamstation625/ovpanel/internal/admission"
 	"github.com/dreamstation625/ovpanel/internal/agentproto"
+	"github.com/dreamstation625/ovpanel/internal/netpolicy"
 	"github.com/dreamstation625/ovpanel/internal/serverconfig"
 )
 
 const (
 	bundleFile       = "bundle.json"
+	commandFile      = "command.json"
+	lastGoodFile     = "last-good.json"
+	stoppedFile      = "stopped"
+	defaultConfigDir = "/etc/openvpn/ovpanel"
 	managementDir    = "/run/ovpanel"
 	managementSocket = serverconfig.ManagementSocket
 	openvpnLogFile   = "openvpn.log"
@@ -42,11 +48,14 @@ type sessionInfo struct {
 // Status 是运行代理当前应用状态。
 type Status struct {
 	Configured          bool       `json:"configured"`
+	Stopped             bool       `json:"stopped,omitempty"`
 	OpenVPNRunning      bool       `json:"openvpnRunning"`
 	ManagementConnected bool       `json:"managementConnected"`
 	ConfigHash          string     `json:"configHash,omitempty"`
 	Sessions            int        `json:"sessions"`
 	LastError           string     `json:"lastError,omitempty"`
+	RolledBack          bool       `json:"rolledBack,omitempty"`
+	RollbackReason      string     `json:"rollbackReason,omitempty"`
 	AppliedAt           *time.Time `json:"appliedAt,omitempty"`
 }
 
@@ -54,6 +63,7 @@ type Status struct {
 type Runtime struct {
 	controlDir string
 	stateDir   string
+	configDir  string
 	log        *slog.Logger
 	now        func() time.Time
 
@@ -61,9 +71,16 @@ type Runtime struct {
 	snapshot            admission.Snapshot
 	bundleHash          string
 	configHash          string
+	failedHash          string
+	lastGoodBundle      []byte
+	lastGoodHash        string
+	rolledBack          bool
+	rollbackReason      string
 	openvpnRunning      bool
 	managementConnected bool
 	configured          bool
+	stopped             bool
+	lastCommandID       string
 	sessions            map[string]sessionInfo
 	lastError           string
 	appliedAt           time.Time
@@ -74,6 +91,10 @@ type Runtime struct {
 	mgmtConn   net.Conn
 	mgmtWriter *bufio.Writer
 	writeMu    sync.Mutex
+
+	// 测试替换点；生产环境使用下方真实实现。
+	applyPolicyFn func(netpolicy.Policy) error
+	startVPNFn    func(context.Context, string) error
 }
 
 // New 创建运行代理。
@@ -81,6 +102,7 @@ func New(controlDir, stateDir string, log *slog.Logger) *Runtime {
 	return &Runtime{
 		controlDir: controlDir,
 		stateDir:   stateDir,
+		configDir:  defaultConfigDir,
 		log:        log,
 		now:        func() time.Time { return time.Now().UTC() },
 		sessions:   map[string]sessionInfo{},
@@ -89,13 +111,19 @@ func New(controlDir, stateDir string, log *slog.Logger) *Runtime {
 
 // Run 持续监听控制包，直到 ctx 结束。
 func (r *Runtime) Run(ctx context.Context) {
+	r.loadPersistedState()
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
+		if err := r.handleCommand(ctx); err != nil {
+			r.setError(err)
+			r.log.Warn("handle control command failed", "error", err)
+		}
 		if err := r.applyOnce(ctx); err != nil {
 			r.setError(err)
 			r.log.Warn("apply control bundle failed", "error", err)
 		}
+		r.writeStatus()
 		select {
 		case <-ctx.Done():
 			r.Stop()
@@ -105,7 +133,97 @@ func (r *Runtime) Run(ctx context.Context) {
 	}
 }
 
+// writeStatus 把状态写入控制目录，供面板展示；文件不含秘密材料。
+func (r *Runtime) writeStatus() {
+	payload, err := json.MarshalIndent(r.Status(), "", "  ")
+	if err != nil {
+		return
+	}
+	path := filepath.Join(r.controlDir, "status.json")
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".status-*")
+	if err != nil {
+		return
+	}
+	name := tmp.Name()
+	defer os.Remove(name)
+	if err := tmp.Chmod(0o644); err != nil {
+		tmp.Close()
+		return
+	}
+	if _, err := tmp.Write(payload); err != nil {
+		tmp.Close()
+		return
+	}
+	if err := tmp.Close(); err != nil {
+		return
+	}
+	_ = os.Rename(name, path)
+}
+
+type controlCommand struct {
+	ID       string `json:"id"`
+	Action   string `json:"action"`
+	IssuedAt string `json:"issuedAt"`
+}
+
+func (r *Runtime) handleCommand(ctx context.Context) error {
+	data, err := os.ReadFile(filepath.Join(r.controlDir, commandFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("读取控制命令: %w", err)
+	}
+	var command controlCommand
+	if err := json.Unmarshal(data, &command); err != nil {
+		return fmt.Errorf("解析控制命令: %w", err)
+	}
+	r.mu.Lock()
+	if command.ID == "" || command.ID == r.lastCommandID {
+		r.mu.Unlock()
+		return nil
+	}
+	r.lastCommandID = command.ID
+	r.mu.Unlock()
+	// 命令只执行一次：处理后立即删除，代理重启时不会重放上一条命令。
+	_ = os.Remove(filepath.Join(r.controlDir, commandFile))
+
+	switch command.Action {
+	case "stop":
+		r.stopProcess()
+		if err := netpolicy.Delete(); err != nil {
+			r.log.Warn("delete network policy failed", "error", err)
+		}
+		r.setStopped(true)
+		r.log.Warn("OpenVPN stopped by panel command")
+	case "start", "restart":
+		r.setStopped(false)
+		r.mu.Lock()
+		r.bundleHash = ""
+		r.failedHash = ""
+		if command.Action == "restart" {
+			// 配置未变化时也要重新拉起进程，不能只复用现有 OpenVPN。
+			r.configHash = ""
+		}
+		r.mu.Unlock()
+		if err := r.applyOnce(ctx); err != nil {
+			return err
+		}
+		r.log.Warn("OpenVPN started by panel command", "action", command.Action)
+	default:
+		return fmt.Errorf("未知控制命令：%q", command.Action)
+	}
+	return nil
+}
+
 func (r *Runtime) applyOnce(ctx context.Context) error {
+	r.mu.Lock()
+	stopped := r.stopped
+	r.mu.Unlock()
+	if stopped {
+		return nil
+	}
 	path := filepath.Join(r.controlDir, bundleFile)
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -114,74 +232,186 @@ func (r *Runtime) applyOnce(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("读取控制包: %w", err)
 	}
-	var bundle agentproto.Bundle
-	if err := json.Unmarshal(data, &bundle); err != nil {
-		return fmt.Errorf("解析控制包: %w", err)
-	}
-	if bundle.Version != agentproto.Version {
-		return fmt.Errorf("控制包版本不支持：%d", bundle.Version)
-	}
-	sum := sha256.Sum256([]byte(bundle.Config))
-	if hex.EncodeToString(sum[:]) != bundle.ConfigHash {
-		return fmt.Errorf("控制包配置哈希不匹配")
-	}
-	if bundle.CAPEM == "" || bundle.ServerCertPEM == "" || bundle.ServerKeyPEM == "" || bundle.TLSCryptKey == "" || bundle.CRLPEM == "" {
-		return fmt.Errorf("控制包材料不完整")
-	}
-	if err := bundle.Snapshot.Validate(); err != nil {
-		return fmt.Errorf("认证快照非法: %w", err)
+	bundle, err := decodeBundle(data)
+	if err != nil {
+		return err
 	}
 
-	bundleHash := fmt.Sprintf("%x", sha256.Sum256(data))
+	bundleHash := hashBytes(data)
 	r.mu.Lock()
-	already := r.bundleHash == bundleHash && r.openvpnRunning && r.managementConnected
+	applied := r.bundleHash == bundleHash && r.openvpnRunning && r.managementConnected
+	failed := r.failedHash == bundleHash
 	r.mu.Unlock()
-	if already {
+	if applied || failed {
+		// failedHash 防止同一份已经失败的控制包每秒重试；
+		// 面板重新下发会产生新的控制包哈希，届时再尝试。
 		return nil
 	}
 
+	if err := r.applyBundle(ctx, bundle, bundleHash); err != nil {
+		r.mu.Lock()
+		r.failedHash = bundleHash
+		r.mu.Unlock()
+		return r.rollback(ctx, bundleHash, err)
+	}
+	r.commitGood(data, bundleHash)
+	r.clearError()
+	r.log.Info("control bundle applied",
+		"config_hash", bundle.ConfigHash,
+		"profiles", len(bundle.Snapshot.Profiles),
+		"users", len(bundle.Snapshot.Users))
+	return nil
+}
+
+func decodeBundle(data []byte) (agentproto.Bundle, error) {
+	var bundle agentproto.Bundle
+	if err := json.Unmarshal(data, &bundle); err != nil {
+		return bundle, fmt.Errorf("解析控制包: %w", err)
+	}
+	if bundle.Version != agentproto.Version {
+		return bundle, fmt.Errorf("控制包版本不支持：%d", bundle.Version)
+	}
+	sum := sha256.Sum256([]byte(bundle.Config))
+	if hex.EncodeToString(sum[:]) != bundle.ConfigHash {
+		return bundle, fmt.Errorf("控制包配置哈希不匹配")
+	}
+	if bundle.CAPEM == "" || bundle.ServerCertPEM == "" || bundle.ServerKeyPEM == "" || bundle.TLSCryptKey == "" || bundle.CRLPEM == "" {
+		return bundle, fmt.Errorf("控制包材料不完整")
+	}
+	if err := bundle.Snapshot.Validate(); err != nil {
+		return bundle, fmt.Errorf("认证快照非法: %w", err)
+	}
+	return bundle, nil
+}
+
+// applyBundle 应用一份已校验的控制包；成功后 bundleHash 指向该控制包。
+func (r *Runtime) applyBundle(ctx context.Context, bundle agentproto.Bundle, bundleHash string) error {
 	if err := r.writeMaterials(bundle); err != nil {
+		return err
+	}
+	if err := r.applyPolicy(bundle.Policy); err != nil {
 		return err
 	}
 
 	r.mu.Lock()
 	r.snapshot = bundle.Snapshot
-	r.bundleHash = bundleHash
 	r.configured = true
 	r.appliedAt = bundle.IssuedAt
-	r.mu.Unlock()
-
-	r.mu.Lock()
 	needsRestart := r.configHash != bundle.ConfigHash || !r.openvpnRunning || !r.managementConnected
 	r.mu.Unlock()
 
 	if needsRestart {
-		if err := r.restartOpenVPN(ctx, bundle.ConfigHash); err != nil {
+		if err := r.startVPN(ctx, bundle.ConfigHash); err != nil {
 			return err
 		}
 	} else {
 		r.pruneSessions()
 	}
-	r.clearError()
-	r.log.Info("control bundle applied",
-		"config_hash", bundle.ConfigHash,
-		"profiles", len(bundle.Snapshot.Profiles),
-		"users", len(bundle.Snapshot.Users),
-		"restarted", needsRestart)
+
+	r.mu.Lock()
+	r.bundleHash = bundleHash
+	r.mu.Unlock()
 	return nil
 }
 
+// commitGood 记录并持久化最近一次成功应用的控制包，供后续失败回退。
+func (r *Runtime) commitGood(data []byte, bundleHash string) {
+	raw := append([]byte(nil), data...)
+	r.mu.Lock()
+	r.lastGoodBundle = raw
+	r.lastGoodHash = bundleHash
+	r.failedHash = ""
+	r.rolledBack = false
+	r.rollbackReason = ""
+	r.mu.Unlock()
+	if err := writeSecure(filepath.Join(r.stateDir, lastGoodFile), raw); err != nil {
+		r.log.Warn("persist last good bundle failed", "error", err)
+	}
+}
+
+func (r *Runtime) loadPersistedState() {
+	r.loadLastGood()
+	if _, err := os.Stat(filepath.Join(r.stateDir, stoppedFile)); err == nil {
+		r.mu.Lock()
+		r.stopped = true
+		r.mu.Unlock()
+	}
+}
+
+// setStopped 记录管理员停止意图，使代理或容器重启后不会自动拉起 OpenVPN。
+func (r *Runtime) setStopped(stopped bool) {
+	r.mu.Lock()
+	r.stopped = stopped
+	r.mu.Unlock()
+	path := filepath.Join(r.stateDir, stoppedFile)
+	if stopped {
+		if err := writeSecure(path, []byte("stopped\n")); err != nil {
+			r.log.Warn("persist stopped state failed", "error", err)
+		}
+		return
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		r.log.Warn("clear stopped state failed", "error", err)
+	}
+}
+
+func (r *Runtime) loadLastGood() {
+	data, err := os.ReadFile(filepath.Join(r.stateDir, lastGoodFile))
+	if err != nil {
+		return
+	}
+	if _, err := decodeBundle(data); err != nil {
+		r.log.Warn("ignore invalid last good bundle", "error", err)
+		return
+	}
+	r.mu.Lock()
+	r.lastGoodBundle = data
+	r.lastGoodHash = hashBytes(data)
+	r.mu.Unlock()
+}
+
+// rollback 在候选控制包应用失败后恢复上一份成功控制包。
+// 面板仍保留失败的新修订，回退原因通过状态回传。
+func (r *Runtime) rollback(ctx context.Context, failedHash string, cause error) error {
+	r.mu.Lock()
+	raw := append([]byte(nil), r.lastGoodBundle...)
+	goodHash := r.lastGoodHash
+	r.mu.Unlock()
+	if len(raw) == 0 || goodHash == failedHash {
+		return cause
+	}
+	bundle, err := decodeBundle(raw)
+	if err != nil {
+		return fmt.Errorf("应用新配置失败（%v），上一版本控制包无效：%w", cause, err)
+	}
+	if err := r.applyBundle(ctx, bundle, goodHash); err != nil {
+		return fmt.Errorf("应用新配置失败（%v），回退上一版本也失败：%w", cause, err)
+	}
+	r.mu.Lock()
+	r.rolledBack = true
+	r.rollbackReason = cause.Error()
+	r.lastError = "新配置应用失败，已回退到上一版本：" + cause.Error()
+	r.mu.Unlock()
+	r.log.Warn("rolled back to last good bundle", "reason", cause, "hash", goodHash)
+	return nil
+}
+
+func hashBytes(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
 func (r *Runtime) writeMaterials(bundle agentproto.Bundle) error {
-	if err := os.MkdirAll("/etc/openvpn/ovpanel", 0o700); err != nil {
+	if err := os.MkdirAll(r.configDir, 0o700); err != nil {
 		return fmt.Errorf("创建证书目录: %w", err)
 	}
 	files := map[string]string{
-		serverconfig.PathCA:                                  bundle.CAPEM,
-		serverconfig.PathServerCert:                          bundle.ServerCertPEM,
-		serverconfig.PathServerKey:                           bundle.ServerKeyPEM,
-		serverconfig.PathTLSCrypt:                            bundle.TLSCryptKey,
-		serverconfig.PathCRL:                                 bundle.CRLPEM,
-		filepath.Join("/etc/openvpn/ovpanel", "server.conf"): bundle.Config,
+		serverconfig.PathCA:                       bundle.CAPEM,
+		serverconfig.PathServerCert:               bundle.ServerCertPEM,
+		serverconfig.PathServerKey:                bundle.ServerKeyPEM,
+		serverconfig.PathTLSCrypt:                 bundle.TLSCryptKey,
+		serverconfig.PathCRL:                      bundle.CRLPEM,
+		filepath.Join(r.configDir, "server.conf"): bundle.Config,
 	}
 	for path, content := range files {
 		if err := writeSecure(path, []byte(content)); err != nil {
@@ -207,7 +437,7 @@ func (r *Runtime) restartOpenVPN(ctx context.Context, configHash string) error {
 		return fmt.Errorf("打开 OpenVPN 日志: %w", err)
 	}
 
-	cmd := exec.Command("openvpn", "--config", filepath.Join("/etc/openvpn/ovpanel", "server.conf"))
+	cmd := exec.Command("openvpn", "--config", filepath.Join(r.configDir, "server.conf"))
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	if err := cmd.Start(); err != nil {
@@ -485,16 +715,73 @@ func (r *Runtime) stopProcess() {
 	r.mu.Unlock()
 }
 
-// Stop 停止 OpenVPN 与管理连接。
+// Stop 停止 OpenVPN、管理连接与项目专用 nftables 表。
 func (r *Runtime) Stop() {
 	r.stopProcess()
+	if err := netpolicy.Delete(); err != nil {
+		r.log.Warn("delete network policy failed", "error", err)
+	}
+}
+
+func (r *Runtime) applyPolicy(policy netpolicy.Policy) error {
+	if r.applyPolicyFn != nil {
+		return r.applyPolicyFn(policy)
+	}
+	policy.ProtectTargets = append(policy.ProtectTargets, localProtectCIDRs(policy.VPNPool)...)
+	script, err := netpolicy.Render(policy)
+	if err != nil {
+		return err
+	}
+	return netpolicy.Apply(script)
+}
+
+func (r *Runtime) startVPN(ctx context.Context, configHash string) error {
+	if r.startVPNFn != nil {
+		return r.startVPNFn(ctx, configHash)
+	}
+	return r.restartOpenVPN(ctx, configHash)
+}
+
+// localProtectCIDRs 保护容器自身的 Docker 网络与回环地址，
+// 不因管理员授权了某个内网网段而暴露控制面。
+func localProtectCIDRs(vpnPool string) []string {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+	poolIP, poolNet, _ := net.ParseCIDR(vpnPool)
+	_ = poolIP
+	out := make([]string, 0)
+	for _, iface := range interfaces {
+		if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+		if strings.HasPrefix(iface.Name, "tun") || strings.HasPrefix(iface.Name, "ifb") {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			ip, network, err := net.ParseCIDR(addr.String())
+			if err != nil || ip.To4() == nil {
+				continue
+			}
+			if poolNet != nil && (poolNet.Contains(ip) || network.Contains(poolNet.IP)) {
+				continue
+			}
+			out = append(out, network.String())
+		}
+	}
+	return out
 }
 
 // Ready 表示 OpenVPN 与准入管理接口都已就绪。
 func (r *Runtime) Ready() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.configured && r.openvpnRunning && r.managementConnected
+	return r.configured && !r.stopped && r.openvpnRunning && r.managementConnected
 }
 
 // Status 返回当前状态快照。
@@ -503,11 +790,14 @@ func (r *Runtime) Status() Status {
 	defer r.mu.Unlock()
 	status := Status{
 		Configured:          r.configured,
+		Stopped:             r.stopped,
 		OpenVPNRunning:      r.openvpnRunning,
 		ManagementConnected: r.managementConnected,
 		ConfigHash:          r.configHash,
 		Sessions:            len(r.sessions),
 		LastError:           r.lastError,
+		RolledBack:          r.rolledBack,
+		RollbackReason:      r.rollbackReason,
 	}
 	if !r.appliedAt.IsZero() {
 		applied := r.appliedAt

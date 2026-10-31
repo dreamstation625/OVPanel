@@ -85,8 +85,8 @@ async function changePassword() {
   }
   passwordError.value = ''
   passwordSuccess.value = ''
-  if (newPassword.value.length < 12) {
-    passwordError.value = '新密码至少需要 12 个字符'
+  if (newPassword.value.length < 8) {
+    passwordError.value = '新密码至少需要 8 个字符'
     return
   }
   if (newPassword.value !== confirmPassword.value) {
@@ -272,7 +272,7 @@ onMounted(load)
               v-model:value="newPassword"
               type="password"
               show-password-on="click"
-              placeholder="至少 12 个字符"
+              placeholder="至少 8 个字符"
               autocomplete="new-password"
             />
           </NFormItem>

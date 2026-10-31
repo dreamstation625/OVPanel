@@ -665,7 +665,7 @@ func exportSettingsDTO(setting accounts.ExportSettings, configured bool) map[str
 
 func validateNewAdminPassword(username, password string) string {
 	if n := utf8.RuneCountInString(password); n < minPasswordLength {
-		return "新密码至少需要 12 个字符"
+		return "新密码至少需要 8 个字符"
 	}
 	if utf8.RuneCountInString(password) > 200 {
 		return "新密码过长"

@@ -29,7 +29,7 @@ const (
 )
 
 // minPasswordLength 是管理员密码的最小长度。
-const minPasswordLength = 12
+const minPasswordLength = 8
 
 // BuildInfo 是构建信息，由链接期注入。
 type BuildInfo struct {
@@ -131,6 +131,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/settings/export", s.requireSession(http.HandlerFunc(s.handleSaveExportSettings)))
 	mux.Handle("POST /api/admin/password", s.requireSession(http.HandlerFunc(s.handleChangeAdminPassword)))
 	mux.Handle("POST /api/runtime/apply", s.requireSession(http.HandlerFunc(s.handleRuntimeApply)))
+	mux.Handle("GET /api/server/config", s.requireSession(http.HandlerFunc(s.handleServerConfig)))
+	mux.Handle("POST /api/server/config/preview", s.requireSession(http.HandlerFunc(s.handleServerConfigPreview)))
+	mux.Handle("PUT /api/server/config/draft", s.requireSession(http.HandlerFunc(s.handleSaveServerDraft)))
+	mux.Handle("POST /api/server/config/apply", s.requireSession(http.HandlerFunc(s.handleApplyServerConfig)))
+	mux.Handle("POST /api/server/command", s.requireSession(http.HandlerFunc(s.handleServerCommand)))
 
 	// 未匹配的 API 路径必须返回 JSON 404，不能落到单页应用回退。
 	mux.HandleFunc("/api/", s.handleAPINotFound)
@@ -641,7 +646,7 @@ func validateCredentials(username, password string) string {
 		return "用户名长度需在 3 到 64 个字符之间"
 	}
 	if len(password) < minPasswordLength {
-		return "密码至少需要 12 个字符"
+		return "密码至少需要 8 个字符"
 	}
 	if len(password) > 200 {
 		return "密码过长"

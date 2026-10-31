@@ -151,6 +151,50 @@ export interface ExportSettings {
   proto: 'udp' | 'tcp'
 }
 
+export interface ServerConfig {
+  vpnNetwork: string
+  protocol: 'udp' | 'tcp'
+  port: number
+  dns: string[]
+  routeMode: 'split' | 'global'
+  allowedInternal: string[]
+  allowInterClient: boolean
+  blockIpv6: boolean
+  extraDirectives: string[]
+}
+
+export interface ServerConfigRevision {
+  revision: number
+  state: string
+  config: ServerConfig
+  rendered: string
+  hash: string
+  createdAt: string
+  appliedAt?: string
+}
+
+export interface AgentRuntimeStatus {
+  configured: boolean
+  stopped?: boolean
+  openvpnRunning: boolean
+  managementConnected: boolean
+  configHash?: string
+  sessions: number
+  lastError?: string
+  rolledBack?: boolean
+  rollbackReason?: string
+  appliedAt?: string
+}
+
+export interface ServerConfigResponse {
+  defaults: ServerConfig
+  supportedDirectives: string[]
+  active: ServerConfigRevision | null
+  draft: ServerConfigRevision | null
+  agentStatus?: AgentRuntimeStatus
+  agentStatusPresent: boolean
+}
+
 export interface UserPatch {
   displayName?: string
   notes?: string
@@ -320,6 +364,21 @@ export const api = {
     const match = /filename="([^"]+)"/.exec(disposition)
     return { blob, filename: match?.[1] ?? 'ovpanel.ovpn' }
   },
+
+  getServerConfig: () => request<ServerConfigResponse>('/api/server/config'),
+  previewServerConfig: (config: ServerConfig) =>
+    post<{ config: ServerConfig; rendered: string; hash: string }>('/api/server/config/preview', config),
+  saveServerDraft: (config: ServerConfig) =>
+    request<{ draft: ServerConfigRevision }>('/api/server/config/draft', {
+      method: 'PUT',
+      body: JSON.stringify(config),
+    }),
+  applyServerConfig: (adminPassword: string) =>
+    post<{ result: unknown; agentStatus?: AgentRuntimeStatus }>('/api/server/config/apply', {
+      adminPassword,
+    }),
+  serverCommand: (action: 'start' | 'stop' | 'restart', adminPassword: string) =>
+    post<{ ok: boolean; action: string }>('/api/server/command', { action, adminPassword }),
 
   pkiStatus: () => request<PKIStatus>('/api/pki'),
   getExportSettings: () => request<ExportSettings>('/api/settings/export'),

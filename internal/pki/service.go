@@ -265,7 +265,10 @@ func (s *Service) EnsureServerCertificate(ctx context.Context) (certPEM, keyPEM 
 		keyDER, err := s.key.Open(existing.KeyCiphertext, []byte(serverKeyAAD))
 		if err == nil {
 			if _, parseErr := x509.ParsePKCS8PrivateKey(keyDER); parseErr == nil {
-				return existing.CertPEM, string(keyDER), nil
+				// 复用已有证书时也必须输出 PEM。直接返回 DER 会让 OpenVPN
+				// 把私钥当作无法解析的加密材料并拒绝启动。
+				keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+				return existing.CertPEM, string(keyPEM), nil
 			}
 		}
 		// 旧材料无法解密或解析时生成新证书，避免静默使用坏材料。

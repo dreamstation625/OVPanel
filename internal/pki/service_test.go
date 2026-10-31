@@ -200,6 +200,40 @@ func TestExportWithoutCAOrCertificate(t *testing.T) {
 	}
 }
 
+func TestEnsureServerCertificateReturnsPEMOnReuse(t *testing.T) {
+	svc, _, _ := newTestService(t)
+	ctx := context.Background()
+
+	certPEM, keyPEM, err := svc.EnsureServerCertificate(ctx)
+	if err != nil {
+		t.Fatalf("首次生成失败：%v", err)
+	}
+	assertPrivateKeyPEM(t, keyPEM)
+
+	reusedCert, reusedKey, err := svc.EnsureServerCertificate(ctx)
+	if err != nil {
+		t.Fatalf("复用失败：%v", err)
+	}
+	if reusedCert != certPEM {
+		t.Fatal("复用时应返回同一张服务端证书")
+	}
+	if reusedKey != keyPEM {
+		t.Fatal("复用时应返回同一份私钥")
+	}
+	assertPrivateKeyPEM(t, reusedKey)
+}
+
+func assertPrivateKeyPEM(t *testing.T, keyPEM string) {
+	t.Helper()
+	block, _ := pem.Decode([]byte(keyPEM))
+	if block == nil || block.Type != "PRIVATE KEY" {
+		t.Fatalf("服务端私钥必须是 PEM 编码，实际开头：%q", keyPEM[:min(len(keyPEM), 32)])
+	}
+	if _, err := x509.ParsePKCS8PrivateKey(block.Bytes); err != nil {
+		t.Fatalf("PEM 私钥无法解析：%v", err)
+	}
+}
+
 func parseTestCert(t *testing.T, certPEM string) *x509.Certificate {
 	t.Helper()
 	block, _ := pem.Decode([]byte(certPEM))

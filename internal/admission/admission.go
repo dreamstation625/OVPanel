@@ -330,10 +330,13 @@ func passwordMatches(hash, password string) bool {
 	return err == nil && ok
 }
 
-// normalizeSnapshotSerial 把面板保存的十六进制序列号归一化为十进制字符串。
+// normalizeSnapshotSerial 把十六进制序列号归一化为十进制字符串。
+// OpenVPN 的 tls_serial_hex_0 以冒号分组（如 5f:aa:...），这里一并去掉。
 func normalizeSnapshotSerial(value string) string {
 	value = strings.TrimSpace(strings.ToLower(value))
 	value = strings.TrimPrefix(value, "0x")
+	value = strings.ReplaceAll(value, ":", "")
+	value = strings.ReplaceAll(value, " ", "")
 	if value == "" {
 		return ""
 	}
@@ -356,7 +359,7 @@ func serialMatches(snapshotHex, incoming string) bool {
 	if incoming == "" {
 		return false
 	}
-	if strings.HasPrefix(incoming, "0x") {
+	if strings.HasPrefix(incoming, "0x") || strings.Contains(incoming, ":") {
 		return normalizeSnapshotSerial(incoming) == expected
 	}
 	for _, base := range []int{10, 16} {

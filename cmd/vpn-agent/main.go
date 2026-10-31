@@ -1,8 +1,8 @@
-// Command vpn-agent 是 OpenVPN 容器内的运行代理骨架。
+// Command vpn-agent 是 OpenVPN 容器内的运行代理。
 //
-// P02 只提供进程、健康检查与数据面能力报告；OpenVPN 的启动、准入、
-// 限速和用量记录在 P04/P05 接入。当前进程不会把「环境可用」说成
-// 「VPN 已配置」，接口中用 configured 明确区分。
+// 代理读取共享控制目录中的配置包，应用网络策略、启动 OpenVPN 并执行
+// 客户端准入；限速和用量记录在后续阶段接入。进程不会把「环境可用」
+// 说成「VPN 已配置」，接口中用 configured 明确区分。
 package main
 
 import (
@@ -104,7 +104,7 @@ func run() error {
 	return nil
 }
 
-// newHandler 组装代理的只读接口。P02 不提供任何配置或命令入口。
+// newHandler 组装代理的只读接口；配置与命令只通过共享控制目录传递。
 func newHandler(report runtimeenv.Report, rt *agent.Runtime) http.Handler {
 	status := func() agent.Status {
 		if rt == nil {

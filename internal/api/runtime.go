@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/dreamstation625/ovpanel/internal/accounts"
+	"github.com/dreamstation625/ovpanel/internal/vpnruntime"
 )
 
 func (s *Server) handleRuntimeApply(w http.ResponseWriter, r *http.Request) {
@@ -36,11 +37,15 @@ func (s *Server) handleRuntimeApply(w http.ResponseWriter, r *http.Request) {
 		"users", result.Users,
 		"profiles", result.Profiles,
 		"agent_pending", result.AgentPending)
-	writeJSON(w, http.StatusOK, map[string]any{
+	writeJSON(w, http.StatusOK, runtimeResultMap(result))
+}
+
+func runtimeResultMap(result vpnruntime.Result) map[string]any {
+	return map[string]any{
 		"configRevision": result.ConfigRevision,
 		"configHash":     result.ConfigHash,
 		"users":          result.Users,
 		"profiles":       result.Profiles,
 		"agentPending":   result.AgentPending,
-	})
+	}
 }

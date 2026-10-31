@@ -32,8 +32,8 @@ async function submit() {
     error.value = '用户名长度需在 3 到 64 个字符之间'
     return
   }
-  if (password.value.length < 12) {
-    error.value = '密码至少需要 12 个字符'
+  if (password.value.length < 8) {
+    error.value = '密码至少需要 8 个字符'
     return
   }
   if (password.value !== confirm.value) {
@@ -104,7 +104,7 @@ async function submit() {
             v-model:value="password"
             type="password"
             show-password-on="click"
-            placeholder="至少 12 个字符"
+            placeholder="至少 8 个字符"
             autocomplete="new-password"
             @keyup.enter="submit"
           />

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/dreamstation625/ovpanel/internal/admission"
+	"github.com/dreamstation625/ovpanel/internal/netpolicy"
 )
 
 // Version 是控制包格式版本。
@@ -24,6 +25,7 @@ type Bundle struct {
 	ServerKeyPEM   string             `json:"serverKeyPem"`
 	TLSCryptKey    string             `json:"tlsCryptKey"`
 	CRLPEM         string             `json:"crlPem"`
+	Policy         netpolicy.Policy   `json:"policy"`
 	Snapshot       admission.Snapshot `json:"snapshot"`
 	IssuedAt       time.Time          `json:"issuedAt"`
 }

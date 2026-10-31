@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
-import { LayoutDashboard, LogOut, Settings, Users } from '@lucide/vue'
+import { LayoutDashboard, LogOut, Server, Settings, Users } from '@lucide/vue'
 import { NButton } from 'naive-ui'
 import BrandMark from './BrandMark.vue'
 import ThemeToggle from './ThemeToggle.vue'
@@ -47,6 +47,10 @@ async function logout() {
         <RouterLink to="/users" class="nav-link" :class="{ active: usersActive }">
           <Users :size="17" aria-hidden="true" />
           <span>用户与客户端</span>
+        </RouterLink>
+        <RouterLink to="/server" class="nav-link">
+          <Server :size="17" aria-hidden="true" />
+          <span>服务端</span>
         </RouterLink>
         <RouterLink to="/system" class="nav-link">
           <Settings :size="17" aria-hidden="true" />
