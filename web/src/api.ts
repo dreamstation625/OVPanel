@@ -58,6 +58,7 @@ export type EffectiveStatus =
   | 'certificate_revoked'
   | 'certificate_expired'
   | 'expired'
+  | 'quota_exhausted'
 
 export interface User {
   id: string
@@ -67,6 +68,8 @@ export interface User {
   status: UserStatus
   profileCount: number
   activeProfileCount: number
+  usageBytes: number
+  onlineSessions: number
   createdAt: string
   updatedAt: string
 }
@@ -97,6 +100,17 @@ export interface Profile {
   routeMode: RouteMode
   accessMode: AccessMode
   allowedInternal: string[]
+  concurrentLimit: number
+  quotaBytes: number
+  uploadBps: number
+  downloadBps: number
+  quotaEpoch: number
+  usageBytes: number
+  usagePercent: number
+  usageGaps: number
+  usageKnown: boolean
+  onlineSessions: number
+  quotaResetAt?: string
   certificate?: CertificateInfo
   createdAt: string
   updatedAt: string
@@ -215,6 +229,81 @@ export interface ProfilePatch {
   allowedInternal?: string[]
 }
 
+export interface ProfileLimitsInput {
+  expiresAt: string
+  concurrentLimit: number
+  quotaBytes: number
+  uploadBps: number
+  downloadBps: number
+}
+
+export interface Connection {
+  id: string
+  cid: string
+  profileId: string
+  profileName: string
+  userId: string
+  userDisplayName: string
+  authType: AuthType | ''
+  vpnIp: string
+  sourceIp: string
+  connectedAt: string
+  durationSeconds: number
+  upBytes: number
+  downBytes: number
+  upRate: number
+  downRate: number
+  blocked: boolean
+  blockReason?: string
+  knownProfile: boolean
+}
+
+export interface ConnectionsResponse {
+  agentPresent: boolean
+  updatedAt?: string
+  connections: Connection[]
+  online: number
+  upRate: number
+  downRate: number
+}
+
+export interface ConnectionHistoryItem {
+  id: string
+  profileId: string
+  profileName: string
+  userDisplayName: string
+  vpnIp: string
+  sourceIp: string
+  connectedAt: string
+  disconnectedAt?: string
+  durationSeconds: number
+  endReason: string
+  upBytes: number
+  downBytes: number
+}
+
+export interface UsagePoint {
+  day: string
+  upBytes: number
+  downBytes: number
+}
+
+export interface Overview {
+  agentPresent: boolean
+  agentUpdatedAt?: string
+  onlineConnections: number
+  upRate: number
+  downRate: number
+  todayUpBytes: number
+  todayDownBytes: number
+  users: number
+  profiles: number
+  activeCertificates: number
+  adminSessions: number
+  trend: UsagePoint[]
+  connections: Connection[]
+}
+
 export class ApiError extends Error {
   readonly code: string
   readonly status: number
@@ -305,6 +394,10 @@ function patch<T>(path: string, body: unknown): Promise<T> {
   return request<T>(path, { method: 'PATCH', body: JSON.stringify(body) })
 }
 
+function put<T>(path: string, body: unknown): Promise<T> {
+  return request<T>(path, { method: 'PUT', body: JSON.stringify(body) })
+}
+
 export const api = {
   health: () => request<Health>('/api/health'),
   setupStatus: () => request<SetupStatus>('/api/setup'),
@@ -315,7 +408,17 @@ export const api = {
   logout: () => post<{ ok: boolean }>('/api/logout', {}),
   me: () => request<Admin>('/api/me'),
   system: () => request<SystemInfo>('/api/system'),
+  overview: () => request<Overview>('/api/overview'),
   operations: () => request<{ operations: Operation[] }>('/api/operations'),
+  connections: () => request<ConnectionsResponse>('/api/connections'),
+  connectionHistory: (profileId = '', limit = 100) => {
+    const params = new URLSearchParams({ limit: String(limit) })
+    if (profileId) params.set('profileId', profileId)
+    return request<{ sessions: ConnectionHistoryItem[] }>(`/api/connections/history?${params}`)
+  },
+  disconnectConnection: (id: string) =>
+    post<{ ok: boolean }>(`/api/connections/${encodeURIComponent(id)}/disconnect`, {}),
+  usageTrend: (days = 30) => request<{ trend: UsagePoint[] }>(`/api/usage/trend?days=${days}`),
 
   listUsers: (query = '', status = '') => {
     const params = new URLSearchParams()
@@ -334,6 +437,12 @@ export const api = {
   getProfile: (id: string) => request<Profile>(`/api/profiles/${encodeURIComponent(id)}`),
   updateProfile: (id: string, patchBody: ProfilePatch) =>
     patch<Profile>(`/api/profiles/${encodeURIComponent(id)}`, patchBody),
+  updateProfileLimits: (id: string, input: ProfileLimitsInput) =>
+    put<{ profile: Profile }>(`/api/profiles/${encodeURIComponent(id)}/limits`, input),
+  resetQuota: (id: string, adminPassword: string) =>
+    post<{ profile: Profile; epoch: number }>(`/api/profiles/${encodeURIComponent(id)}/quota/reset`, {
+      adminPassword,
+    }),
   resetProfilePassword: (id: string, adminPassword: string, password = '') =>
     post<{ profile: Profile; password: string }>(`/api/profiles/${encodeURIComponent(id)}/password`, {
       adminPassword,

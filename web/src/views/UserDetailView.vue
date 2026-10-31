@@ -6,7 +6,7 @@ import { NAlert, NButton, NForm, NFormItem, NInput, NModal, NPopconfirm } from '
 import AddProfileModal from '../components/AddProfileModal.vue'
 import OneTimePasswordModal from '../components/OneTimePasswordModal.vue'
 import { api, ApiError, type AddProfileResult, type UserDetail } from '../api'
-import { authLabel, errorMessage, formatDate, shortFingerprint, statusLabel, statusTone } from '../labels'
+import { authLabel, errorMessage, formatBytes, formatDate, shortFingerprint, statusLabel, statusTone } from '../labels'
 
 const route = useRoute()
 const detail = ref<UserDetail | null>(null)
@@ -143,7 +143,7 @@ watch(() => route.params.id, load, { immediate: true })
       </header>
 
       <NAlert v-if="detail.user.status === 'disabled'" type="warning" :bordered="false" class="stack-gap">
-        该用户已停用，其全部客户端配置当前不可连接。运行代理的实际断开将在后续阶段接入。
+        该用户已停用，其全部客户端配置当前不可连接，运行代理会断开现有连接。
       </NAlert>
 
       <section class="surface">
@@ -203,6 +203,9 @@ watch(() => route.params.id, load, { immediate: true })
               </span>
             </div>
             <div class="profile-side">
+              <span class="profile-stats">
+                在线 {{ profile.onlineSessions }} · {{ formatBytes(profile.usageBytes) }}
+              </span>
               <span class="chip" :class="`chip--${statusTone(profile.effectiveStatus)}`">
                 {{ statusLabel(profile.effectiveStatus) }}
               </span>
@@ -435,6 +438,13 @@ watch(() => route.params.id, load, { immediate: true })
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.profile-stats {
+  color: var(--text-3);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .row-action {

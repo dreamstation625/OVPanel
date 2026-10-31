@@ -37,6 +37,8 @@ export function statusLabel(status: EffectiveStatus | 'active' | 'disabled'): st
       return '证书已过期'
     case 'expired':
       return '已到期'
+    case 'quota_exhausted':
+      return '流量已用尽'
     case 'disabled':
       return '已停用'
     default:
@@ -55,6 +57,7 @@ export function statusTone(status: EffectiveStatus | 'active' | 'disabled'): 'ok
     case 'user_disabled':
     case 'profile_disabled':
     case 'expired':
+    case 'quota_exhausted':
       return 'warn'
     case 'disabled':
       return 'neutral'
@@ -110,4 +113,52 @@ export function suggestUsername(): string {
 
 export function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : '操作失败'
+}
+
+// 界面额度与流量使用十进制单位（1 GB = 10^9 B），与文档口径一致。
+export function formatBytes(value?: number): string {
+  const bytes = Math.max(0, value ?? 0)
+  if (bytes < 1000) {
+    return `${Math.round(bytes)} B`
+  }
+  const units = ['KB', 'MB', 'GB', 'TB', 'PB']
+  let scaled = bytes / 1000
+  let index = 0
+  while (scaled >= 1000 && index < units.length - 1) {
+    scaled /= 1000
+    index++
+  }
+  return `${scaled >= 100 ? scaled.toFixed(0) : scaled.toFixed(1)} ${units[index]}`
+}
+
+export function formatRate(bytesPerSecond?: number): string {
+  return `${formatBytes(bytesPerSecond)}/s`
+}
+
+export function formatDuration(seconds?: number): string {
+  const total = Math.max(0, Math.floor(seconds ?? 0))
+  const days = Math.floor(total / 86400)
+  const hours = Math.floor((total % 86400) / 3600)
+  const minutes = Math.floor((total % 3600) / 60)
+  const secs = total % 60
+  if (days > 0) return `${days} 天 ${hours} 小时`
+  if (hours > 0) return `${hours} 小时 ${minutes} 分`
+  if (minutes > 0) return `${minutes} 分 ${secs} 秒`
+  return `${secs} 秒`
+}
+
+export function gbToBytes(gb: number): number {
+  return Math.round(Math.max(0, gb) * 1_000_000_000)
+}
+
+export function bytesToGb(bytes: number): number {
+  return Math.round((Math.max(0, bytes) / 1_000_000_000) * 1000) / 1000
+}
+
+export function mbpsToBps(mbps: number): number {
+  return Math.round(Math.max(0, mbps) * 1_000_000)
+}
+
+export function bpsToMbps(bps: number): number {
+  return Math.round((Math.max(0, bps) / 1_000_000) * 100) / 100
 }

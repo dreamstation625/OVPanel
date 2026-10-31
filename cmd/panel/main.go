@@ -27,6 +27,7 @@ import (
 	"github.com/dreamstation625/ovpanel/internal/logging"
 	"github.com/dreamstation625/ovpanel/internal/pki"
 	"github.com/dreamstation625/ovpanel/internal/secretbox"
+	"github.com/dreamstation625/ovpanel/internal/statistics"
 	"github.com/dreamstation625/ovpanel/internal/store"
 	"github.com/dreamstation625/ovpanel/internal/vpnruntime"
 	"github.com/dreamstation625/ovpanel/web"
@@ -93,6 +94,7 @@ func run() error {
 	}
 	accountsService := accounts.New(st, pkiService, masterKey)
 	runtimeService := vpnruntime.New(st, pkiService, accountsService, cfg.ControlDir)
+	statisticsService := statistics.New(st, cfg.ControlDir, log)
 	log.Info("runtime control ready", "dir", cfg.ControlDir)
 	log.Info("master key ready",
 		"path", cfg.MasterKeyPath(),
@@ -122,12 +124,13 @@ func run() error {
 	}
 
 	srv := api.New(api.Options{
-		Config:   cfg,
-		Store:    st,
-		Accounts: accountsService,
-		PKI:      pkiService,
-		Runtime:  runtimeService,
-		Log:      log,
+		Config:     cfg,
+		Store:      st,
+		Accounts:   accountsService,
+		PKI:        pkiService,
+		Runtime:    runtimeService,
+		Statistics: statisticsService,
+		Log:        log,
 		Build: api.BuildInfo{
 			Version:   version,
 			Commit:    commit,
@@ -148,6 +151,11 @@ func run() error {
 	go func() {
 		defer cleanupWG.Done()
 		cleanupSessions(ctx, st, log)
+	}()
+	cleanupWG.Add(1)
+	go func() {
+		defer cleanupWG.Done()
+		syncStatistics(ctx, statisticsService, log)
 	}()
 
 	httpServer := &http.Server{
@@ -215,6 +223,35 @@ func run() error {
 	}
 	log.Info("panel stopped")
 	return nil
+}
+
+// syncStatistics 每 5 秒把运行代理的事件日志补传到面板数据库。
+// 面板离线期间的用量保留在代理本地，恢复后按序号去重补传。
+func syncStatistics(ctx context.Context, service *statistics.Service, log *slog.Logger) {
+	runOnce := func() {
+		syncCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		result, err := service.Sync(syncCtx)
+		if err != nil {
+			log.Warn("sync usage statistics failed", "error", err)
+			return
+		}
+		if result.Events > 0 || result.Closed > 0 {
+			log.Info("usage statistics synced", "events", result.Events, "closed", result.Closed)
+		}
+	}
+
+	runOnce()
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			runOnce()
+		}
+	}
 }
 
 // cleanupSessions 定期清理过期会话。启动时先执行一次，避免长期停机后

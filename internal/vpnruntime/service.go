@@ -75,14 +75,31 @@ func (s *Service) Command(action string) error {
 	if action != "start" && action != "stop" && action != "restart" {
 		return fmt.Errorf("未知控制命令：%q", action)
 	}
-	if err := os.MkdirAll(s.controlDir, 0o700); err != nil {
-		return fmt.Errorf("创建控制目录: %w", err)
-	}
-	payload, err := json.Marshal(map[string]string{
+	return s.writeCommand(map[string]string{
 		"id":       uuid.NewString(),
 		"action":   action,
 		"issuedAt": s.now().Format(time.RFC3339),
 	})
+}
+
+// Disconnect 写入断开指定 CID 会话的控制命令。
+func (s *Service) Disconnect(cid string) error {
+	if cid == "" {
+		return fmt.Errorf("断开命令缺少 CID")
+	}
+	return s.writeCommand(map[string]string{
+		"id":       uuid.NewString(),
+		"action":   "disconnect",
+		"cid":      cid,
+		"issuedAt": s.now().Format(time.RFC3339),
+	})
+}
+
+func (s *Service) writeCommand(command map[string]string) error {
+	if err := os.MkdirAll(s.controlDir, 0o700); err != nil {
+		return fmt.Errorf("创建控制目录: %w", err)
+	}
+	payload, err := json.Marshal(command)
 	if err != nil {
 		return err
 	}

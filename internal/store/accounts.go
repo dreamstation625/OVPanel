@@ -84,6 +84,8 @@ type Profile struct {
 	QuotaBytes      *int64
 	UploadBps       *int64
 	DownloadBps     *int64
+	// QuotaEpoch 是手动重置额度的代次，运行代理据此切换用量基线。
+	QuotaEpoch int64
 
 	CreatedAt time.Time
 	UpdatedAt time.Time
@@ -559,7 +561,7 @@ func (s *Store) ProfileByUsername(ctx context.Context, username string) (Profile
 
 const profileDetailSelect = `p.id, p.user_id, p.name, p.auth_type, COALESCE(p.username, ''),
 	CASE WHEN p.password_hash IS NULL THEN 0 ELSE 1 END, p.status, p.expires_at,
-	p.concurrent_limit, p.quota_bytes, p.upload_bps, p.download_bps,
+	p.concurrent_limit, p.quota_bytes, p.upload_bps, p.download_bps, p.quota_epoch,
 	p.route_mode, p.access_mode, p.allowed_internal_json, p.created_at, p.updated_at,
 	u.display_name, u.status,
 	c.id, c.serial_number, c.fingerprint_sha256, c.common_name, c.status,
@@ -572,6 +574,7 @@ func scanProfileDetail(row rowScanner) (ProfileDetail, error) {
 		hasPassword                      int
 		expiresAt                        sql.NullString
 		concurrent, quota, upload, down  sql.NullInt64
+		quotaEpoch                       int64
 		routeMode, accessMode, allowed   string
 		createdAt, updatedAt             string
 		certID, certSerial, certFP       sql.NullString
@@ -580,7 +583,7 @@ func scanProfileDetail(row rowScanner) (ProfileDetail, error) {
 	)
 	err := row.Scan(
 		&d.ID, &d.UserID, &d.Name, &d.AuthType, &username, &hasPassword, &d.Status, &expiresAt,
-		&concurrent, &quota, &upload, &down,
+		&concurrent, &quota, &upload, &down, &quotaEpoch,
 		&routeMode, &accessMode, &allowed, &createdAt, &updatedAt,
 		&d.UserDisplayName, &d.UserStatus,
 		&certID, &certSerial, &certFP, &certCN, &certStatus, &certIssued, &certExpires, &certRevoked, &reason,
@@ -595,6 +598,7 @@ func scanProfileDetail(row rowScanner) (ProfileDetail, error) {
 	d.QuotaBytes = nullableIntPtr(quota)
 	d.UploadBps = nullableIntPtr(upload)
 	d.DownloadBps = nullableIntPtr(down)
+	d.QuotaEpoch = quotaEpoch
 	d.RouteMode = routeMode
 	d.AccessMode = accessMode
 	d.AllowedInternal = decodeStringList(allowed)

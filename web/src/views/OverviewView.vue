@@ -1,30 +1,56 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { Activity, FileBadge, RefreshCw, ShieldCheck, UserRound, Users } from '@lucide/vue'
+import { Activity, FileBadge, RefreshCw, Users } from '@lucide/vue'
 import { NAlert, NButton } from 'naive-ui'
-import { api, ApiError, type Operation, type SystemInfo } from '../api'
-import { errorMessage, formatDate } from '../labels'
+import { api, ApiError, type Operation, type Overview, type SystemInfo } from '../api'
+import { errorMessage, formatBytes, formatDate, formatRate } from '../labels'
 
 const router = useRouter()
 const system = ref<SystemInfo | null>(null)
+const overview = ref<Overview | null>(null)
 const operations = ref<Operation[]>([])
 const loading = ref(false)
 const error = ref('')
 const updatedAt = ref('')
 
 const stats = computed(() => {
-  const info = system.value
+  const info = overview.value
   if (!info) {
     return []
   }
   return [
-    { label: '用户', value: String(info.users), hint: '凭据归属人', icon: UserRound },
-    { label: '客户端配置', value: String(info.profiles), hint: '独立认证单位', icon: Users },
-    { label: '有效证书', value: String(info.activeCertificates), hint: '当前生效', icon: FileBadge },
-    { label: '管理会话', value: String(info.sessions), hint: '当前有效', icon: ShieldCheck },
+    { label: '在线连接', value: String(info.onlineConnections), hint: info.agentPresent ? '运行代理实时数据' : '代理无状态', icon: Activity },
+    {
+      label: '实时速率',
+      value: `↑ ${formatRate(info.upRate)}`,
+      hint: `↓ ${formatRate(info.downRate)}`,
+      icon: Activity,
+    },
+    { label: '今日流量', value: formatBytes(info.todayUpBytes + info.todayDownBytes), hint: `上行 ${formatBytes(info.todayUpBytes)} · 下行 ${formatBytes(info.todayDownBytes)}`, icon: FileBadge },
+    { label: '用户 / 配置', value: `${info.users} / ${info.profiles}`, hint: '凭据归属人与独立认证单位', icon: Users },
   ]
 })
+
+const trendMax = computed(() => {
+  const points = overview.value?.trend ?? []
+  return Math.max(1, ...points.map((point) => point.upBytes + point.downBytes))
+})
+
+const trendBars = computed(() => {
+  const points = overview.value?.trend ?? []
+  return points.map((point) => {
+    const total = point.upBytes + point.downBytes
+    return {
+      ...point,
+      total,
+      height: Math.max(2, Math.round((total / trendMax.value) * 100)),
+      label: point.day.slice(5),
+    }
+  })
+})
+
+const liveConnections = computed(() => (overview.value?.connections ?? []).slice(0, 6))
 
 const facts = computed(() => {
   const info = system.value
@@ -41,15 +67,18 @@ const facts = computed(() => {
   ]
 })
 
-async function load() {
-  if (loading.value) {
+async function load(silent = false) {
+  if (loading.value && !silent) {
     return
   }
-  loading.value = true
+  if (!silent) {
+    loading.value = true
+  }
   error.value = ''
   try {
-    const [info, ops] = await Promise.all([api.system(), api.operations()])
+    const [info, live, ops] = await Promise.all([api.system(), api.overview(), api.operations()])
     system.value = info
+    overview.value = live
     operations.value = ops.operations ?? []
     updatedAt.value = new Date().toLocaleTimeString('zh-CN', { hour12: false })
   } catch (err) {
@@ -88,7 +117,16 @@ function formatUptime(seconds: number) {
   return `${total} 秒`
 }
 
-onMounted(load)
+let timer: number | undefined
+onMounted(() => {
+  load()
+  timer = window.setInterval(() => load(true), 5000)
+})
+onBeforeUnmount(() => {
+  if (timer !== undefined) {
+    window.clearInterval(timer)
+  }
+})
 </script>
 
 <template>
@@ -98,12 +136,14 @@ onMounted(load)
         <span class="eyebrow"><Activity :size="14" /> 概览</span>
         <div class="title-row">
           <h1>运行概览</h1>
-          <span v-if="system" class="chip chip--ok"><i class="dot" />面板在线</span>
+          <span v-if="overview" class="chip" :class="overview.agentPresent ? 'chip--ok' : 'chip--warn'">
+            <i class="dot" />{{ overview.agentPresent ? '服务运行中' : '运行代理无状态' }}
+          </span>
         </div>
       </div>
       <div class="header-tools">
         <span v-if="updatedAt" class="muted">更新于 {{ updatedAt }}</span>
-        <NButton quaternary circle :loading="loading" aria-label="刷新" title="刷新" @click="load">
+        <NButton quaternary circle :loading="loading" aria-label="刷新" title="刷新" @click="load()">
           <template #icon><RefreshCw :size="17" /></template>
         </NButton>
         <NButton type="primary" @click="router.push('/users?new=1')">添加用户</NButton>
@@ -112,7 +152,7 @@ onMounted(load)
 
     <NAlert v-if="error" type="error" :bordered="false" class="stack-gap">
       {{ error }}
-      <NButton text type="primary" @click="load">重试</NButton>
+      <NButton text type="primary" @click="load()">重试</NButton>
     </NAlert>
 
     <div v-if="system" class="stat-grid">
@@ -124,6 +164,48 @@ onMounted(load)
         <strong class="stat-value">{{ stat.value }}</strong>
         <span class="stat-hint">{{ stat.hint }}</span>
       </article>
+    </div>
+
+    <div class="panel-grid">
+      <section class="surface">
+        <header class="surface-head">
+          <h2>近 7 天流量</h2>
+          <span class="surface-meta">上传 + 下载</span>
+        </header>
+        <div v-if="trendBars.length" class="trend" role="img" aria-label="最近七天流量柱状图">
+          <div v-for="bar in trendBars" :key="bar.day" class="trend-col">
+            <div class="trend-track">
+              <i :style="{ height: `${bar.height}%` }" :title="`${bar.day} ${formatBytes(bar.total)}`" />
+            </div>
+            <span class="trend-label">{{ bar.label }}</span>
+            <span class="trend-value">{{ formatBytes(bar.total) }}</span>
+          </div>
+        </div>
+        <div v-else class="surface-empty">暂无流量记录</div>
+      </section>
+
+      <section class="surface">
+        <header class="surface-head">
+          <h2>在线连接</h2>
+          <RouterLink to="/connections" class="text-link">全部连接</RouterLink>
+        </header>
+        <ul v-if="liveConnections.length" class="live-list">
+          <li v-for="item in liveConnections" :key="item.id">
+            <div class="live-main">
+              <RouterLink :to="`/profiles/${item.profileId}`" class="live-name">{{ item.profileName }}</RouterLink>
+              <span class="live-meta">{{ item.userDisplayName || '未知用户' }} · {{ item.vpnIp || '等待地址' }}</span>
+            </div>
+            <div class="live-side">
+              <span>↑ {{ formatRate(item.upRate) }}</span>
+              <span>↓ {{ formatRate(item.downRate) }}</span>
+            </div>
+          </li>
+        </ul>
+        <div v-else class="surface-empty">
+          <strong>当前没有在线连接</strong>
+          <span>连接详情与历史在「在线连接」页面。</span>
+        </div>
+      </section>
     </div>
 
     <div class="panel-grid">
@@ -280,6 +362,124 @@ onMounted(load)
 .surface-meta {
   color: var(--text-3);
   font-size: 11.5px;
+}
+
+.text-link {
+  color: var(--accent);
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.text-link:hover {
+  text-decoration: underline;
+}
+
+.trend {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 10px;
+  align-items: end;
+  min-height: 210px;
+  padding-top: 8px;
+}
+
+.trend-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.trend-track {
+  display: flex;
+  align-items: flex-end;
+  width: 100%;
+  height: 140px;
+  border-radius: 6px;
+  background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--accent) 7%, transparent));
+}
+
+.trend-track i {
+  display: block;
+  width: 100%;
+  min-height: 2px;
+  border-radius: 6px 6px 2px 2px;
+  background: linear-gradient(180deg, var(--accent), color-mix(in srgb, var(--accent) 55%, transparent));
+  transition: height 260ms ease;
+}
+
+.trend-label {
+  color: var(--text-3);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.trend-value {
+  color: var(--text-2);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.live-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.live-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 11px 0;
+  border-top: 1px solid var(--border);
+}
+
+.live-list li:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.live-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.live-name {
+  overflow: hidden;
+  color: var(--text-1);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.live-name:hover {
+  color: var(--accent);
+}
+
+.live-meta {
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.live-side {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  color: var(--text-2);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
 }
 
 .fact-list {

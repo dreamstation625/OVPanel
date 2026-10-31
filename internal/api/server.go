@@ -17,6 +17,7 @@ import (
 	"github.com/dreamstation625/ovpanel/internal/auth"
 	"github.com/dreamstation625/ovpanel/internal/config"
 	"github.com/dreamstation625/ovpanel/internal/pki"
+	"github.com/dreamstation625/ovpanel/internal/statistics"
 	"github.com/dreamstation625/ovpanel/internal/store"
 	"github.com/dreamstation625/ovpanel/internal/vpnruntime"
 )
@@ -46,6 +47,7 @@ type Options struct {
 	Accounts       *accounts.Service
 	PKI            *pki.Service
 	Runtime        *vpnruntime.Service
+	Statistics     *statistics.Service
 	Log            *slog.Logger
 	Build          BuildInfo
 	BootstrapToken string
@@ -62,6 +64,7 @@ type Server struct {
 	accounts        *accounts.Service
 	pki             *pki.Service
 	runtime         *vpnruntime.Service
+	statistics      *statistics.Service
 	log             *slog.Logger
 	build           BuildInfo
 	bootstrapToken  string
@@ -83,6 +86,7 @@ func New(opts Options) *Server {
 		accounts:        opts.Accounts,
 		pki:             opts.PKI,
 		runtime:         opts.Runtime,
+		statistics:      opts.Statistics,
 		log:             opts.Log,
 		build:           opts.Build,
 		bootstrapToken:  opts.BootstrapToken,
@@ -111,6 +115,11 @@ func (s *Server) Handler() http.Handler {
 
 	mux.Handle("GET /api/me", s.requireSession(http.HandlerFunc(s.handleMe)))
 	mux.Handle("GET /api/system", s.requireSession(http.HandlerFunc(s.handleSystem)))
+	mux.Handle("GET /api/overview", s.requireSession(http.HandlerFunc(s.handleOverview)))
+	mux.Handle("GET /api/connections", s.requireSession(http.HandlerFunc(s.handleConnections)))
+	mux.Handle("GET /api/connections/history", s.requireSession(http.HandlerFunc(s.handleConnectionHistory)))
+	mux.Handle("POST /api/connections/{id}/disconnect", s.requireSession(http.HandlerFunc(s.handleDisconnect)))
+	mux.Handle("GET /api/usage/trend", s.requireSession(http.HandlerFunc(s.handleUsageTrend)))
 	mux.Handle("GET /api/operations", s.requireSession(http.HandlerFunc(s.handleOperations)))
 
 	mux.Handle("GET /api/users", s.requireSession(http.HandlerFunc(s.handleListUsers)))
@@ -121,6 +130,8 @@ func (s *Server) Handler() http.Handler {
 
 	mux.Handle("GET /api/profiles/{id}", s.requireSession(http.HandlerFunc(s.handleProfileDetail)))
 	mux.Handle("PATCH /api/profiles/{id}", s.requireSession(http.HandlerFunc(s.handleUpdateProfile)))
+	mux.Handle("PUT /api/profiles/{id}/limits", s.requireSession(http.HandlerFunc(s.handleUpdateProfileLimits)))
+	mux.Handle("POST /api/profiles/{id}/quota/reset", s.requireSession(http.HandlerFunc(s.handleResetQuota)))
 	mux.Handle("POST /api/profiles/{id}/password", s.requireSession(http.HandlerFunc(s.handleResetProfilePassword)))
 	mux.Handle("POST /api/profiles/{id}/certificate/rotate", s.requireSession(http.HandlerFunc(s.handleRotateCertificate)))
 	mux.Handle("POST /api/profiles/{id}/certificate/revoke", s.requireSession(http.HandlerFunc(s.handleRevokeCertificate)))

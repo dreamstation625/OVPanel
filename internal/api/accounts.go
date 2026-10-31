@@ -24,6 +24,8 @@ type userDTO struct {
 	Status             string   `json:"status"`
 	ProfileCount       int      `json:"profileCount"`
 	ActiveProfileCount int      `json:"activeProfileCount"`
+	UsageBytes         uint64   `json:"usageBytes"`
+	OnlineSessions     int      `json:"onlineSessions"`
 	CreatedAt          string   `json:"createdAt"`
 	UpdatedAt          string   `json:"updatedAt"`
 }
@@ -54,6 +56,17 @@ type profileDTO struct {
 	RouteMode       string          `json:"routeMode"`
 	AccessMode      string          `json:"accessMode"`
 	AllowedInternal []string        `json:"allowedInternal"`
+	ConcurrentLimit int64           `json:"concurrentLimit"`
+	QuotaBytes      int64           `json:"quotaBytes"`
+	UploadBps       int64           `json:"uploadBps"`
+	DownloadBps     int64           `json:"downloadBps"`
+	QuotaEpoch      int64           `json:"quotaEpoch"`
+	UsageBytes      uint64          `json:"usageBytes"`
+	UsagePercent    float64         `json:"usagePercent"`
+	UsageGaps       int             `json:"usageGaps"`
+	UsageKnown      bool            `json:"usageKnown"`
+	OnlineSessions  int             `json:"onlineSessions"`
+	QuotaResetAt    string          `json:"quotaResetAt,omitempty"`
 	Certificate     *certificateDTO `json:"certificate,omitempty"`
 	CreatedAt       string          `json:"createdAt"`
 	UpdatedAt       string          `json:"updatedAt"`
@@ -119,6 +132,7 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 	for _, u := range users {
 		out = append(out, userToDTO(u.User, u.ProfileCount, u.ActiveProfileCount))
 	}
+	s.enrichUserList(r.Context(), out)
 	writeJSON(w, http.StatusOK, map[string]any{"users": out})
 }
 
@@ -157,6 +171,7 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	if result.Profile != nil {
 		dto := profileToDTO(*result.Profile, s.now())
 		resp["profile"] = dto
+		s.applyRuntimeBundle(r.Context(), "user and profile created")
 	}
 	if result.Password != "" {
 		resp["password"] = result.Password
@@ -187,7 +202,9 @@ func (s *Server) handleUserDetail(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, buildUserDetail(user, profiles, s.now()))
+	detail := buildUserDetail(user, profiles, s.now())
+	s.enrichUserDetail(r.Context(), &detail)
+	writeJSON(w, http.StatusOK, detail)
 }
 
 func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
@@ -232,6 +249,7 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 			s.writeAccountError(w, r, err)
 			return
 		}
+		s.applyRuntimeBundle(r.Context(), "user status updated")
 	}
 
 	user, ok, err := s.store.User(r.Context(), id)
@@ -245,7 +263,9 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.log.Info("user updated", "user_id", id)
-	writeJSON(w, http.StatusOK, buildUserDetail(user, profiles, s.now()))
+	detail := buildUserDetail(user, profiles, s.now())
+	s.enrichUserDetail(r.Context(), &detail)
+	writeJSON(w, http.StatusOK, detail)
 }
 
 // ---------- 客户端配置 ----------
@@ -266,10 +286,13 @@ func (s *Server) handleAddProfile(w http.ResponseWriter, r *http.Request) {
 		s.writeAccountError(w, r, err)
 		return
 	}
-	resp := map[string]any{"profile": profileToDTO(result.Profile, s.now())}
+	dto := profileToDTO(result.Profile, s.now())
+	s.enrichProfileDTO(r.Context(), result.Profile, &dto)
+	resp := map[string]any{"profile": dto}
 	if result.Password != "" {
 		resp["password"] = result.Password
 	}
+	s.applyRuntimeBundle(r.Context(), "profile created")
 	s.log.Info("profile created",
 		"user_id", userID, "profile_id", result.Profile.ID, "auth_type", result.Profile.AuthType)
 	writeJSON(w, http.StatusCreated, resp)
@@ -285,7 +308,9 @@ func (s *Server) handleProfileDetail(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusNotFound, CodeNotFound, "客户端配置不存在")
 		return
 	}
-	writeJSON(w, http.StatusOK, profileToDTO(detail, s.now()))
+	dto := profileToDTO(detail, s.now())
+	s.enrichProfileDTO(r.Context(), detail, &dto)
+	writeJSON(w, http.StatusOK, dto)
 }
 
 func (s *Server) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
@@ -314,6 +339,8 @@ func (s *Server) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 			s.writeAccountError(w, r, err)
 			return
 		}
+		// 停用必须尽快断开现有连接，不等连接自然结束。
+		s.applyRuntimeBundle(r.Context(), "profile status updated")
 	}
 	if req.RouteMode != nil || req.AccessMode != nil || req.AllowedInternal != nil {
 		current, ok, err := s.store.Profile(r.Context(), id)
@@ -342,12 +369,12 @@ func (s *Server) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// 立即把新策略同步到运行代理；尚未配置导出地址时没有运行配置可下发。
-		if _, err := s.runtime.Apply(r.Context()); err != nil && !errors.Is(err, accounts.ErrExportNotConfigured) {
-			s.log.Warn("apply runtime after profile policy update failed", "profile_id", id, "error", err)
-		}
+		s.applyRuntimeBundle(r.Context(), "profile policy updated")
 	}
 	s.log.Info("profile updated", "profile_id", id)
-	writeJSON(w, http.StatusOK, profileToDTO(detail, s.now()))
+	dto := profileToDTO(detail, s.now())
+	s.enrichProfileDTO(r.Context(), detail, &dto)
+	writeJSON(w, http.StatusOK, dto)
 }
 
 func (s *Server) handleResetProfilePassword(w http.ResponseWriter, r *http.Request) {
@@ -367,9 +394,12 @@ func (s *Server) handleResetProfilePassword(w http.ResponseWriter, r *http.Reque
 		s.writeAccountError(w, r, err)
 		return
 	}
+	s.applyRuntimeBundle(r.Context(), "profile password reset")
 	s.log.Info("profile password reset", "profile_id", profileID)
+	dto := profileToDTO(result.Profile, s.now())
+	s.enrichProfileDTO(r.Context(), result.Profile, &dto)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"profile":  profileToDTO(result.Profile, s.now()),
+		"profile":  dto,
 		"password": result.Password,
 	})
 }
@@ -390,8 +420,11 @@ func (s *Server) handleRotateCertificate(w http.ResponseWriter, r *http.Request)
 		s.writeAccountError(w, r, err)
 		return
 	}
+	s.applyRuntimeBundle(r.Context(), "certificate rotated")
 	s.log.Info("profile certificate rotated", "profile_id", profileID)
-	writeJSON(w, http.StatusOK, map[string]any{"profile": profileToDTO(detail, s.now())})
+	dto := profileToDTO(detail, s.now())
+	s.enrichProfileDTO(r.Context(), detail, &dto)
+	writeJSON(w, http.StatusOK, map[string]any{"profile": dto})
 }
 
 func (s *Server) handleRevokeCertificate(w http.ResponseWriter, r *http.Request) {
@@ -411,8 +444,11 @@ func (s *Server) handleRevokeCertificate(w http.ResponseWriter, r *http.Request)
 		s.writeAccountError(w, r, err)
 		return
 	}
+	s.applyRuntimeBundle(r.Context(), "certificate revoked")
 	s.log.Warn("profile certificate revoked", "profile_id", profileID)
-	writeJSON(w, http.StatusOK, map[string]any{"profile": profileToDTO(detail, s.now())})
+	dto := profileToDTO(detail, s.now())
+	s.enrichProfileDTO(r.Context(), detail, &dto)
+	writeJSON(w, http.StatusOK, map[string]any{"profile": dto})
 }
 
 func (s *Server) handleExportProfile(w http.ResponseWriter, r *http.Request) {
@@ -654,6 +690,19 @@ func profileToDTO(detail store.ProfileDetail, now time.Time) profileDTO {
 	if dto.AllowedInternal == nil {
 		dto.AllowedInternal = []string{}
 	}
+	if detail.ConcurrentLimit != nil {
+		dto.ConcurrentLimit = *detail.ConcurrentLimit
+	}
+	if detail.QuotaBytes != nil {
+		dto.QuotaBytes = *detail.QuotaBytes
+	}
+	if detail.UploadBps != nil {
+		dto.UploadBps = *detail.UploadBps
+	}
+	if detail.DownloadBps != nil {
+		dto.DownloadBps = *detail.DownloadBps
+	}
+	dto.QuotaEpoch = detail.QuotaEpoch
 	if detail.ExpiresAt != nil {
 		dto.ExpiresAt = detail.ExpiresAt.Format(time.RFC3339)
 	}

@@ -21,6 +21,12 @@ type AuthRecord struct {
 	AccessMode      string
 	AllowedInternal []string
 
+	ConcurrentLimit int64
+	QuotaBytes      int64
+	UploadBps       int64
+	DownloadBps     int64
+	QuotaEpoch      int64
+
 	CertSerial      string
 	CertFingerprint string
 	CertStatus      string
@@ -36,6 +42,7 @@ func (s *Store) AuthRecords(ctx context.Context) ([]AuthRecord, error) {
 		`SELECT u.id, u.status,
 		        p.id, p.auth_type, COALESCE(p.username, ''), COALESCE(p.password_hash, ''),
 		        p.status, p.expires_at, p.route_mode, p.access_mode, p.allowed_internal_json,
+		        p.concurrent_limit, p.quota_bytes, p.upload_bps, p.download_bps, p.quota_epoch,
 		        c.serial_number, c.fingerprint_sha256, c.status, c.expires_at
 		   FROM app_user u
 		   JOIN client_profile p ON p.user_id = u.id
@@ -52,6 +59,7 @@ func (s *Store) AuthRecords(ctx context.Context) ([]AuthRecord, error) {
 			record                         AuthRecord
 			profileExpires, certExpires    sql.NullString
 			allowedInternal                string
+			concurrent, quota, up, down    sql.NullInt64
 			certSerial, certFP, certStatus sql.NullString
 		)
 		if err := rows.Scan(
@@ -59,12 +67,17 @@ func (s *Store) AuthRecords(ctx context.Context) ([]AuthRecord, error) {
 			&record.ProfileID, &record.AuthType, &record.Username, &record.PasswordHash,
 			&record.ProfileStatus, &profileExpires,
 			&record.RouteMode, &record.AccessMode, &allowedInternal,
+			&concurrent, &quota, &up, &down, &record.QuotaEpoch,
 			&certSerial, &certFP, &certStatus, &certExpires,
 		); err != nil {
 			return nil, fmt.Errorf("读取认证记录: %w", err)
 		}
 		record.ExpiresAt = nullableTime(profileExpires)
 		record.AllowedInternal = decodeStringList(allowedInternal)
+		record.ConcurrentLimit = concurrent.Int64
+		record.QuotaBytes = quota.Int64
+		record.UploadBps = up.Int64
+		record.DownloadBps = down.Int64
 		record.CertSerial = certSerial.String
 		record.CertFingerprint = certFP.String
 		record.CertStatus = certStatus.String

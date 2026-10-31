@@ -18,6 +18,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -25,9 +27,13 @@ import (
 
 	"github.com/dreamstation625/ovpanel/internal/admission"
 	"github.com/dreamstation625/ovpanel/internal/agentproto"
+	"github.com/dreamstation625/ovpanel/internal/agentusage"
 	"github.com/dreamstation625/ovpanel/internal/connectpolicy"
 	"github.com/dreamstation625/ovpanel/internal/netpolicy"
 	"github.com/dreamstation625/ovpanel/internal/serverconfig"
+	"github.com/dreamstation625/ovpanel/internal/telemetry"
+	"github.com/dreamstation625/ovpanel/internal/traffic"
+	"github.com/google/uuid"
 )
 
 const (
@@ -43,9 +49,25 @@ const (
 )
 
 type sessionInfo struct {
-	profileID  string
-	certSerial string
-	vpnIP      string
+	id          string
+	profileID   string
+	certSerial  string
+	vpnIP       string
+	sourceIP    string
+	connectedAt time.Time
+	upBytes     uint64
+	downBytes   uint64
+	upRate      float64
+	downRate    float64
+	seq         uint64
+	lastSample  time.Time
+	lastEvent   time.Time
+	// eventUp/eventDown 是最近一次事件写入时的累计值，结束事件据此补足
+	// 尚未写入事件日志的增量，避免日汇总丢失最后一个采样窗口。
+	eventUp     uint64
+	eventDown   uint64
+	blocked     bool
+	blockReason string
 }
 
 // Status 是运行代理当前应用状态。
@@ -56,6 +78,10 @@ type Status struct {
 	ManagementConnected bool       `json:"managementConnected"`
 	ConfigHash          string     `json:"configHash,omitempty"`
 	Sessions            int        `json:"sessions"`
+	UsageGeneration     string     `json:"usageGeneration,omitempty"`
+	UsageSeq            uint64     `json:"usageSeq"`
+	UsageHealthy        bool       `json:"usageHealthy"`
+	UsageError          string     `json:"usageError,omitempty"`
 	LastError           string     `json:"lastError,omitempty"`
 	RolledBack          bool       `json:"rolledBack,omitempty"`
 	RollbackReason      string     `json:"rollbackReason,omitempty"`
@@ -88,8 +114,14 @@ type Runtime struct {
 	pendingAddr         map[string]string
 	serverPolicy        netpolicy.Policy
 	policyDirty         bool
+	trafficDirty        bool
+	trafficActive       bool
+	usageHealthy        bool
+	usageError          string
 	lastError           string
 	appliedAt           time.Time
+
+	usage *agentusage.Store
 
 	proc       *exec.Cmd
 	procDone   chan struct{}
@@ -99,12 +131,14 @@ type Runtime struct {
 	writeMu    sync.Mutex
 
 	// 测试替换点；生产环境使用下方真实实现。
-	applyPolicyFn func(netpolicy.Policy) error
-	startVPNFn    func(context.Context, string) error
+	applyPolicyFn  func(netpolicy.Policy) error
+	applyTrafficFn func([]traffic.Session) error
+	startVPNFn     func(context.Context, string) error
 }
 
-// New 创建运行代理。
+// New 创建运行代理。每次进程启动生成新的运行代次，会话以代次 + CID 区分。
 func New(controlDir, stateDir string, log *slog.Logger) *Runtime {
+	generation := uuid.NewString()
 	return &Runtime{
 		controlDir:  controlDir,
 		stateDir:    stateDir,
@@ -113,6 +147,7 @@ func New(controlDir, stateDir string, log *slog.Logger) *Runtime {
 		now:         func() time.Time { return time.Now().UTC() },
 		sessions:    map[string]sessionInfo{},
 		pendingAddr: map[string]string{},
+		usage:       agentusage.New(stateDir, controlDir, generation, log),
 	}
 }
 
@@ -121,6 +156,7 @@ func (r *Runtime) Run(ctx context.Context) {
 	r.loadPersistedState()
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
+	lastSave := r.now()
 	for {
 		if err := r.handleCommand(ctx); err != nil {
 			r.setError(err)
@@ -130,15 +166,30 @@ func (r *Runtime) Run(ctx context.Context) {
 			r.setError(err)
 			r.log.Warn("apply control bundle failed", "error", err)
 		}
+		// 到期与额度必须持续执行，不能只在控制包变化时检查。
+		r.pruneSessions()
 		r.mu.Lock()
-		dirty := r.policyDirty
+		policyDirty := r.policyDirty
+		trafficDirty := r.trafficDirty
 		r.mu.Unlock()
-		if dirty {
+		if policyDirty {
 			if err := r.refreshPolicy(); err != nil {
 				r.log.Warn("retry session policy failed", "error", err)
 			}
 		}
+		if trafficDirty {
+			if err := r.refreshTraffic(); err != nil {
+				r.log.Warn("retry session shaping failed", "error", err)
+			}
+		}
+		if r.now().Sub(lastSave) >= 5*time.Second {
+			if err := r.usage.Save(); err != nil {
+				r.log.Warn("persist usage ledger failed", "error", err)
+			}
+			lastSave = r.now()
+		}
 		r.writeStatus()
+		r.writeUsageSnapshot()
 		select {
 		case <-ctx.Done():
 			r.Stop()
@@ -179,6 +230,7 @@ func (r *Runtime) writeStatus() {
 type controlCommand struct {
 	ID       string `json:"id"`
 	Action   string `json:"action"`
+	CID      string `json:"cid,omitempty"`
 	IssuedAt string `json:"issuedAt"`
 }
 
@@ -212,6 +264,12 @@ func (r *Runtime) handleCommand(ctx context.Context) error {
 		}
 		r.setStopped(true)
 		r.log.Warn("OpenVPN stopped by panel command")
+	case "disconnect":
+		if command.CID == "" {
+			return fmt.Errorf("断开命令缺少 CID")
+		}
+		r.finishSession(command.CID, "admin_disconnect", true)
+		r.log.Warn("session disconnected by panel command", "cid", command.CID)
 	case "start", "restart":
 		r.setStopped(false)
 		r.mu.Lock()
@@ -315,7 +373,12 @@ func (r *Runtime) applyBundle(ctx context.Context, bundle agentproto.Bundle, bun
 	r.serverPolicy = base
 	needsRestart := r.configHash != bundle.ConfigHash || !r.openvpnRunning || !r.managementConnected
 	r.mu.Unlock()
+	// 面板手动重置额度会递增代次；账本把当时累计设为新基线。
+	r.usage.SyncEpochs(bundle.Snapshot)
 	if err := r.refreshPolicy(); err != nil {
+		return err
+	}
+	if err := r.refreshTraffic(); err != nil {
 		return err
 	}
 	r.mu.Lock()
@@ -352,8 +415,91 @@ func (r *Runtime) commitGood(data []byte, bundleHash string) {
 	}
 }
 
+// writeUsageSnapshot 把在线会话与配置用量写入控制目录，供面板实时展示。
+func (r *Runtime) writeUsageSnapshot() {
+	now := r.now()
+	r.mu.Lock()
+	sessions := make([]telemetry.LiveSession, 0, len(r.sessions))
+	for _, info := range r.sessions {
+		upRate, downRate := info.upRate, info.downRate
+		if now.Sub(info.lastSample) > 5*time.Second {
+			// 连接空闲时不再沿用最后一次采样速率。
+			upRate, downRate = 0, 0
+		}
+		sessions = append(sessions, telemetry.LiveSession{
+			ID:          info.id,
+			CID:         strings.TrimPrefix(info.id, r.usage.Generation()+":"),
+			ProfileID:   info.profileID,
+			VPNIP:       info.vpnIP,
+			SourceIP:    info.sourceIP,
+			ConnectedAt: info.connectedAt,
+			UpBytes:     info.upBytes,
+			DownBytes:   info.downBytes,
+			UpRate:      upRate,
+			DownRate:    downRate,
+			Blocked:     info.blocked,
+			BlockReason: info.blockReason,
+		})
+	}
+	r.mu.Unlock()
+	sort.Slice(sessions, func(i, j int) bool {
+		if sessions[i].ConnectedAt.Equal(sessions[j].ConnectedAt) {
+			return sessions[i].ID < sessions[j].ID
+		}
+		return sessions[i].ConnectedAt.Before(sessions[j].ConnectedAt)
+	})
+
+	snapshot := telemetry.Snapshot{
+		Version:    telemetry.Version,
+		Generation: r.usage.Generation(),
+		UpdatedAt:  r.now(),
+		EventSeq:   r.usage.CurrentSeq(),
+		Profiles:   r.usage.ProfileStats(),
+		Sessions:   sessions,
+	}
+	payload, err := json.MarshalIndent(snapshot, "", "  ")
+	if err != nil {
+		return
+	}
+	path := filepath.Join(r.controlDir, telemetry.SnapshotFile)
+	if err := os.MkdirAll(r.controlDir, 0o700); err != nil {
+		return
+	}
+	tmp, err := os.CreateTemp(r.controlDir, ".usage-*.tmp")
+	if err != nil {
+		return
+	}
+	name := tmp.Name()
+	defer os.Remove(name)
+	if err := tmp.Chmod(0o644); err != nil {
+		tmp.Close()
+		return
+	}
+	if _, err := tmp.Write(payload); err != nil {
+		tmp.Close()
+		return
+	}
+	if err := tmp.Close(); err != nil {
+		return
+	}
+	_ = os.Rename(name, path)
+}
+
 func (r *Runtime) loadPersistedState() {
 	r.loadLastGood()
+	if err := r.usage.Load(); err != nil {
+		r.mu.Lock()
+		r.usageHealthy = false
+		r.usageError = err.Error()
+		r.lastError = "用量账本不可用：" + err.Error()
+		r.mu.Unlock()
+		r.log.Error("usage ledger unavailable; new admissions will be denied", "error", err)
+	} else {
+		r.mu.Lock()
+		r.usageHealthy = true
+		r.usageError = ""
+		r.mu.Unlock()
+	}
 	if _, err := os.Stat(filepath.Join(r.stateDir, stoppedFile)); err == nil {
 		r.mu.Lock()
 		r.stopped = true
@@ -500,6 +646,106 @@ func (r *Runtime) refreshPolicy() error {
 	return nil
 }
 
+// refreshTraffic 按当前在线会话重建 tc/IFB 限速。
+// 每次会话、地址或限速变化都整体重建，避免地址复用后沿用旧 class。
+func (r *Runtime) refreshTraffic() error {
+	r.mu.Lock()
+	tun := r.serverPolicy.TunDevice
+	snapshot := r.snapshot
+	active := r.trafficActive
+	sessions := make([]traffic.Session, 0, len(r.sessions))
+	for cid, info := range r.sessions {
+		if info.vpnIP == "" {
+			continue
+		}
+		profile, ok := findProfile(snapshot, info.profileID)
+		if !ok || (profile.UploadBps <= 0 && profile.DownloadBps <= 0) {
+			continue
+		}
+		sessions = append(sessions, traffic.Session{
+			CID:         cid,
+			IP:          info.vpnIP,
+			UploadBps:   profile.UploadBps,
+			DownloadBps: profile.DownloadBps,
+		})
+	}
+	r.mu.Unlock()
+
+	if r.applyTrafficFn != nil {
+		if err := r.applyTrafficFn(sessions); err != nil {
+			r.mu.Lock()
+			r.trafficDirty = true
+			r.mu.Unlock()
+			return err
+		}
+		r.mu.Lock()
+		r.trafficActive = len(sessions) > 0
+		r.trafficDirty = false
+		r.mu.Unlock()
+		return nil
+	}
+
+	if len(sessions) == 0 {
+		if !active {
+			r.mu.Lock()
+			r.trafficDirty = false
+			r.mu.Unlock()
+			return nil
+		}
+		if err := traffic.Apply(traffic.Clear(tun, "ifb0")); err != nil {
+			r.mu.Lock()
+			r.trafficDirty = true
+			r.mu.Unlock()
+			return err
+		}
+		r.mu.Lock()
+		r.trafficActive = false
+		r.trafficDirty = false
+		r.mu.Unlock()
+		return nil
+	}
+
+	if err := traffic.Apply(traffic.Clear(tun, "ifb0")); err != nil {
+		r.mu.Lock()
+		r.trafficDirty = true
+		r.mu.Unlock()
+		return err
+	}
+	cmds, err := traffic.Render(tun, "ifb0", sessions)
+	if err != nil {
+		r.mu.Lock()
+		r.trafficDirty = true
+		r.mu.Unlock()
+		return err
+	}
+	if err := traffic.Apply(cmds); err != nil {
+		r.mu.Lock()
+		r.trafficDirty = true
+		r.mu.Unlock()
+		return err
+	}
+	r.mu.Lock()
+	r.trafficActive = true
+	r.trafficDirty = false
+	r.mu.Unlock()
+	return nil
+}
+
+// clearTraffic 删除项目创建的限速队列。
+func (r *Runtime) clearTraffic() {
+	r.mu.Lock()
+	tun := r.serverPolicy.TunDevice
+	r.trafficActive = false
+	r.mu.Unlock()
+	if r.applyTrafficFn != nil {
+		_ = r.applyTrafficFn(nil)
+		return
+	}
+	if err := traffic.Apply(traffic.Clear(tun, "ifb0")); err != nil {
+		r.log.Warn("clear traffic shaping failed", "error", err)
+	}
+}
+
 func findProfile(snapshot admission.Snapshot, id string) (admission.Profile, bool) {
 	for i := range snapshot.Profiles {
 		if snapshot.Profiles[i].ID == id {
@@ -599,6 +845,10 @@ func (r *Runtime) manage(ctx context.Context) {
 		r.managementConnected = true
 		r.mu.Unlock()
 		r.log.Info("management connected")
+		// 每秒推送每客户端累计字节；bytecount 不会被认证回调窗口阻塞。
+		if err := r.send("bytecount 1"); err != nil {
+			r.log.Warn("enable bytecount failed", "error", err)
+		}
 
 		r.readManagement(ctx, conn)
 
@@ -658,11 +908,28 @@ func (r *Runtime) readManagement(ctx context.Context, conn net.Conn) {
 			}
 			continue
 		}
+		// 用量采样通知带冒号分隔的 CID，与普通通知的逗号格式不同。
+		if strings.HasPrefix(rest, "BYTECOUNT_CLI:") {
+			fields := strings.Split(rest[len("BYTECOUNT_CLI:"):], ",")
+			if len(fields) >= 3 {
+				received, err1 := strconv.ParseUint(strings.TrimSpace(fields[1]), 10, 64)
+				sent, err2 := strconv.ParseUint(strings.TrimSpace(fields[2]), 10, 64)
+				if err1 == nil && err2 == nil {
+					r.recordUsage(fields[0], received, sent)
+				}
+			}
+			continue
+		}
+
 		parts := strings.Split(rest, ",")
 		switch parts[0] {
 		case "CLIENT:CONNECT", "CLIENT:REAUTH":
 			if len(parts) >= 3 {
-				pending = &pendingAuth{cid: parts[1], kid: parts[2], env: map[string]string{}}
+				kind := "connect"
+				if parts[0] == "CLIENT:REAUTH" {
+					kind = "reauth"
+				}
+				pending = &pendingAuth{cid: parts[1], kid: parts[2], kind: kind, env: map[string]string{}}
 			}
 		case "CLIENT:ADDRESS":
 			if len(parts) >= 3 {
@@ -670,36 +937,40 @@ func (r *Runtime) readManagement(ctx context.Context, conn net.Conn) {
 			}
 		case "CLIENT:DISCONNECT":
 			if len(parts) >= 2 {
-				r.mu.Lock()
-				delete(r.sessions, parts[1])
-				delete(r.pendingAddr, parts[1])
-				r.mu.Unlock()
-				if err := r.refreshPolicy(); err != nil {
-					r.log.Warn("refresh policy after disconnect failed", "error", err)
-				}
+				r.finishSession(parts[1], "client_disconnect", false)
 			}
 		}
 	}
 }
 
 type pendingAuth struct {
-	cid string
-	kid string
-	env map[string]string
+	cid  string
+	kid  string
+	kind string
+	env  map[string]string
 }
 
 // setSessionAddress 记录会话取得的 VPN 地址并立即重建逐连接规则。
 func (r *Runtime) setSessionAddress(cid, address string) {
 	address = strings.TrimSpace(address)
+	now := r.now()
+	var (
+		info      sessionInfo
+		ok        bool
+		reusedCID string
+		reused    sessionInfo
+	)
 	r.mu.Lock()
-	info, ok := r.sessions[cid]
+	info, ok = r.sessions[cid]
 	if ok {
 		// 断线重连可能在旧会话超时前重新分配到同一地址；
 		// 移除持有该地址的旧记录，避免规则重复或沿用旧策略。
 		for otherCID, other := range r.sessions {
 			if otherCID != cid && other.vpnIP == address {
+				reusedCID, reused = otherCID, other
 				delete(r.sessions, otherCID)
 				delete(r.pendingAddr, otherCID)
+				break
 			}
 		}
 		info.vpnIP = address
@@ -711,60 +982,380 @@ func (r *Runtime) setSessionAddress(cid, address string) {
 	if !ok {
 		return
 	}
+	if reusedCID != "" {
+		r.endSessionRecord(reusedCID, reused, "address_reused", now)
+	}
+	if _, err := r.usage.AppendEvent(telemetry.Event{
+		Kind:        telemetry.EventSessionAddress,
+		At:          now,
+		SessionID:   info.id,
+		CID:         cid,
+		ProfileID:   info.profileID,
+		VPNIP:       address,
+		SourceIP:    info.sourceIP,
+		UpBytes:     info.upBytes,
+		DownBytes:   info.downBytes,
+		ConnectedAt: timePtr(info.connectedAt),
+	}); err != nil {
+		r.log.Warn("append session address event failed", "error", err, "cid", cid)
+	}
+	r.mu.Lock()
+	if current, exists := r.sessions[cid]; exists && current.id == info.id {
+		current.lastEvent = now
+		r.sessions[cid] = current
+	}
+	r.mu.Unlock()
 	if err := r.refreshPolicy(); err != nil {
 		r.log.Warn("refresh policy after address failed", "error", err, "cid", cid)
+	}
+	if err := r.refreshTraffic(); err != nil {
+		r.log.Warn("refresh shaping after address failed", "error", err, "cid", cid)
 	}
 }
 
 func (r *Runtime) evaluate(pending *pendingAuth) {
 	r.mu.Lock()
 	snapshot := r.snapshot
+	usageHealthy := r.usageHealthy
 	r.mu.Unlock()
 
 	incoming := incomingFromEnv(pending.env)
-	decision := admission.Decide(snapshot, incoming, r.now())
-	if decision.Allow {
-		if err := r.send(fmt.Sprintf("client-auth-nt %s %s", pending.cid, pending.kid)); err != nil {
-			r.log.Warn("send client-auth-nt failed", "error", err)
+	now := r.now()
+	decision := admission.Decide(snapshot, incoming, now)
+	if !decision.Allow {
+		r.denyAuth(pending, decision.Code, decision.Reason)
+		return
+	}
+	if !usageHealthy {
+		r.denyAuth(pending, "usage_ledger_unavailable", "用量账本不可用，暂不接收新连接")
+		return
+	}
+
+	profile, ok := findProfile(snapshot, decision.ProfileID)
+	if !ok {
+		r.denyAuth(pending, admission.CodeAmbiguousIdentity, "配置不存在")
+		return
+	}
+
+	// 重认证通常复用已有会话、不新增占位；若会话已不在内存中
+	// （例如代理刚恢复），按新连接重新预留并发名额。
+	isNew := pending.kind != "reauth"
+	if pending.kind == "reauth" {
+		r.mu.Lock()
+		_, exists := r.sessions[pending.cid]
+		r.mu.Unlock()
+		isNew = !exists
+	}
+
+	if isNew {
+		// 额度耗尽时拒绝新认证，而不是先放行再阻断。
+		if r.usage.Exhausted(profile.ID, profile.QuotaBytes) {
+			r.denyAuth(pending, admission.CodeQuotaExhausted, "流量额度已用尽")
 			return
 		}
-		r.mu.Lock()
-		vpnIP := r.pendingAddr[pending.cid]
+		if profile.ConcurrentLimit > 0 && r.profileSessionCount(profile.ID) >= profile.ConcurrentLimit {
+			r.denyAuth(pending, admission.CodeConcurrencyLimit, "同时在线数已达上限")
+			return
+		}
+	}
+
+	if err := r.send(fmt.Sprintf("client-auth-nt %s %s", pending.cid, pending.kid)); err != nil {
+		r.log.Warn("send client-auth-nt failed", "error", err)
+		return
+	}
+
+	sessionID := r.usage.Generation() + ":" + pending.cid
+	var (
+		vpnIP     string
+		reusedCID string
+		reused    sessionInfo
+	)
+	r.mu.Lock()
+	if !isNew {
+		if current, exists := r.sessions[pending.cid]; exists {
+			current.profileID = profile.ID
+			current.certSerial = incoming.CertSerial
+			current.sourceIP = incoming.SourceIP
+			r.sessions[pending.cid] = current
+		}
+	} else {
+		vpnIP = r.pendingAddr[pending.cid]
 		delete(r.pendingAddr, pending.cid)
 		if vpnIP != "" {
 			for otherCID, other := range r.sessions {
 				if otherCID != pending.cid && other.vpnIP == vpnIP {
+					reusedCID, reused = otherCID, other
 					delete(r.sessions, otherCID)
 					delete(r.pendingAddr, otherCID)
+					break
 				}
 			}
 		}
 		r.sessions[pending.cid] = sessionInfo{
-			profileID:  decision.ProfileID,
-			certSerial: incoming.CertSerial,
-			vpnIP:      vpnIP,
+			id:          sessionID,
+			profileID:   profile.ID,
+			certSerial:  incoming.CertSerial,
+			vpnIP:       vpnIP,
+			sourceIP:    incoming.SourceIP,
+			connectedAt: now,
+			lastSample:  now,
 		}
-		r.mu.Unlock()
-		if vpnIP != "" {
-			if err := r.refreshPolicy(); err != nil {
-				r.log.Warn("refresh policy after admission failed", "error", err)
+	}
+	r.mu.Unlock()
+
+	if reusedCID != "" {
+		r.endSessionRecord(reusedCID, reused, "address_reused", now)
+	}
+	if isNew {
+		event := telemetry.Event{
+			Kind:        telemetry.EventSessionStart,
+			At:          now,
+			SessionID:   sessionID,
+			CID:         pending.cid,
+			ProfileID:   profile.ID,
+			VPNIP:       vpnIP,
+			SourceIP:    incoming.SourceIP,
+			UpBytes:     0,
+			DownBytes:   0,
+			ConnectedAt: &now,
+		}
+		if _, err := r.usage.AppendEvent(event); err != nil {
+			r.log.Warn("append session start event failed", "error", err, "cid", pending.cid)
+		} else {
+			r.mu.Lock()
+			if current, exists := r.sessions[pending.cid]; exists {
+				current.lastEvent = now
+				r.sessions[pending.cid] = current
 			}
+			r.mu.Unlock()
 		}
-		r.log.Info("client admitted",
-			"profile_id", decision.ProfileID,
-			"cid", pending.cid,
-			"auth", decision.Code)
-		return
 	}
 
-	message := escapeMgmtArg(decision.Reason)
-	if err := r.send(fmt.Sprintf("client-deny %s %s %q %q", pending.cid, pending.kid, decision.Code, message)); err != nil {
+	if vpnIP != "" {
+		if err := r.refreshPolicy(); err != nil {
+			r.log.Warn("refresh policy after admission failed", "error", err)
+		}
+		if err := r.refreshTraffic(); err != nil {
+			r.log.Warn("refresh shaping after admission failed", "error", err)
+		}
+	}
+	r.log.Info("client admitted",
+		"profile_id", decision.ProfileID,
+		"cid", pending.cid,
+		"auth", decision.Code,
+		"reauth", pending.kind == "reauth")
+}
+
+func (r *Runtime) denyAuth(pending *pendingAuth, code, reason string) {
+	message := escapeMgmtArg(reason)
+	if err := r.send(fmt.Sprintf("client-deny %s %s %q %q", pending.cid, pending.kid, code, message)); err != nil {
 		r.log.Warn("send client-deny failed", "error", err)
 	}
 	r.log.Warn("client denied",
 		"cid", pending.cid,
-		"code", decision.Code,
-		"reason", decision.Reason)
+		"code", code,
+		"reason", reason)
+}
+
+func (r *Runtime) profileSessionCount(profileID string) int64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var count int64
+	for _, info := range r.sessions {
+		if info.profileID == profileID {
+			count++
+		}
+	}
+	return count
+}
+
+func preferredSourceIP(incoming admission.Incoming) string {
+	return incoming.SourceIP
+}
+
+func timePtr(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	return &t
+}
+
+// deltaSince 返回累计值相对上次事件高水位的新增量；计数回退时返回 0。
+func deltaSince(current, previous uint64) uint64 {
+	if current <= previous {
+		return 0
+	}
+	return current - previous
+}
+
+// recordUsage 处理一次 bytecount 采样：更新速率、账本与额度判定。
+func (r *Runtime) recordUsage(cid string, received, sent uint64) {
+	now := r.now()
+	var (
+		info           sessionInfo
+		ok             bool
+		profile        admission.Profile
+		hasProfile     bool
+		quotaKill      bool
+		eventDeltaUp   uint64
+		eventDeltaDown uint64
+	)
+	r.mu.Lock()
+	info, ok = r.sessions[cid]
+	if !ok {
+		r.mu.Unlock()
+		return
+	}
+	elapsed := now.Sub(info.lastSample).Seconds()
+	if elapsed <= 0 {
+		elapsed = 1
+	}
+	if received >= info.upBytes {
+		info.upRate = float64(received-info.upBytes) / elapsed
+	} else {
+		info.upRate = 0
+	}
+	if sent >= info.downBytes {
+		info.downRate = float64(sent-info.downBytes) / elapsed
+	} else {
+		info.downRate = 0
+	}
+	info.upBytes = received
+	info.downBytes = sent
+	info.lastSample = now
+	info.seq++
+
+	// 高水位在会话被移除前更新；与断开操作共用同一把锁，避免重复累计。
+	result := r.usage.Record(info.profileID, info.id, received, sent)
+	if result.Rollback {
+		r.log.Warn("usage counter went backwards", "cid", cid, "session_id", info.id)
+	}
+	profile, hasProfile = findProfile(r.snapshot, info.profileID)
+	if hasProfile && profile.QuotaBytes > 0 && r.usage.Usage(profile.ID) >= profile.QuotaBytes {
+		info.blocked = true
+		info.blockReason = "quota_exhausted"
+		quotaKill = true
+	}
+	eventDeltaUp = deltaSince(received, info.eventUp)
+	eventDeltaDown = deltaSince(sent, info.eventDown)
+	shouldEvent := eventDeltaUp+eventDeltaDown > 0 &&
+		(now.Sub(info.lastEvent) >= time.Minute || eventDeltaUp+eventDeltaDown >= 1<<20)
+	if shouldEvent {
+		// 在会话锁内写入事件并推进事件高水位，保证结束事件不会重复或漏计。
+		if _, err := r.usage.AppendEvent(telemetry.Event{
+			Kind:        telemetry.EventUsage,
+			At:          now,
+			SessionID:   info.id,
+			CID:         cid,
+			ProfileID:   info.profileID,
+			VPNIP:       info.vpnIP,
+			SourceIP:    info.sourceIP,
+			UpBytes:     info.upBytes,
+			DownBytes:   info.downBytes,
+			DeltaUp:     eventDeltaUp,
+			DeltaDown:   eventDeltaDown,
+			ConnectedAt: timePtr(info.connectedAt),
+		}); err != nil {
+			r.log.Warn("append usage event failed", "error", err, "cid", cid)
+		} else {
+			info.lastEvent = now
+			info.eventUp = received
+			info.eventDown = sent
+		}
+	}
+	r.sessions[cid] = info
+	r.mu.Unlock()
+
+	if quotaKill {
+		r.killProfile(info.profileID, "quota_exhausted")
+	}
+}
+
+// finishSession 结束一条会话：先按需断开，再记录最终用量与结束事件。
+func (r *Runtime) finishSession(cid, reason string, kill bool) {
+	if kill {
+		// 不附带自由文本：OpenVPN 会把附加文本当作控制通道消息发给客户端。
+		if err := r.send(fmt.Sprintf("client-kill %s", cid)); err != nil {
+			r.log.Warn("send client-kill failed", "error", err)
+		}
+	}
+	now := r.now()
+	r.mu.Lock()
+	info, ok := r.sessions[cid]
+	if ok {
+		delete(r.sessions, cid)
+		delete(r.pendingAddr, cid)
+	}
+	r.mu.Unlock()
+	if !ok {
+		return
+	}
+	r.endSessionRecord(cid, info, reason, now)
+	if err := r.refreshPolicy(); err != nil {
+		r.log.Warn("refresh policy after session end failed", "error", err, "cid", cid)
+	}
+	if err := r.refreshTraffic(); err != nil {
+		r.log.Warn("refresh shaping after session end failed", "error", err, "cid", cid)
+	}
+	r.log.Warn("session ended", "cid", cid, "profile_id", info.profileID, "reason", reason)
+}
+
+// endSessionRecord 为已经移出在线映射的会话写入最终用量与结束事件。
+func (r *Runtime) endSessionRecord(cid string, info sessionInfo, reason string, now time.Time) {
+	// 账本记录最终高水位；日汇总使用相对上一条事件的增量，避免丢失窗口。
+	r.usage.Record(info.profileID, info.id, info.upBytes, info.downBytes)
+	if _, err := r.usage.AppendEvent(telemetry.Event{
+		Kind:        telemetry.EventSessionEnd,
+		At:          now,
+		SessionID:   info.id,
+		CID:         cid,
+		ProfileID:   info.profileID,
+		VPNIP:       info.vpnIP,
+		SourceIP:    info.sourceIP,
+		UpBytes:     info.upBytes,
+		DownBytes:   info.downBytes,
+		DeltaUp:     deltaSince(info.upBytes, info.eventUp),
+		DeltaDown:   deltaSince(info.downBytes, info.eventDown),
+		Reason:      reason,
+		ConnectedAt: timePtr(info.connectedAt),
+	}); err != nil {
+		r.log.Warn("append session end event failed", "error", err, "cid", cid)
+	}
+	r.usage.RemoveSession(info.profileID, info.id)
+	if err := r.usage.Save(); err != nil {
+		r.log.Warn("persist usage ledger failed", "error", err)
+	}
+}
+
+// killProfile 立即断开某配置的全部在线连接，用于额度耗尽或权限收紧。
+func (r *Runtime) killProfile(profileID, reason string) {
+	r.mu.Lock()
+	cids := make([]string, 0, 4)
+	for cid, info := range r.sessions {
+		if info.profileID == profileID {
+			cids = append(cids, cid)
+		}
+	}
+	r.mu.Unlock()
+	for _, cid := range cids {
+		r.finishSession(cid, reason, true)
+	}
+}
+
+// endAllSessions 在进程停止或重启前记录全部会话结束。
+func (r *Runtime) endAllSessions(reason string) {
+	now := r.now()
+	r.mu.Lock()
+	sessions := make(map[string]sessionInfo, len(r.sessions))
+	for cid, info := range r.sessions {
+		sessions[cid] = info
+	}
+	r.sessions = map[string]sessionInfo{}
+	r.pendingAddr = map[string]string{}
+	r.mu.Unlock()
+	for cid, info := range sessions {
+		r.endSessionRecord(cid, info, reason, now)
+	}
 }
 
 func (r *Runtime) pruneSessions() {
@@ -777,39 +1368,41 @@ func (r *Runtime) pruneSessions() {
 	r.mu.Unlock()
 
 	now := r.now()
-	killed := false
+	type kill struct {
+		cid    string
+		reason string
+	}
+	kills := make([]kill, 0)
 	for cid, info := range sessions {
-		kill := !admission.ProfileUsable(snapshot, info.profileID, now)
-		if !kill && info.certSerial != "" {
-			var profile *admission.Profile
-			for i := range snapshot.Profiles {
-				if snapshot.Profiles[i].ID == info.profileID {
-					profile = &snapshot.Profiles[i]
-					break
-				}
-			}
-			if profile == nil || profile.CertSerial == "" || !admission.SerialMatches(profile.CertSerial, info.certSerial) {
-				kill = true
-			}
+		profile, ok := findProfile(snapshot, info.profileID)
+		if !ok {
+			kills = append(kills, kill{cid: cid, reason: "policy_revoked"})
+			continue
 		}
-		if kill {
-			// 不附带自由文本：OpenVPN 会把附加文本当作控制通道消息发给客户端，
-			// 客户端只会记录 unknown control message。断开原因保留在代理日志。
-			if err := r.send(fmt.Sprintf("client-kill %s", cid)); err != nil {
-				r.log.Warn("send client-kill failed", "error", err)
-			}
-			r.mu.Lock()
-			delete(r.sessions, cid)
-			delete(r.pendingAddr, cid)
-			r.mu.Unlock()
-			killed = true
-			r.log.Warn("session killed after policy update", "cid", cid, "profile_id", info.profileID)
+		if profile.ExpiresAt != nil && !now.Before(*profile.ExpiresAt) {
+			kills = append(kills, kill{cid: cid, reason: "profile_expired"})
+			continue
+		}
+		if info.certSerial != "" &&
+			(profile.CertSerial == "" || !admission.SerialMatches(profile.CertSerial, info.certSerial) ||
+				profile.CertStatus != "active") {
+			kills = append(kills, kill{cid: cid, reason: "certificate_changed"})
+			continue
+		}
+		if profile.CertExpiresAt != nil && !now.Before(*profile.CertExpiresAt) {
+			kills = append(kills, kill{cid: cid, reason: "certificate_expired"})
+			continue
+		}
+		if !admission.ProfileUsable(snapshot, info.profileID, now) {
+			kills = append(kills, kill{cid: cid, reason: "policy_revoked"})
+			continue
+		}
+		if profile.QuotaBytes > 0 && r.usage.Exhausted(profile.ID, profile.QuotaBytes) {
+			kills = append(kills, kill{cid: cid, reason: "quota_exhausted"})
 		}
 	}
-	if killed {
-		if err := r.refreshPolicy(); err != nil {
-			r.log.Warn("refresh policy after session prune failed", "error", err)
-		}
+	for _, item := range kills {
+		r.finishSession(item.cid, item.reason, true)
 	}
 }
 
@@ -857,6 +1450,9 @@ func (r *Runtime) stopProcess() {
 		}
 	}
 
+	// OpenVPN 退出后在线会话全部结束；先记录最终用量与结束事件。
+	r.endAllSessions("runtime_stop")
+
 	r.mu.Lock()
 	if r.proc == proc {
 		r.proc = nil
@@ -865,14 +1461,19 @@ func (r *Runtime) stopProcess() {
 	}
 	r.sessions = map[string]sessionInfo{}
 	r.mu.Unlock()
+	if err := r.usage.Save(); err != nil {
+		r.log.Warn("persist usage ledger failed", "error", err)
+	}
 }
 
-// Stop 停止 OpenVPN、管理连接与项目专用 nftables 表。
+// Stop 停止 OpenVPN、管理连接、限速队列与项目专用 nftables 表。
 func (r *Runtime) Stop() {
 	r.stopProcess()
+	r.clearTraffic()
 	if err := netpolicy.Delete(); err != nil {
 		r.log.Warn("delete network policy failed", "error", err)
 	}
+	r.usage.Close()
 }
 
 func (r *Runtime) applyPolicy(policy netpolicy.Policy) error {
@@ -947,6 +1548,10 @@ func (r *Runtime) Status() Status {
 		ManagementConnected: r.managementConnected,
 		ConfigHash:          r.configHash,
 		Sessions:            len(r.sessions),
+		UsageGeneration:     r.usage.Generation(),
+		UsageSeq:            r.usage.CurrentSeq(),
+		UsageHealthy:        r.usageHealthy,
+		UsageError:          r.usageError,
 		LastError:           r.lastError,
 		RolledBack:          r.rolledBack,
 		RollbackReason:      r.rollbackReason,
@@ -975,6 +1580,14 @@ func incomingFromEnv(env map[string]string) admission.Incoming {
 		CommonName: env["common_name"],
 		Username:   env["username"],
 		Password:   env["password"],
+	}
+	switch {
+	case env["trusted_ip"] != "":
+		incoming.SourceIP = env["trusted_ip"]
+	case env["untrusted_ip"] != "":
+		incoming.SourceIP = env["untrusted_ip"]
+	case env["remote_host"] != "":
+		incoming.SourceIP = env["remote_host"]
 	}
 	serial := env["tls_serial_hex_0"]
 	if serial == "" {

@@ -38,6 +38,11 @@ func Build(ctx context.Context, st *store.Store) (admission.Snapshot, error) {
 			RouteMode:       record.RouteMode,
 			AccessMode:      record.AccessMode,
 			AllowedInternal: record.AllowedInternal,
+			ConcurrentLimit: record.ConcurrentLimit,
+			QuotaBytes:      uint64(maxInt64(record.QuotaBytes)),
+			UploadBps:       record.UploadBps,
+			DownloadBps:     record.DownloadBps,
+			QuotaEpoch:      record.QuotaEpoch,
 		}
 		if record.CertSerial != "" {
 			profile.CertSerial = record.CertSerial
@@ -53,4 +58,11 @@ func Build(ctx context.Context, st *store.Store) (admission.Snapshot, error) {
 		return admission.Snapshot{}, err
 	}
 	return snapshot, nil
+}
+
+func maxInt64(value int64) int64 {
+	if value < 0 {
+		return 0
+	}
+	return value
 }

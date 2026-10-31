@@ -43,6 +43,8 @@ const (
 	CodeProfileDisabled          = "profile_disabled"
 	CodeProfileExpired           = "profile_expired"
 	CodeCertificateExpired       = "certificate_expired"
+	CodeConcurrencyLimit         = "concurrency_limit"
+	CodeQuotaExhausted           = "quota_exhausted"
 )
 
 // User 是凭据归属人。
@@ -66,6 +68,13 @@ type Profile struct {
 	AccessMode      string   `json:"accessMode,omitempty"`
 	AllowedInternal []string `json:"allowedInternal,omitempty"`
 
+	// 使用限制；0 表示不限制。QuotaEpoch 由面板手动重置时递增。
+	ConcurrentLimit int64  `json:"concurrentLimit,omitempty"`
+	QuotaBytes      uint64 `json:"quotaBytes,omitempty"`
+	UploadBps       int64  `json:"uploadBps,omitempty"`
+	DownloadBps     int64  `json:"downloadBps,omitempty"`
+	QuotaEpoch      int64  `json:"quotaEpoch,omitempty"`
+
 	CertSerial      string     `json:"certSerial,omitempty"`
 	CertFingerprint string     `json:"certFingerprint,omitempty"`
 	CertStatus      string     `json:"certStatus,omitempty"`
@@ -87,6 +96,8 @@ type Incoming struct {
 	CertFingerprint string
 	CertPresent     bool
 	CertVerified    bool
+	// SourceIP 是管理接口提供的客户端来源地址，仅作会话信息，不用于授权。
+	SourceIP string
 }
 
 // Decision 是准入结论。
@@ -194,6 +205,9 @@ func (s Snapshot) Validate() error {
 			if !ip.Equal(network.IP) {
 				return fmt.Errorf("配置 %s 的授权内网网段必须使用网络地址：%q", profile.ID, raw)
 			}
+		}
+		if profile.ConcurrentLimit < 0 || profile.UploadBps < 0 || profile.DownloadBps < 0 || profile.QuotaEpoch < 0 {
+			return fmt.Errorf("配置 %s 的使用限制不能为负数", profile.ID)
 		}
 	}
 	return nil

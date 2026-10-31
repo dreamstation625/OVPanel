@@ -1,8 +1,19 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, Copy, Download, KeyRound, RefreshCw, ShieldOff, ShieldCheck } from '@lucide/vue'
-import { NAlert, NButton, NForm, NFormItem, NInput, NPopconfirm, NSelect } from 'naive-ui'
+import { ArrowLeft, Copy, Download, Gauge, KeyRound, RefreshCw, ShieldOff, ShieldCheck } from '@lucide/vue'
+import {
+  NAlert,
+  NButton,
+  NDatePicker,
+  NForm,
+  NFormItem,
+  NInput,
+  NInputNumber,
+  NPopconfirm,
+  NSelect,
+  NSwitch,
+} from 'naive-ui'
 import PasswordPromptModal from '../components/PasswordPromptModal.vue'
 import OneTimePasswordModal from '../components/OneTimePasswordModal.vue'
 import { api, ApiError, type AccessMode, type Profile, type RouteMode } from '../api'
@@ -10,9 +21,14 @@ import {
   authLabel,
   authRequiresCertificate,
   authRequiresPassword,
+  bpsToMbps,
+  bytesToGb,
   errorMessage,
+  formatBytes,
   formatDate,
   formatFingerprint,
+  gbToBytes,
+  mbpsToBps,
   statusLabel,
   statusTone,
 } from '../labels'
@@ -52,6 +68,18 @@ const policy = reactive({
   allowedText: '',
 })
 const policyBusy = ref(false)
+const limits = reactive({
+  expiresAt: null as number | null,
+  concurrentEnabled: false,
+  concurrentLimit: 3,
+  quotaEnabled: false,
+  quotaGb: 10,
+  uploadEnabled: false,
+  uploadMbps: 10,
+  downloadEnabled: false,
+  downloadMbps: 50,
+})
+const limitsBusy = ref(false)
 const routeOptions = [
   { label: '继承服务端', value: 'inherit' },
   { label: '仅访问内网', value: 'split' },
@@ -242,6 +270,76 @@ async function savePolicy() {
   }
 }
 
+async function saveLimits() {
+  const current = profile.value
+  if (!current || limitsBusy.value) {
+    return
+  }
+  if (limits.concurrentEnabled && (limits.concurrentLimit < 1 || limits.concurrentLimit > 1000)) {
+    error.value = '并发上限需在 1 到 1000 之间'
+    return
+  }
+  if (limits.quotaEnabled && limits.quotaGb < 0.001) {
+    error.value = '流量额度至少为 0.001 GB'
+    return
+  }
+  if (limits.uploadEnabled && (limits.uploadMbps < 0.008 || limits.uploadMbps > 10000)) {
+    error.value = '上传限速需在 0.008 到 10000 Mbps 之间'
+    return
+  }
+  if (limits.downloadEnabled && (limits.downloadMbps < 0.008 || limits.downloadMbps > 10000)) {
+    error.value = '下载限速需在 0.008 到 10000 Mbps 之间'
+    return
+  }
+
+  limitsBusy.value = true
+  error.value = ''
+  success.value = ''
+  try {
+    const result = await api.updateProfileLimits(current.id, {
+      expiresAt: limits.expiresAt ? new Date(limits.expiresAt).toISOString() : '',
+      concurrentLimit: limits.concurrentEnabled ? Math.round(limits.concurrentLimit) : 0,
+      quotaBytes: limits.quotaEnabled ? gbToBytes(limits.quotaGb) : 0,
+      uploadBps: limits.uploadEnabled ? mbpsToBps(limits.uploadMbps) : 0,
+      downloadBps: limits.downloadEnabled ? mbpsToBps(limits.downloadMbps) : 0,
+    })
+    profile.value = result.profile
+    success.value = '使用限制已保存，并已通知运行代理执行。'
+  } catch (err) {
+    error.value = errorMessage(err)
+  } finally {
+    limitsBusy.value = false
+  }
+}
+
+function resetQuota() {
+  const current = profile.value
+  if (!current) {
+    return
+  }
+  openPrompt(
+    '重置流量额度',
+    '新额度周期从当前累计开始计算，历史连接与日统计不会被删除；在线连接不会因重置而断开。',
+    '重置额度',
+    async (password) => {
+      const result = await api.resetQuota(current.id, password)
+      profile.value = result.profile
+      success.value = '流量额度已重置，新的额度周期已生效。'
+      // 运行代理按秒轮询控制包；短暂延迟后静默刷新，显示新的用量基线。
+      window.setTimeout(async () => {
+        try {
+          const fresh = await api.getProfile(current.id)
+          if (profile.value?.id === current.id) {
+            profile.value = fresh
+          }
+        } catch {
+          // 保留当前页面，下一次手动刷新仍可获取新状态。
+        }
+      }, 2000)
+    },
+  )
+}
+
 watch(
   profile,
   (value) => {
@@ -251,6 +349,15 @@ watch(
     policy.routeMode = value.routeMode
     policy.accessMode = value.accessMode
     policy.allowedText = value.allowedInternal.join(', ')
+    limits.expiresAt = value.expiresAt ? new Date(value.expiresAt).getTime() : null
+    limits.concurrentEnabled = value.concurrentLimit > 0
+    limits.concurrentLimit = value.concurrentLimit > 0 ? value.concurrentLimit : 3
+    limits.quotaEnabled = value.quotaBytes > 0
+    limits.quotaGb = value.quotaBytes > 0 ? bytesToGb(value.quotaBytes) : 10
+    limits.uploadEnabled = value.uploadBps > 0
+    limits.uploadMbps = value.uploadBps > 0 ? bpsToMbps(value.uploadBps) : 10
+    limits.downloadEnabled = value.downloadBps > 0
+    limits.downloadMbps = value.downloadBps > 0 ? bpsToMbps(value.downloadBps) : 50
   },
   { immediate: true },
 )
@@ -298,7 +405,7 @@ watch(() => route.params.id, load, { immediate: true })
       </header>
 
       <NAlert v-if="profile.effectiveStatus !== 'active'" type="warning" :bordered="false" class="stack-gap">
-        {{ profile.statusReason }}。运行代理的实际准入与断开在后续阶段接入。
+        {{ profile.statusReason }}。运行代理会拒绝新连接，并断开受影响的现有连接。
       </NAlert>
 
       <section class="surface">
@@ -385,6 +492,125 @@ watch(() => route.params.id, load, { immediate: true })
           </p>
           <div class="policy-actions">
             <NButton type="primary" :loading="policyBusy" @click="savePolicy">保存网络策略</NButton>
+          </div>
+        </NForm>
+      </section>
+
+      <section class="surface">
+        <header class="surface-head">
+          <h2>使用限制</h2>
+          <span class="surface-meta">由运行代理执行；0 或关闭表示不限制</span>
+        </header>
+
+        <div class="usage-row">
+          <div class="usage-main">
+            <span class="usage-label">当前额度周期</span>
+            <strong>{{ profile.usageKnown ? formatBytes(profile.usageBytes) : '—' }}</strong>
+            <span class="usage-total">
+              / {{ profile.quotaBytes > 0 ? formatBytes(profile.quotaBytes) : '不限量' }}
+            </span>
+          </div>
+          <div class="usage-side">
+            <span v-if="profile.usageKnown">在线 {{ profile.onlineSessions }} 条</span>
+            <span v-else>运行代理离线，用量未知</span>
+            <span v-if="profile.quotaResetAt">上次重置 {{ formatDate(profile.quotaResetAt) }}</span>
+            <span v-if="profile.usageGaps > 0" class="usage-gap">
+              检测到 {{ profile.usageGaps }} 次计数回退，期间用量可能低估
+            </span>
+          </div>
+        </div>
+        <div
+          v-if="profile.quotaBytes > 0 && profile.usageKnown"
+          class="usage-bar"
+          role="progressbar"
+          :aria-valuenow="Math.min(100, Math.round(profile.usagePercent))"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          :aria-label="`流量额度已使用 ${Math.min(100, Math.round(profile.usagePercent))}%`"
+        >
+          <i :class="{ danger: profile.usagePercent >= 90 }" :style="{ width: `${Math.min(100, profile.usagePercent)}%` }" />
+        </div>
+
+        <NForm class="limits-form">
+          <NFormItem label="访问到期">
+            <NDatePicker
+              v-model:value="limits.expiresAt"
+              type="datetime"
+              clearable
+              placeholder="不设到期时间"
+              class="control-wide"
+            />
+          </NFormItem>
+          <div class="limit-line">
+            <NSwitch v-model:value="limits.concurrentEnabled" />
+            <span class="limit-name">并发上限</span>
+            <NInputNumber
+              v-model:value="limits.concurrentLimit"
+              :min="1"
+              :max="1000"
+              :disabled="!limits.concurrentEnabled"
+              :show-button="false"
+              class="control-number"
+            />
+            <span class="limit-unit">条</span>
+          </div>
+          <div class="limit-line">
+            <NSwitch v-model:value="limits.quotaEnabled" />
+            <span class="limit-name">流量额度</span>
+            <NInputNumber
+              v-model:value="limits.quotaGb"
+              :min="0.001"
+              :max="1000000"
+              :step="1"
+              :disabled="!limits.quotaEnabled"
+              :show-button="false"
+              class="control-number"
+            />
+            <span class="limit-unit">GB</span>
+            <NButton
+              v-if="profile.quotaBytes > 0"
+              size="small"
+              type="warning"
+              ghost
+              class="limit-reset"
+              @click="resetQuota"
+            >
+              重置额度
+            </NButton>
+          </div>
+          <div class="limit-line">
+            <NSwitch v-model:value="limits.uploadEnabled" />
+            <span class="limit-name">上传限速</span>
+            <NInputNumber
+              v-model:value="limits.uploadMbps"
+              :min="0.008"
+              :max="10000"
+              :step="1"
+              :disabled="!limits.uploadEnabled"
+              :show-button="false"
+              class="control-number"
+            />
+            <span class="limit-unit">Mbps / 每条连接</span>
+          </div>
+          <div class="limit-line">
+            <NSwitch v-model:value="limits.downloadEnabled" />
+            <span class="limit-name">下载限速</span>
+            <NInputNumber
+              v-model:value="limits.downloadMbps"
+              :min="0.008"
+              :max="10000"
+              :step="1"
+              :disabled="!limits.downloadEnabled"
+              :show-button="false"
+              class="control-number"
+            />
+            <span class="limit-unit">Mbps / 每条连接</span>
+          </div>
+          <div class="limits-actions">
+            <NButton type="primary" :loading="limitsBusy" @click="saveLimits">
+              <template #icon><Gauge :size="15" /></template>
+              保存使用限制
+            </NButton>
           </div>
         </NForm>
       </section>
@@ -621,6 +847,120 @@ watch(() => route.params.id, load, { immediate: true })
   justify-content: flex-end;
 }
 
+.usage-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 8px;
+}
+
+.usage-main {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.usage-label {
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.usage-main strong {
+  font-size: 22px;
+  font-weight: 660;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+.usage-total {
+  color: var(--text-3);
+  font-size: 12.5px;
+}
+
+.usage-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+
+.usage-gap {
+  color: var(--warn);
+}
+
+.usage-bar {
+  height: 6px;
+  margin-bottom: 18px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-2);
+}
+
+.usage-bar i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 240ms ease;
+}
+
+.usage-bar i.danger {
+  background: var(--danger);
+}
+
+.limits-form {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.limit-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  min-height: 44px;
+  padding: 4px 0;
+  border-top: 1px solid var(--border);
+}
+
+.limit-line:first-of-type {
+  border-top: 0;
+}
+
+.limit-name {
+  min-width: 74px;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.limit-unit {
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+
+.limit-reset {
+  margin-left: auto;
+}
+
+.control-wide {
+  width: min(320px, 100%);
+}
+
+.control-number {
+  width: 132px;
+}
+
+.limits-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
 .loading-surface {
   color: var(--text-3);
   font-size: 13px;
@@ -660,6 +1000,24 @@ watch(() => route.params.id, load, { immediate: true })
 
   .policy-actions {
     justify-content: flex-start;
+  }
+
+  .usage-row {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .usage-side {
+    align-items: flex-start;
+  }
+
+  .limits-actions {
+    justify-content: flex-start;
+  }
+
+  .limit-reset {
+    margin-left: 0;
   }
 
   .fingerprint {
