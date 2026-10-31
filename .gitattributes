@@ -1,0 +1,19 @@
+# 统一文本换行，避免 Windows 检出把 shell 与 Dockerfile 变成 CRLF。
+* text=auto
+
+*.go text eol=lf
+*.sql text eol=lf
+*.ts text eol=lf
+*.vue text eol=lf
+*.json text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.md text eol=lf
+*.sh text eol=lf
+Dockerfile* text eol=lf
+deploy/entrypoint-panel.sh text eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.woff2 binary

@@ -17,6 +17,11 @@ coverage*.out
 **/coverage/
 *.tsbuildinfo
 
+# Keep the embed placeholder so //go:embed all:dist compiles before a web build.
+!web/dist/
+web/dist/*
+!web/dist/.gitkeep
+
 # Local environment and secrets
 .env
 .env.*
@@ -37,6 +42,7 @@ coverage*.out
 /deploy/data/
 /deploy/runtime/
 /deploy/backups/
+/deploy/certs/
 *.log
 *.tmp
 

@@ -1,0 +1,116 @@
+# OVPanel 严格双容器部署。
+#
+#   panel    面板 Web、内嵌前端、未来的受限维护进程
+#   openvpn  OpenVPN 与运行代理
+#
+# 只有 panel 发布管理端口；openvpn 不发布管理端口，也不挂载 Docker Socket。
+# 数据库与运行状态保存在宿主目录，容器重建不会丢失。
+
+name: ovpanel
+
+services:
+  panel:
+    image: ${OVPANEL_PANEL_IMAGE:-ovpanel-panel:dev}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.panel
+      args:
+        VERSION: ${OVPANEL_VERSION:-dev}
+        COMMIT: ${OVPANEL_COMMIT:-none}
+        BUILD_TIME: ${OVPANEL_BUILD_TIME:-unknown}
+    container_name: ovpanel-panel
+    labels:
+      com.ovpanel.managed: "true"
+      com.ovpanel.role: "panel"
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      OVPANEL_DATA_DIR: /data
+      OVPANEL_LISTEN: ":8080"
+      OVPANEL_LOG_LEVEL: ${OVPANEL_LOG_LEVEL:-info}
+      OVPANEL_SESSION_TTL: ${OVPANEL_SESSION_TTL:-12h}
+      OVPANEL_TLS_CERT: ${OVPANEL_TLS_CERT:-}
+      OVPANEL_TLS_KEY: ${OVPANEL_TLS_KEY:-}
+      OVPANEL_DEV_SELF_SIGNED: ${OVPANEL_DEV_SELF_SIGNED:-false}
+      OVPANEL_BOOTSTRAP_TOKEN: ${OVPANEL_BOOTSTRAP_TOKEN:-}
+    ports:
+      # 默认只绑定回环地址。公网访问前必须配置 HTTPS 并显式修改绑定地址。
+      - "${OVPANEL_ADMIN_BIND:-127.0.0.1}:${OVPANEL_ADMIN_PORT:-8080}:8080"
+    volumes:
+      - "${OVPANEL_DATA_ROOT:-./data}/panel:/data"
+      - "${OVPANEL_CERT_DIR:-./certs}:/certs:ro"
+    healthcheck:
+      # 直接 HTTPS 与 HTTP 都可能出现；两次尝试任一成功即可。
+      test:
+        - CMD-SHELL
+        - >-
+          wget -qO- http://127.0.0.1:8080/api/health >/dev/null 2>&1 ||
+          wget -qO- --no-check-certificate https://127.0.0.1:8080/api/health >/dev/null 2>&1
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    stop_grace_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - ovpanel
+
+  openvpn:
+    image: ${OVPANEL_OPENVPN_IMAGE:-ovpanel-openvpn:dev}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.openvpn
+      args:
+        VERSION: ${OVPANEL_VERSION:-dev}
+        COMMIT: ${OVPANEL_COMMIT:-none}
+        BUILD_TIME: ${OVPANEL_BUILD_TIME:-unknown}
+    container_name: ovpanel-openvpn
+    labels:
+      com.ovpanel.managed: "true"
+      com.ovpanel.role: "openvpn"
+    restart: unless-stopped
+    init: true
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    sysctls:
+      net.ipv4.ip_forward: "1"
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      OVPANEL_AGENT_LISTEN: ":9443"
+      OVPANEL_AGENT_STATE_DIR: /var/lib/ovpanel
+      OVPANEL_LOG_LEVEL: ${OVPANEL_LOG_LEVEL:-info}
+    volumes:
+      - "${OVPANEL_DATA_ROOT:-./data}/openvpn:/var/lib/ovpanel"
+      - "${OVPANEL_DATA_ROOT:-./data}/openvpn-config:/etc/openvpn/ovpanel"
+    healthcheck:
+      # 健康状态包含数据面环境检查；缺 TUN/模块时容器会显示 unhealthy。
+      test:
+        - CMD-SHELL
+        - wget -qO- http://127.0.0.1:9443/readyz >/dev/null 2>&1
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    stop_grace_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - ovpanel
+
+networks:
+  ovpanel:
+    name: ovpanel

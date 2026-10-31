@@ -1,0 +1,57 @@
+# OVPanel 面板镜像：Vue 构建产物内嵌进 Go 二进制，运行期不依赖 Node.js。
+#
+# 基础镜像按 digest 固定，amd64/arm64 均由同一 manifest list 解析。
+# 发布新版本时应有意识地更新这些固定值，并重新执行双架构验证。
+
+ARG NODE_IMAGE=node:22-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914
+FROM ${NODE_IMAGE} AS web
+
+WORKDIR /src/web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY web/ ./
+RUN npm run build
+
+ARG GO_IMAGE=golang:1.27-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb
+FROM ${GO_IMAGE} AS build
+
+WORKDIR /src
+ENV CGO_ENABLED=0
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+COPY --from=web /src/web/dist ./web/dist
+
+ARG VERSION=dev
+ARG COMMIT=none
+ARG BUILD_TIME=unknown
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
+      -trimpath -buildvcs=false \
+      -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.buildTime=${BUILD_TIME}" \
+      -o /out/panel ./cmd/panel
+
+# P00 固定的 alpine:edge digest；同一 digest 覆盖 amd64 与 arm64。
+ARG RUNTIME_IMAGE=alpine@sha256:020dfcbaaf4cc1078bf2d9c7ba31a8466e334061dcd2f248001d68f79e52c000
+FROM ${RUNTIME_IMAGE}
+
+RUN apk add --no-cache ca-certificates tzdata su-exec \
+ && addgroup -S -g 10001 ovpanel \
+ && adduser -S -D -H -u 10001 -G ovpanel ovpanel \
+ && mkdir -p /data /certs \
+ && chown -R 10001:10001 /data
+
+COPY --from=build /out/panel /usr/local/bin/panel
+COPY deploy/entrypoint-panel.sh /usr/local/bin/entrypoint-panel
+RUN chmod 0755 /usr/local/bin/entrypoint-panel
+
+LABEL org.opencontainers.image.title="OVPanel panel" \
+      org.opencontainers.image.description="OVPanel web process with embedded frontend" \
+      org.opencontainers.image.source="https://github.com/dreamstation625/OVPanel"
+
+ENV OVPANEL_DATA_DIR=/data
+EXPOSE 8080
+VOLUME ["/data"]
+
+ENTRYPOINT ["/usr/local/bin/entrypoint-panel"]
