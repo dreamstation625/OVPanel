@@ -8,6 +8,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -22,6 +23,7 @@ const (
 	EnvDevSelfSigned  = "OVPANEL_DEV_SELF_SIGNED"
 	EnvBootstrapToken = "OVPANEL_BOOTSTRAP_TOKEN"
 	EnvMasterKey      = "OVPANEL_MASTER_KEY"
+	EnvControlDir     = "OVPANEL_CONTROL_DIR"
 	EnvLogLevel       = "OVPANEL_LOG_LEVEL"
 	EnvSessionTTL     = "OVPANEL_SESSION_TTL"
 )
@@ -44,6 +46,7 @@ type Config struct {
 	DevSelfSigned  bool
 	BootstrapToken string
 	MasterKey      string
+	ControlDir     string
 	LogLevel       string
 	SessionTTL     time.Duration
 }
@@ -57,6 +60,7 @@ func Load() (Config, error) {
 		TLSKeyFile:     getString(EnvTLSKey, ""),
 		BootstrapToken: getString(EnvBootstrapToken, ""),
 		MasterKey:      getString(EnvMasterKey, ""),
+		ControlDir:     getString(EnvControlDir, ""),
 		LogLevel:       strings.ToLower(getString(EnvLogLevel, defaultLogLevel)),
 		SessionTTL:     defaultSessionTTL,
 	}
@@ -67,6 +71,10 @@ func Load() (Config, error) {
 			return Config{}, fmt.Errorf("%s 不是合法布尔值：%q", EnvDevSelfSigned, raw)
 		}
 		c.DevSelfSigned = v
+	}
+
+	if c.ControlDir == "" {
+		c.ControlDir = filepath.Join(c.DataDir, "control")
 	}
 
 	if raw := getString(EnvSessionTTL, ""); raw != "" {

@@ -375,6 +375,23 @@ func (s *Service) Export(ctx context.Context, profileID string) (ExportResult, e
 	}, nil
 }
 
+// TLSCryptKey 返回服务端与客户端共用的 tls-crypt 密钥明文。
+// 运行代理应用服务端配置时使用；未配置导出地址时返回 ErrExportNotConfigured。
+func (s *Service) TLSCryptKey(ctx context.Context) (string, error) {
+	setting, ok, err := s.store.ExportSetting(ctx)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", ErrExportNotConfigured
+	}
+	key, err := s.key.Open(setting.TLSCryptCiphertext, []byte(tlsCryptAAD))
+	if err != nil {
+		return "", fmt.Errorf("解密 tls-crypt 密钥: %w", err)
+	}
+	return string(key), nil
+}
+
 // GetExportSettings 返回连接设置；未配置时 configured=false。
 func (s *Service) GetExportSettings(ctx context.Context) (ExportSettings, bool, error) {
 	setting, ok, err := s.store.ExportSetting(ctx)

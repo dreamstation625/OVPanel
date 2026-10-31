@@ -20,6 +20,7 @@ import (
 	"github.com/dreamstation625/ovpanel/internal/pki"
 	"github.com/dreamstation625/ovpanel/internal/secretbox"
 	"github.com/dreamstation625/ovpanel/internal/store"
+	"github.com/dreamstation625/ovpanel/internal/vpnruntime"
 )
 
 // weakParams 让测试里的密码哈希保持快速，不影响生产默认值。
@@ -52,6 +53,7 @@ func newTestServer(t *testing.T) *Server {
 	}
 	pkiService := pki.New(st, masterKey)
 	accountsService := accounts.New(st, pkiService, masterKey)
+	runtimeService := vpnruntime.New(st, pkiService, accountsService, filepath.Join(dir, "control"))
 
 	webFS := fstest.MapFS{
 		"index.html": {Data: []byte("<!doctype html><title>OVPanel</title>")},
@@ -68,6 +70,7 @@ func newTestServer(t *testing.T) *Server {
 		Store:          st,
 		Accounts:       accountsService,
 		PKI:            pkiService,
+		Runtime:        runtimeService,
 		Log:            logging.New(io.Discard, "error"),
 		Build:          BuildInfo{Version: "test"},
 		BootstrapToken: "test-bootstrap-token",

@@ -86,6 +86,9 @@ compose.yaml       严格双容器部署入口
 cmd/panel/         面板进程入口（Web + 内嵌前端）
 cmd/vpn-agent/     OpenVPN 容器进程（运行代理）
 internal/accounts/ 用户、配置、证书与导出编排
+internal/admission/ 三种认证的共享准入判定
+internal/agent/    OpenVPN 子进程、控制包应用与管理接口准入
+internal/agentproto/ 面板到运行代理的控制包格式
 internal/api/      路由、错误体、中间件、静态资源
 internal/auth/     Argon2id 密码、会话与 CSRF 令牌
 internal/bootstrap/一次性初始化口令
@@ -94,9 +97,12 @@ internal/devtls/   本机调试自签名证书
 internal/logging/  脱敏 JSON 日志
 internal/openvpnprofile/ .ovpn 与 tls-crypt 生成
 internal/pki/      CA 与客户端证书生命周期
+internal/runtimeauth/数据库到认证快照的映射
 internal/runtimeenv/容器数据面能力探测
 internal/secretbox/主密钥与私密材料加密
+internal/serverconfig/服务端配置校验、指令兼容清单与渲染
 internal/store/    SQLite 与迁移
+internal/vpnruntime/控制包组装与共享控制目录下发
 web/               Vue 3 + Vue Router 源码，构建产物内嵌
 deploy/            Dockerfile、环境变量示例、宿主检查、运行手册
 ```

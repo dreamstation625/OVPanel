@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"math/big"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -121,6 +122,52 @@ func TestBuildClientCertificateIsSignedByCA(t *testing.T) {
 	}
 	if exportCA != caPEM || exportCert != record.CertPEM || exportKey != string(keyPEM) {
 		t.Fatal("导出材料与签发结果不一致")
+	}
+}
+
+func TestCRLContainsRevokedCertificate(t *testing.T) {
+	svc, st, _ := newTestService(t)
+	ctx := context.Background()
+	record, caPEM, err := svc.BuildClientCertificate(ctx, "profile-1", "ovp-profile-1")
+	if err != nil {
+		t.Fatalf("签发失败：%v", err)
+	}
+	user := store.User{ID: "u1", DisplayName: "用户", Status: store.StatusActive, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	profile := store.Profile{ID: "profile-1", UserID: "u1", Name: "配置", AuthType: store.AuthCertificate, Status: store.StatusActive, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	if err := st.CreateUserWithProfile(ctx, user, profile, &record); err != nil {
+		t.Fatalf("保存失败：%v", err)
+	}
+	if _, err := st.RevokeActiveCertificate(ctx, "profile-1", "manual", time.Now().UTC()); err != nil {
+		t.Fatalf("吊销失败：%v", err)
+	}
+	crlPEM, err := svc.CRLPEM(ctx)
+	if err != nil {
+		t.Fatalf("生成 CRL 失败：%v", err)
+	}
+	block, _ := pem.Decode([]byte(crlPEM))
+	if block == nil {
+		t.Fatal("CRL PEM 非法")
+	}
+	crl, err := x509.ParseRevocationList(block.Bytes)
+	if err != nil {
+		t.Fatalf("解析 CRL 失败：%v", err)
+	}
+	caCert := parseTestCert(t, caPEM)
+	if err := crl.CheckSignatureFrom(caCert); err != nil {
+		t.Fatalf("CRL 签名校验失败：%v", err)
+	}
+	serial := new(big.Int)
+	if _, ok := serial.SetString(record.SerialNumber, 16); !ok {
+		t.Fatalf("序列号非法：%s", record.SerialNumber)
+	}
+	found := false
+	for _, entry := range crl.RevokedCertificateEntries {
+		if entry.SerialNumber.Cmp(serial) == 0 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("CRL 未包含已吊销序列号 %s", record.SerialNumber)
 	}
 }
 

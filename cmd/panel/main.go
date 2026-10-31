@@ -28,6 +28,7 @@ import (
 	"github.com/dreamstation625/ovpanel/internal/pki"
 	"github.com/dreamstation625/ovpanel/internal/secretbox"
 	"github.com/dreamstation625/ovpanel/internal/store"
+	"github.com/dreamstation625/ovpanel/internal/vpnruntime"
 	"github.com/dreamstation625/ovpanel/web"
 )
 
@@ -91,6 +92,8 @@ func run() error {
 		return fmt.Errorf("检查 PKI: %w", err)
 	}
 	accountsService := accounts.New(st, pkiService, masterKey)
+	runtimeService := vpnruntime.New(st, pkiService, accountsService, cfg.ControlDir)
+	log.Info("runtime control ready", "dir", cfg.ControlDir)
 	log.Info("master key ready",
 		"path", cfg.MasterKeyPath(),
 		"from_env", cfg.MasterKey != "")
@@ -123,6 +126,7 @@ func run() error {
 		Store:    st,
 		Accounts: accountsService,
 		PKI:      pkiService,
+		Runtime:  runtimeService,
 		Log:      log,
 		Build: api.BuildInfo{
 			Version:   version,

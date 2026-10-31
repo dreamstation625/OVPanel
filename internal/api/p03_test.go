@@ -123,6 +123,16 @@ func TestP03UserProfileCertificateFlow(t *testing.T) {
 		t.Fatalf("导出 Cache-Control = %q", got)
 	}
 
+	// 下发运行控制包（面板侧；代理是否确认由运行代理记录）。
+	apply := doJSON(t, h, http.MethodPost, "/api/runtime/apply", "127.0.0.1:5000",
+		map[string]string{"adminPassword": "a-long-enough-password"}, cookies...)
+	if apply.Code != http.StatusOK {
+		t.Fatalf("下发运行控制包失败：%d %s", apply.Code, apply.Body.String())
+	}
+	if !strings.Contains(apply.Body.String(), `"agentPending":true`) {
+		t.Fatalf("下发响应缺少 agentPending：%s", apply.Body.String())
+	}
+
 	// 错误管理员密码应被拒绝。
 	wrong := doJSON(t, h, http.MethodPost, "/api/profiles/"+certProfileID+"/certificate/rotate", "127.0.0.1:5000",
 		map[string]string{"adminPassword": "wrong-password"}, cookies...)

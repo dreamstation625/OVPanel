@@ -29,8 +29,10 @@ import (
 const (
 	caKeyAAD       = "ovpanel-ca-key-v1"
 	certKeyAAD     = "ovpanel-cert-key:"
+	serverKeyAAD   = "ovpanel-server-key-v1"
 	caValidity     = 10 * 365 * 24 * time.Hour
 	clientValidity = 2 * 365 * 24 * time.Hour
+	serverValidity = 2 * 365 * 24 * time.Hour
 	rsaBits        = 2048
 )
 
@@ -177,6 +179,50 @@ func (s *Service) CAPEM(ctx context.Context) (string, error) {
 	return ca.CertPEM, nil
 }
 
+// CRLPEM 生成当前吊销列表的 PEM。
+func (s *Service) CRLPEM(ctx context.Context) (string, error) {
+	caCert, signer, _, err := s.ensureCA(ctx)
+	if err != nil {
+		return "", err
+	}
+	revoked, err := s.store.RevokedCertificates(ctx)
+	if err != nil {
+		return "", err
+	}
+	entries := make([]x509.RevocationListEntry, 0, len(revoked))
+	for _, item := range revoked {
+		serial := new(big.Int)
+		value := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(item.SerialNumber)), "0x")
+		if _, ok := serial.SetString(value, 16); !ok {
+			continue
+		}
+		when := item.RevokedAt
+		if when.IsZero() {
+			when = s.now()
+		}
+		entries = append(entries, x509.RevocationListEntry{
+			SerialNumber:   serial,
+			RevocationTime: when.UTC(),
+		})
+	}
+	number, err := randomSerial()
+	if err != nil {
+		return "", err
+	}
+	now := s.now()
+	template := &x509.RevocationList{
+		Number:                    number,
+		ThisUpdate:                now.Add(-5 * time.Minute),
+		NextUpdate:                now.Add(7 * 24 * time.Hour),
+		RevokedCertificateEntries: entries,
+	}
+	der, err := x509.CreateRevocationList(rand.Reader, template, caCert, signer)
+	if err != nil {
+		return "", fmt.Errorf("签发 CRL: %w", err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "X509 CRL", Bytes: der})), nil
+}
+
 // EnsureCAPEM 在需要导出仅密码配置时也保证 CA 存在。
 func (s *Service) EnsureCAPEM(ctx context.Context) (string, error) {
 	_, _, caPEM, err := s.ensureCA(ctx)
@@ -207,6 +253,72 @@ func (s *Service) ExportMaterial(ctx context.Context, profileID string) (caPEM, 
 		return "", "", "", fmt.Errorf("解密客户端私钥: %w", err)
 	}
 	return caPEM, cert.CertPEM, string(keyDER), nil
+}
+
+// EnsureServerCertificate 返回 OpenVPN 服务端证书与私钥明文。
+// 已有证书仍有效时复用；否则生成新的 serverAuth 证书。
+func (s *Service) EnsureServerCertificate(ctx context.Context) (certPEM, keyPEM string, err error) {
+	now := s.now()
+	if existing, ok, err := s.store.ServerCertificate(ctx); err != nil {
+		return "", "", err
+	} else if ok && existing.ExpiresAt.After(now.Add(24*time.Hour)) {
+		keyDER, err := s.key.Open(existing.KeyCiphertext, []byte(serverKeyAAD))
+		if err == nil {
+			if _, parseErr := x509.ParsePKCS8PrivateKey(keyDER); parseErr == nil {
+				return existing.CertPEM, string(keyDER), nil
+			}
+		}
+		// 旧材料无法解密或解析时生成新证书，避免静默使用坏材料。
+	}
+
+	caCert, signer, _, err := s.ensureCA(ctx)
+	if err != nil {
+		return "", "", err
+	}
+
+	key, err := rsa.GenerateKey(rand.Reader, rsaBits)
+	if err != nil {
+		return "", "", fmt.Errorf("生成服务端私钥: %w", err)
+	}
+	serial, err := randomSerial()
+	if err != nil {
+		return "", "", err
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          serial,
+		Subject:               pkix.Name{CommonName: "OVPanel Server", Organization: []string{"OVPanel"}},
+		NotBefore:             now.Add(-5 * time.Minute),
+		NotAfter:              now.Add(serverValidity),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, caCert, &key.PublicKey, signer)
+	if err != nil {
+		return "", "", fmt.Errorf("签发服务端证书: %w", err)
+	}
+	leaf, err := x509.ParseCertificate(der)
+	if err != nil {
+		return "", "", fmt.Errorf("解析服务端证书: %w", err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		return "", "", fmt.Errorf("编码服务端私钥: %w", err)
+	}
+	ciphertext, err := s.key.Seal(keyDER, []byte(serverKeyAAD))
+	if err != nil {
+		return "", "", err
+	}
+	certPEM = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+	if err := s.store.SaveServerCertificate(ctx, store.ServerCertificate{
+		CertPEM:       certPEM,
+		KeyCiphertext: ciphertext,
+		IssuedAt:      now,
+		ExpiresAt:     leaf.NotAfter.UTC(),
+	}); err != nil {
+		return "", "", err
+	}
+	return certPEM, string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})), nil
 }
 
 func (s *Service) ensureCA(ctx context.Context) (*x509.Certificate, crypto.Signer, string, error) {

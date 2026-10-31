@@ -11,7 +11,7 @@ import (
 
 func TestHealthIsLivenessAndNeverClaimsConfigured(t *testing.T) {
 	report := runtimeenv.Report{EnvironmentReady: false, Blockers: []string{"缺少 /dev/net/tun"}}
-	h := newHandler(report)
+	h := newHandler(report, nil)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
@@ -35,14 +35,14 @@ func TestHealthIsLivenessAndNeverClaimsConfigured(t *testing.T) {
 }
 
 func TestReadyzReflectsEnvironment(t *testing.T) {
-	h := newHandler(runtimeenv.Report{EnvironmentReady: false, Blockers: []string{"缺少 ifb"}})
+	h := newHandler(runtimeenv.Report{EnvironmentReady: false, Blockers: []string{"缺少 ifb"}}, nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("环境不完整时 readyz 应 503，实际 %d", rec.Code)
 	}
 
-	h = newHandler(runtimeenv.Report{EnvironmentReady: true})
+	h = newHandler(runtimeenv.Report{EnvironmentReady: true}, nil)
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if rec.Code != http.StatusOK {
@@ -51,7 +51,7 @@ func TestReadyzReflectsEnvironment(t *testing.T) {
 }
 
 func TestUnknownRouteReturnsJSON(t *testing.T) {
-	h := newHandler(runtimeenv.Report{})
+	h := newHandler(runtimeenv.Report{}, nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/nope", nil))
 	if rec.Code != http.StatusNotFound {

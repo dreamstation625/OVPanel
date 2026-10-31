@@ -40,11 +40,13 @@ services:
       OVPANEL_DEV_SELF_SIGNED: ${OVPANEL_DEV_SELF_SIGNED:-false}
       OVPANEL_BOOTSTRAP_TOKEN: ${OVPANEL_BOOTSTRAP_TOKEN:-}
       OVPANEL_MASTER_KEY: ${OVPANEL_MASTER_KEY:-}
+      OVPANEL_CONTROL_DIR: /control
     ports:
       # 默认只绑定回环地址。公网访问前必须配置 HTTPS 并显式修改绑定地址。
       - "${OVPANEL_ADMIN_BIND:-127.0.0.1}:${OVPANEL_ADMIN_PORT:-8080}:8080"
     volumes:
       - "${OVPANEL_DATA_ROOT:-./data}/panel:/data"
+      - "${OVPANEL_DATA_ROOT:-./data}/control:/control"
       - "${OVPANEL_CERT_DIR:-./certs}:/certs:ro"
     healthcheck:
       # 直接 HTTPS 与 HTTP 都可能出现；两次尝试任一成功即可。
@@ -91,10 +93,12 @@ services:
     environment:
       OVPANEL_AGENT_LISTEN: ":9443"
       OVPANEL_AGENT_STATE_DIR: /var/lib/ovpanel
+      OVPANEL_CONTROL_DIR: /control
       OVPANEL_LOG_LEVEL: ${OVPANEL_LOG_LEVEL:-info}
     volumes:
       - "${OVPANEL_DATA_ROOT:-./data}/openvpn:/var/lib/ovpanel"
       - "${OVPANEL_DATA_ROOT:-./data}/openvpn-config:/etc/openvpn/ovpanel"
+      - "${OVPANEL_DATA_ROOT:-./data}/control:/control:ro"
     healthcheck:
       # 健康状态包含数据面环境检查；缺 TUN/模块时容器会显示 unhealthy。
       test:

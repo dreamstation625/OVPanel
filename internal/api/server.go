@@ -18,6 +18,7 @@ import (
 	"github.com/dreamstation625/ovpanel/internal/config"
 	"github.com/dreamstation625/ovpanel/internal/pki"
 	"github.com/dreamstation625/ovpanel/internal/store"
+	"github.com/dreamstation625/ovpanel/internal/vpnruntime"
 )
 
 // sessionCookie 是会话 Cookie 名。CSRF 令牌单独使用非 HttpOnly Cookie。
@@ -44,6 +45,7 @@ type Options struct {
 	Store          *store.Store
 	Accounts       *accounts.Service
 	PKI            *pki.Service
+	Runtime        *vpnruntime.Service
 	Log            *slog.Logger
 	Build          BuildInfo
 	BootstrapToken string
@@ -59,6 +61,7 @@ type Server struct {
 	store           *store.Store
 	accounts        *accounts.Service
 	pki             *pki.Service
+	runtime         *vpnruntime.Service
 	log             *slog.Logger
 	build           BuildInfo
 	bootstrapToken  string
@@ -79,6 +82,7 @@ func New(opts Options) *Server {
 		store:           opts.Store,
 		accounts:        opts.Accounts,
 		pki:             opts.PKI,
+		runtime:         opts.Runtime,
 		log:             opts.Log,
 		build:           opts.Build,
 		bootstrapToken:  opts.BootstrapToken,
@@ -126,6 +130,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/settings/export", s.requireSession(http.HandlerFunc(s.handleGetExportSettings)))
 	mux.Handle("PUT /api/settings/export", s.requireSession(http.HandlerFunc(s.handleSaveExportSettings)))
 	mux.Handle("POST /api/admin/password", s.requireSession(http.HandlerFunc(s.handleChangeAdminPassword)))
+	mux.Handle("POST /api/runtime/apply", s.requireSession(http.HandlerFunc(s.handleRuntimeApply)))
 
 	// 未匹配的 API 路径必须返回 JSON 404，不能落到单页应用回退。
 	mux.HandleFunc("/api/", s.handleAPINotFound)
