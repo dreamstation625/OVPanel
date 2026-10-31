@@ -12,6 +12,7 @@
 *.sh text eol=lf
 Dockerfile* text eol=lf
 deploy/entrypoint-panel.sh text eol=lf
+VERSION text eol=lf
 
 *.png binary
 *.jpg binary

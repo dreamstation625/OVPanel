@@ -47,6 +47,23 @@ docker compose ps
 
 默认只绑定 `127.0.0.1:8080`，不会直接暴露到局域网。
 
+也可以不本地构建，直接使用 Docker Hub 上的发布镜像：
+
+```dotenv
+# deploy/.env
+OVPANEL_PANEL_IMAGE=dreamstation625/ovpanel:0.0.1
+OVPANEL_OPENVPN_IMAGE=dreamstation625/ovpanel-openvpn:0.0.1
+```
+
+```bash
+cd deploy
+docker compose pull
+docker compose up -d --no-build
+```
+
+`latest` 跟随 `main` 的最新正式版本，`dev` 是 `dev` 分支的预发布镜像。
+版本规则见仓库 README 的「版本与发布」。
+
 浏览器打开 `http://127.0.0.1:8080`：
 
 - 本机直接运行 Go 二进制时，回环直连可以在没有口令的情况下初始化。

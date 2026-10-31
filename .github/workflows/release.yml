@@ -1,0 +1,197 @@
+# 版本与发布流水线。
+#
+# 版本唯一来源是仓库根目录的 VERSION。
+#   main  正式版本：VERSION 对应的 tag 不存在时，发布 Release 与镜像
+#         <version>、latest。
+#   dev   预发布：VERSION 含 -dev 时统一使用单一 dev 标签（每次推送覆盖重建），
+#         否则使用 <version>-pre。dev 标签不会堆积成多个版本号。
+#
+# 镜像同时构建 linux/amd64 与 linux/arm64，推送到 Docker Hub。
+
+name: Release
+
+on:
+  push:
+    branches: [main, dev]
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: 解析版本
+    runs-on: ubuntu-latest
+    outputs:
+      should_publish: ${{ steps.version.outputs.should_publish }}
+      tag: ${{ steps.version.outputs.tag }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+      latest: ${{ steps.version.outputs.latest }}
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: 读取 VERSION
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(tr -d '[:space:]' < VERSION)"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-z0-9.-]+)?$ ]]; then
+            echo "::error file=VERSION::版本号应为小写语义化格式，例如 0.1.0 或 0.1.0-dev，当前是「${version}」"
+            exit 1
+          fi
+
+          prerelease=false
+          latest=false
+          if [ "$GITHUB_REF_NAME" = "main" ]; then
+            if [[ "$version" == *-* ]]; then
+              echo "::error file=VERSION::main 只能发布正式版本，请去掉「${version}」中的预发布后缀"
+              exit 1
+            fi
+            tag="$version"
+            latest=true
+          else
+            prerelease=true
+            if [[ "$version" == *-dev* ]]; then
+              tag=dev
+            else
+              tag="${version}-pre"
+            fi
+          fi
+
+          # main 只在 VERSION 变化（对应 tag 不存在）时发布；dev 的 dev 标签
+          # 每次推送都覆盖重建，保证只有一个 dev 版本。
+          should_publish=true
+          if [ "$tag" != "dev" ] && git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
+            echo "标签 ${tag} 已存在，跳过发布"
+            should_publish=false
+          fi
+
+          {
+            echo "tag=${tag}"
+            echo "prerelease=${prerelease}"
+            echo "latest=${latest}"
+            echo "should_publish=${should_publish}"
+          } >> "$GITHUB_OUTPUT"
+
+  docker:
+    name: 构建并推送镜像
+    needs: prepare
+    if: needs.prepare.outputs.should_publish == 'true'
+    runs-on: ubuntu-latest
+    environment: DOCKERHUB
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+      - name: 准备 QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: 准备 Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: 生成镜像标签
+        id: meta
+        shell: bash
+        env:
+          DOCKERHUB_USER: ${{ vars.DOCKERHUB_USERNAME }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          LATEST: ${{ needs.prepare.outputs.latest }}
+        run: |
+          set -euo pipefail
+          if [ -z "$DOCKERHUB_USER" ]; then
+            echo "::error::缺少环境 DOCKERHUB 的变量 DOCKERHUB_USERNAME"
+            exit 1
+          fi
+          {
+            echo "panel_tags<<PANEL_TAGS"
+            echo "${DOCKERHUB_USER}/ovpanel:${TAG}"
+            if [ "$LATEST" = "true" ]; then
+              echo "${DOCKERHUB_USER}/ovpanel:latest"
+            fi
+            echo "PANEL_TAGS"
+            echo "openvpn_tags<<OPENVPN_TAGS"
+            echo "${DOCKERHUB_USER}/ovpanel-openvpn:${TAG}"
+            if [ "$LATEST" = "true" ]; then
+              echo "${DOCKERHUB_USER}/ovpanel-openvpn:latest"
+            fi
+            echo "OPENVPN_TAGS"
+            echo "build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_OUTPUT"
+      - name: 登录 Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: 构建并推送面板镜像
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.panel
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.panel_tags }}
+          build-args: |
+            VERSION=${{ needs.prepare.outputs.tag }}
+            COMMIT=${{ github.sha }}
+            BUILD_TIME=${{ steps.meta.outputs.build_time }}
+          labels: |
+            org.opencontainers.image.version=${{ needs.prepare.outputs.tag }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ steps.meta.outputs.build_time }}
+          cache-from: type=gha,scope=panel
+          cache-to: type=gha,mode=max,scope=panel
+      - name: 构建并推送 OpenVPN 镜像
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.openvpn
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.openvpn_tags }}
+          build-args: |
+            VERSION=${{ needs.prepare.outputs.tag }}
+            COMMIT=${{ github.sha }}
+            BUILD_TIME=${{ steps.meta.outputs.build_time }}
+          labels: |
+            org.opencontainers.image.version=${{ needs.prepare.outputs.tag }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ steps.meta.outputs.build_time }}
+          cache-from: type=gha,scope=openvpn
+          cache-to: type=gha,mode=max,scope=openvpn
+
+  release:
+    name: 发布 Release
+    needs: [prepare, docker]
+    if: needs.prepare.outputs.should_publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: 创建或更新 Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+          LATEST: ${{ needs.prepare.outputs.latest }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release delete "$TAG" --yes --cleanup-tag
+          fi
+          args=(--target "$GITHUB_SHA" --title "$TAG" --generate-notes)
+          if [ "$PRERELEASE" = "true" ]; then
+            args+=(--prerelease)
+          fi
+          if [ "$LATEST" = "true" ]; then
+            args+=(--latest)
+          fi
+          gh release create "$TAG" "${args[@]}"

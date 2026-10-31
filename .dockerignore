@@ -1,5 +1,6 @@
 # 构建上下文只需要源码、锁文件和部署文件。
 .git
+.github
 .gitignore
 .agentmem
 docs

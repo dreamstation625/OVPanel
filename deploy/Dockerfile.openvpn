@@ -5,9 +5,12 @@
 #
 # 基础镜像使用 P00 固定的 alpine:edge digest（OpenVPN 2.7.7），
 # 同一 digest 同时覆盖 amd64 与 arm64。
+#
+# Go 构建固定在 BUILDPLATFORM 上原生执行，按 TARGETARCH 交叉编译；
+# 只有运行阶段的 apk 安装会落到目标架构。
 
 ARG GO_IMAGE=golang:1.27-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb
-FROM ${GO_IMAGE} AS build
+FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS build
 
 WORKDIR /src
 ENV CGO_ENABLED=0
