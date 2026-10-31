@@ -12,17 +12,23 @@ import (
 
 // 错误码。界面据此做可处理提示，不解析 message 文本。
 const (
-	CodeInvalidRequest   = "invalid_request"
-	CodeUnauthorized     = "unauthorized"
-	CodeForbidden        = "forbidden"
-	CodeNotFound         = "not_found"
-	CodeConflict         = "conflict"
-	CodeSetupClosed      = "setup_closed"
-	CodeSetupForbidden   = "setup_forbidden"
-	CodeSetupRequired    = "setup_required"
-	CodeRateLimited      = "rate_limited"
-	CodeInternal         = "internal_error"
-	CodeMethodNotAllowed = "method_not_allowed"
+	CodeInvalidRequest      = "invalid_request"
+	CodeUnauthorized        = "unauthorized"
+	CodeForbidden           = "forbidden"
+	CodeNotFound            = "not_found"
+	CodeConflict            = "conflict"
+	CodeSetupClosed         = "setup_closed"
+	CodeSetupForbidden      = "setup_forbidden"
+	CodeSetupRequired       = "setup_required"
+	CodeRateLimited         = "rate_limited"
+	CodeReauthFailed        = "reauth_failed"
+	CodeUsernameTaken       = "username_taken"
+	CodeExportNotConfigured = "export_not_configured"
+	CodeNoPasswordAuth      = "no_password_auth"
+	CodeNoCertificateAuth   = "no_certificate_auth"
+	CodeNoCertificate       = "no_certificate"
+	CodeInternal            = "internal_error"
+	CodeMethodNotAllowed    = "method_not_allowed"
 )
 
 type errorBody struct {

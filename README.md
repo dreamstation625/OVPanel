@@ -34,13 +34,17 @@ go run ./cmd/panel
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `OVPANEL_DATA_DIR` | `data` | 数据目录（SQLite、引导口令） |
+| `OVPANEL_DATA_DIR` | `data` | 数据目录（SQLite、主密钥、引导口令） |
 | `OVPANEL_LISTEN` | `:8080` | 监听地址 |
 | `OVPANEL_TLS_CERT` / `OVPANEL_TLS_KEY` | 空 | 同时设置时启用 HTTPS |
 | `OVPANEL_DEV_SELF_SIGNED` | `false` | 仅本机调试的短期自签名证书 |
 | `OVPANEL_BOOTSTRAP_TOKEN` | 空 | 可选的初始化口令（至少 16 字符） |
+| `OVPANEL_MASTER_KEY` | 空 | 可选主密钥（32 字节 base64/hex）；留空生成 `master.key` |
 | `OVPANEL_SESSION_TTL` | `12h` | 管理员会话时长，最大 7 天 |
 | `OVPANEL_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
+
+`master.key` 与数据库同等敏感：丢失后无法解密已有证书私钥与 tls-crypt 密钥。
+备份与迁移必须同时保存它；当前版本尚未提供备份功能。
 
 ## Docker 部署
 
@@ -80,14 +84,18 @@ docker compose up -d --build
 ```text
 cmd/panel/         面板进程入口（Web + 内嵌前端）
 cmd/vpn-agent/     OpenVPN 容器进程（运行代理）
+internal/accounts/ 用户、配置、证书与导出编排
 internal/api/      路由、错误体、中间件、静态资源
-internal/auth/     Argon2id 密码、会话令牌、并发限制
+internal/auth/     Argon2id 密码、会话与 CSRF 令牌
 internal/bootstrap/一次性初始化口令
 internal/config/   环境变量配置
 internal/devtls/   本机调试自签名证书
 internal/logging/  脱敏 JSON 日志
+internal/openvpnprofile/ .ovpn 与 tls-crypt 生成
+internal/pki/      CA 与客户端证书生命周期
 internal/runtimeenv/容器数据面能力探测
+internal/secretbox/主密钥与私密材料加密
 internal/store/    SQLite 与迁移
-web/               Vue 3 源码，构建产物内嵌
+web/               Vue 3 + Vue Router 源码，构建产物内嵌
 deploy/            Dockerfile、Compose、宿主检查、运行手册
 ```

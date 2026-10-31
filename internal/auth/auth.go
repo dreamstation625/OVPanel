@@ -166,3 +166,12 @@ func HashToken(token string) []byte {
 	sum := sha256.Sum256([]byte(token))
 	return sum[:]
 }
+
+// NewCSRFToken 生成双提交校验用的随机令牌。
+func NewCSRFToken() (string, error) {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", fmt.Errorf("生成 CSRF 令牌: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
+}

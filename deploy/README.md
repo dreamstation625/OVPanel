@@ -1,11 +1,12 @@
 # OVPanel 部署与运行
 
-本目录对应 P02「工程与部署基础」。当前交付包含面板、初始化流程、HTTPS、
-持久化目录、部署前检查和严格双容器骨架。
+本目录提供面板、初始化流程、HTTPS、持久化目录、部署前检查、用户/配置/证书管理、
+客户端配置导出和严格双容器部署文件。
 
-**范围限制：P02 的 OpenVPN 容器只运行健康检查与数据面能力代理，尚未启动
-OpenVPN、尚未生成 PKI，也没有真实 VPN 连接、限流、备份或网页升级能力。**
-容器显示 healthy 只代表进程与运行环境检查通过，不代表 VPN 已可用。
+**范围限制：OpenVPN 容器只运行健康检查与数据面能力代理，尚未启动 OpenVPN。
+面板侧的用户、证书与导出已经可用，但运行代理的实际准入、CRL 应用、断连、限流
+和真实 VPN 连接尚未接入。** 容器显示 healthy 只代表进程与运行环境检查通过，
+不代表 VPN 已可用。
 
 ## 目录
 
@@ -116,13 +117,17 @@ docker compose up -d --no-deps --force-recreate panel
 ```text
 data/
   panel/
-    panel.db             面板 SQLite（管理员、会话、任务）
+    panel.db             面板 SQLite（管理员、会话、用户、配置、证书、任务）
+    master.key           加密 CA/客户端私钥与 tls-crypt 的主密钥
     bootstrap-token      一次性初始化口令（初始化成功后删除）
-  openvpn/               运行代理状态目录（P02 尚未写入账本）
+  openvpn/               运行代理状态目录（尚未写入账本）
   openvpn-config/        OpenVPN 配置与 PKI 的未来挂载点
 ```
 
 - 面板容器以非 root 用户运行；入口脚本只修正 `/data` 顶层所有权。
+- **`master.key` 与数据库同等敏感。** 丢失后已有 CA/客户端私钥和 tls-crypt
+  密钥无法解密；备份与迁移必须同时保存它。也可通过 `OVPANEL_MASTER_KEY`
+  注入 32 字节主密钥，避免在数据目录落盘。
 - 备份与恢复在 P06 实现。**不要**在运行中直接复制 `panel.db` 当作一致备份。
 - 面板与 OpenVPN 不共享可写 SQLite 文件。
 

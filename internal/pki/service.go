@@ -1,0 +1,327 @@
+// Package pki 管理项目 CA 与客户端证书生命周期。
+//
+// CA 私钥和客户端私钥都以密文保存；本包只在签发或导出时短暂解密。
+// 证书序列号、指纹与 CN 是可信标识，CN 仅用于展示，不作为唯一身份。
+package pki
+
+import (
+	"context"
+	"crypto"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/hex"
+	"encoding/pem"
+	"errors"
+	"fmt"
+	"math/big"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/dreamstation625/ovpanel/internal/secretbox"
+	"github.com/dreamstation625/ovpanel/internal/store"
+	"github.com/google/uuid"
+)
+
+const (
+	caKeyAAD       = "ovpanel-ca-key-v1"
+	certKeyAAD     = "ovpanel-cert-key:"
+	caValidity     = 10 * 365 * 24 * time.Hour
+	clientValidity = 2 * 365 * 24 * time.Hour
+	rsaBits        = 2048
+)
+
+// ErrNoActiveCertificate 表示配置没有可导出的生效证书。
+var ErrNoActiveCertificate = errors.New("配置没有生效证书")
+
+// ErrCANotCreated 表示项目 CA 尚未生成。
+var ErrCANotCreated = errors.New("CA 尚未创建")
+
+// CAInfo 是可展示的 CA 信息，不包含私钥。
+type CAInfo struct {
+	Exists      bool
+	Subject     string
+	Serial      string
+	Fingerprint string
+	NotBefore   time.Time
+	NotAfter    time.Time
+}
+
+// Service 负责 CA 与客户端证书。
+type Service struct {
+	store *store.Store
+	key   secretbox.Key
+	now   func() time.Time
+
+	mu sync.Mutex
+}
+
+// New 创建 PKI 服务。
+func New(st *store.Store, key secretbox.Key) *Service {
+	return &Service{store: st, key: key, now: func() time.Time { return time.Now().UTC() }}
+}
+
+// Check 在启动时验证已有 CA 可用；不存在时不做任何事。
+// 主密钥不匹配时返回错误，避免面板静默进入无法签发/导出的状态。
+func (s *Service) Check(ctx context.Context) error {
+	ca, ok, err := s.store.CA(ctx)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	_, _, err = s.loadCA(ca)
+	return err
+}
+
+// CAInfo 返回当前 CA 的公开信息；尚未创建时 Exists=false。
+func (s *Service) CAInfo(ctx context.Context) (CAInfo, error) {
+	ca, ok, err := s.store.CA(ctx)
+	if err != nil {
+		return CAInfo{}, err
+	}
+	if !ok {
+		return CAInfo{Exists: false}, nil
+	}
+	cert, err := parseCertificate(ca.CertPEM)
+	if err != nil {
+		return CAInfo{}, fmt.Errorf("解析 CA 证书: %w", err)
+	}
+	return CAInfo{
+		Exists:      true,
+		Subject:     cert.Subject.String(),
+		Serial:      strings.ToUpper(cert.SerialNumber.Text(16)),
+		Fingerprint: fingerprint(cert),
+		NotBefore:   cert.NotBefore.UTC(),
+		NotAfter:    cert.NotAfter.UTC(),
+	}, nil
+}
+
+// BuildClientCertificate 生成客户端证书与私钥，但不写入数据库。
+// 调用方在同一业务事务中把返回的记录与 profile 一起保存。
+func (s *Service) BuildClientCertificate(ctx context.Context, profileID, commonName string) (store.CertificateRecord, string, error) {
+	caCert, signer, caPEM, err := s.ensureCA(ctx)
+	if err != nil {
+		return store.CertificateRecord{}, "", err
+	}
+
+	clientKey, err := rsa.GenerateKey(rand.Reader, rsaBits)
+	if err != nil {
+		return store.CertificateRecord{}, "", fmt.Errorf("生成客户端私钥: %w", err)
+	}
+	serial, err := randomSerial()
+	if err != nil {
+		return store.CertificateRecord{}, "", err
+	}
+	now := s.now()
+	tmpl := &x509.Certificate{
+		SerialNumber:          serial,
+		Subject:               pkix.Name{CommonName: commonName, Organization: []string{"OVPanel"}},
+		NotBefore:             now.Add(-5 * time.Minute),
+		NotAfter:              now.Add(clientValidity),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, caCert, &clientKey.PublicKey, signer)
+	if err != nil {
+		return store.CertificateRecord{}, "", fmt.Errorf("签发客户端证书: %w", err)
+	}
+	leaf, err := x509.ParseCertificate(der)
+	if err != nil {
+		return store.CertificateRecord{}, "", fmt.Errorf("解析客户端证书: %w", err)
+	}
+
+	keyDER, err := x509.MarshalPKCS8PrivateKey(clientKey)
+	if err != nil {
+		return store.CertificateRecord{}, "", fmt.Errorf("编码客户端私钥: %w", err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+
+	certID := uuid.NewString()
+	ciphertext, err := s.key.Seal(keyPEM, []byte(certKeyAAD+certID))
+	if err != nil {
+		return store.CertificateRecord{}, "", err
+	}
+
+	record := store.CertificateRecord{
+		Certificate: store.Certificate{
+			ID:           certID,
+			ProfileID:    profileID,
+			SerialNumber: strings.ToUpper(leaf.SerialNumber.Text(16)),
+			Fingerprint:  fingerprint(leaf),
+			CommonName:   leaf.Subject.CommonName,
+			Status:       store.CertificateActive,
+			IssuedAt:     now,
+			ExpiresAt:    leaf.NotAfter.UTC(),
+		},
+		CertPEM:       string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})),
+		KeyCiphertext: ciphertext,
+	}
+	return record, caPEM, nil
+}
+
+// CAPEM 返回项目 CA 证书 PEM，不涉及私钥。
+func (s *Service) CAPEM(ctx context.Context) (string, error) {
+	ca, ok, err := s.store.CA(ctx)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", ErrCANotCreated
+	}
+	return ca.CertPEM, nil
+}
+
+// EnsureCAPEM 在需要导出仅密码配置时也保证 CA 存在。
+func (s *Service) EnsureCAPEM(ctx context.Context) (string, error) {
+	_, _, caPEM, err := s.ensureCA(ctx)
+	if err != nil {
+		return "", err
+	}
+	return caPEM, nil
+}
+
+// ExportMaterial 返回导出 .ovpn 所需的 CA、客户端证书与私钥明文。
+// 私钥只在调用方内存中短暂存在，不落盘、不写日志。
+func (s *Service) ExportMaterial(ctx context.Context, profileID string) (caPEM, certPEM, keyPEM string, err error) {
+	caPEM, err = s.CAPEM(ctx)
+	if err != nil {
+		return "", "", "", err
+	}
+
+	cert, ok, err := s.store.ActiveCertificateMaterial(ctx, profileID)
+	if err != nil {
+		return "", "", "", err
+	}
+	if !ok {
+		return "", "", "", ErrNoActiveCertificate
+	}
+
+	keyDER, err := s.key.Open(cert.KeyCiphertext, []byte(certKeyAAD+cert.ID))
+	if err != nil {
+		return "", "", "", fmt.Errorf("解密客户端私钥: %w", err)
+	}
+	return caPEM, cert.CertPEM, string(keyDER), nil
+}
+
+func (s *Service) ensureCA(ctx context.Context) (*x509.Certificate, crypto.Signer, string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ca, ok, err := s.store.CA(ctx)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	if ok {
+		cert, signer, err := s.loadCA(ca)
+		if err != nil {
+			return nil, nil, "", err
+		}
+		return cert, signer, ca.CertPEM, nil
+	}
+
+	key, err := rsa.GenerateKey(rand.Reader, rsaBits)
+	if err != nil {
+		return nil, nil, "", fmt.Errorf("生成 CA 私钥: %w", err)
+	}
+	serial, err := randomSerial()
+	if err != nil {
+		return nil, nil, "", err
+	}
+	now := s.now()
+	tmpl := &x509.Certificate{
+		SerialNumber: serial,
+		Subject: pkix.Name{
+			CommonName:   "OVPanel Local CA",
+			Organization: []string{"OVPanel"},
+		},
+		NotBefore:             now.Add(-5 * time.Minute),
+		NotAfter:              now.Add(caValidity),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		MaxPathLen:            0,
+		MaxPathLenZero:        true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		return nil, nil, "", fmt.Errorf("签发 CA: %w", err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		return nil, nil, "", fmt.Errorf("解析 CA: %w", err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		return nil, nil, "", fmt.Errorf("编码 CA 私钥: %w", err)
+	}
+	ciphertext, err := s.key.Seal(keyDER, []byte(caKeyAAD))
+	if err != nil {
+		return nil, nil, "", err
+	}
+	certPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+
+	record := store.CA{
+		CertPEM:       certPEM,
+		KeyCiphertext: ciphertext,
+		CreatedAt:     now,
+		ExpiresAt:     cert.NotAfter.UTC(),
+	}
+	if err := s.store.CreateCA(ctx, record); err != nil {
+		return nil, nil, "", err
+	}
+	return cert, key, certPEM, nil
+}
+
+func (s *Service) loadCA(ca store.CA) (*x509.Certificate, crypto.Signer, error) {
+	keyDER, err := s.key.Open(ca.KeyCiphertext, []byte(caKeyAAD))
+	if err != nil {
+		return nil, nil, fmt.Errorf("解密 CA 私钥（主密钥可能不匹配）: %w", err)
+	}
+	parsed, err := x509.ParsePKCS8PrivateKey(keyDER)
+	if err != nil {
+		return nil, nil, fmt.Errorf("解析 CA 私钥: %w", err)
+	}
+	signer, ok := parsed.(crypto.Signer)
+	if !ok {
+		return nil, nil, errors.New("CA 私钥不支持签名")
+	}
+	cert, err := parseCertificate(ca.CertPEM)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !cert.IsCA {
+		return nil, nil, errors.New("保存的 CA 证书未标记为 CA")
+	}
+	return cert, signer, nil
+}
+
+func parseCertificate(certPEM string) (*x509.Certificate, error) {
+	block, _ := pem.Decode([]byte(certPEM))
+	if block == nil || block.Type != "CERTIFICATE" {
+		return nil, errors.New("证书 PEM 格式非法")
+	}
+	return x509.ParseCertificate(block.Bytes)
+}
+
+func randomSerial() (*big.Int, error) {
+	limit := new(big.Int).Lsh(big.NewInt(1), 128)
+	serial, err := rand.Int(rand.Reader, limit)
+	if err != nil {
+		return nil, fmt.Errorf("生成证书序列号: %w", err)
+	}
+	if serial.Sign() == 0 {
+		return nil, errors.New("生成的证书序列号为零")
+	}
+	return serial, nil
+}
+
+func fingerprint(cert *x509.Certificate) string {
+	sum := sha256.Sum256(cert.Raw)
+	return hex.EncodeToString(sum[:])
+}

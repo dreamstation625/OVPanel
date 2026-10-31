@@ -19,11 +19,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/dreamstation625/ovpanel/internal/accounts"
 	"github.com/dreamstation625/ovpanel/internal/api"
 	"github.com/dreamstation625/ovpanel/internal/bootstrap"
 	"github.com/dreamstation625/ovpanel/internal/config"
 	"github.com/dreamstation625/ovpanel/internal/devtls"
 	"github.com/dreamstation625/ovpanel/internal/logging"
+	"github.com/dreamstation625/ovpanel/internal/pki"
+	"github.com/dreamstation625/ovpanel/internal/secretbox"
 	"github.com/dreamstation625/ovpanel/internal/store"
 	"github.com/dreamstation625/ovpanel/web"
 )
@@ -79,6 +82,19 @@ func run() error {
 		return err
 	}
 
+	masterKey, err := secretbox.LoadOrCreate(cfg.MasterKeyPath(), cfg.MasterKey)
+	if err != nil {
+		return fmt.Errorf("加载主密钥: %w", err)
+	}
+	pkiService := pki.New(st, masterKey)
+	if err := pkiService.Check(ctx); err != nil {
+		return fmt.Errorf("检查 PKI: %w", err)
+	}
+	accountsService := accounts.New(st, pkiService, masterKey)
+	log.Info("master key ready",
+		"path", cfg.MasterKeyPath(),
+		"from_env", cfg.MasterKey != "")
+
 	token, err := bootstrap.LoadOrCreate(cfg.BootstrapTokenPath(), cfg.BootstrapToken, initialized)
 	if err != nil {
 		return err
@@ -103,9 +119,11 @@ func run() error {
 	}
 
 	srv := api.New(api.Options{
-		Config: cfg,
-		Store:  st,
-		Log:    log,
+		Config:   cfg,
+		Store:    st,
+		Accounts: accountsService,
+		PKI:      pkiService,
+		Log:      log,
 		Build: api.BuildInfo{
 			Version:   version,
 			Commit:    commit,

@@ -13,13 +13,19 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dreamstation625/ovpanel/internal/accounts"
 	"github.com/dreamstation625/ovpanel/internal/auth"
 	"github.com/dreamstation625/ovpanel/internal/config"
+	"github.com/dreamstation625/ovpanel/internal/pki"
 	"github.com/dreamstation625/ovpanel/internal/store"
 )
 
-// sessionCookie 是会话 Cookie 名。
-const sessionCookie = "ovpanel_session"
+// sessionCookie 是会话 Cookie 名。CSRF 令牌单独使用非 HttpOnly Cookie。
+const (
+	sessionCookie = "ovpanel_session"
+	csrfCookie    = "ovpanel_csrf"
+	csrfHeader    = "X-CSRF-Token"
+)
 
 // minPasswordLength 是管理员密码的最小长度。
 const minPasswordLength = 12
@@ -36,6 +42,8 @@ type BuildInfo struct {
 type Options struct {
 	Config         config.Config
 	Store          *store.Store
+	Accounts       *accounts.Service
+	PKI            *pki.Service
 	Log            *slog.Logger
 	Build          BuildInfo
 	BootstrapToken string
@@ -49,6 +57,8 @@ type Options struct {
 type Server struct {
 	cfg             config.Config
 	store           *store.Store
+	accounts        *accounts.Service
+	pki             *pki.Service
 	log             *slog.Logger
 	build           BuildInfo
 	bootstrapToken  string
@@ -67,6 +77,8 @@ func New(opts Options) *Server {
 	s := &Server{
 		cfg:             opts.Config,
 		store:           opts.Store,
+		accounts:        opts.Accounts,
+		pki:             opts.PKI,
 		log:             opts.Log,
 		build:           opts.Build,
 		bootstrapToken:  opts.BootstrapToken,
@@ -96,6 +108,24 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/me", s.requireSession(http.HandlerFunc(s.handleMe)))
 	mux.Handle("GET /api/system", s.requireSession(http.HandlerFunc(s.handleSystem)))
 	mux.Handle("GET /api/operations", s.requireSession(http.HandlerFunc(s.handleOperations)))
+
+	mux.Handle("GET /api/users", s.requireSession(http.HandlerFunc(s.handleListUsers)))
+	mux.Handle("POST /api/users", s.requireSession(http.HandlerFunc(s.handleCreateUser)))
+	mux.Handle("GET /api/users/{id}", s.requireSession(http.HandlerFunc(s.handleUserDetail)))
+	mux.Handle("PATCH /api/users/{id}", s.requireSession(http.HandlerFunc(s.handleUpdateUser)))
+	mux.Handle("POST /api/users/{id}/profiles", s.requireSession(http.HandlerFunc(s.handleAddProfile)))
+
+	mux.Handle("GET /api/profiles/{id}", s.requireSession(http.HandlerFunc(s.handleProfileDetail)))
+	mux.Handle("PATCH /api/profiles/{id}", s.requireSession(http.HandlerFunc(s.handleUpdateProfile)))
+	mux.Handle("POST /api/profiles/{id}/password", s.requireSession(http.HandlerFunc(s.handleResetProfilePassword)))
+	mux.Handle("POST /api/profiles/{id}/certificate/rotate", s.requireSession(http.HandlerFunc(s.handleRotateCertificate)))
+	mux.Handle("POST /api/profiles/{id}/certificate/revoke", s.requireSession(http.HandlerFunc(s.handleRevokeCertificate)))
+	mux.Handle("POST /api/profiles/{id}/export", s.requireSession(http.HandlerFunc(s.handleExportProfile)))
+
+	mux.Handle("GET /api/pki", s.requireSession(http.HandlerFunc(s.handlePKIStatus)))
+	mux.Handle("GET /api/settings/export", s.requireSession(http.HandlerFunc(s.handleGetExportSettings)))
+	mux.Handle("PUT /api/settings/export", s.requireSession(http.HandlerFunc(s.handleSaveExportSettings)))
+	mux.Handle("POST /api/admin/password", s.requireSession(http.HandlerFunc(s.handleChangeAdminPassword)))
 
 	// 未匹配的 API 路径必须返回 JSON 404，不能落到单页应用回退。
 	mux.HandleFunc("/api/", s.handleAPINotFound)
@@ -306,6 +336,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if token := s.sessionToken(r); token != "" {
+		if !s.csrfValid(r) {
+			writeError(w, r, http.StatusForbidden, CodeForbidden, "CSRF 校验失败")
+			return
+		}
 		if err := s.store.DeleteSession(r.Context(), auth.HashToken(token)); err != nil {
 			s.internalError(w, r, err)
 			return
@@ -339,15 +373,19 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 }
 
 type systemResponse struct {
-	Version       string `json:"version"`
-	Commit        string `json:"commit"`
-	BuildTime     string `json:"buildTime"`
-	GoVersion     string `json:"goVersion"`
-	TLSEnabled    bool   `json:"tlsEnabled"`
-	SchemaVersion int    `json:"schemaVersion"`
-	Sessions      int    `json:"sessions"`
-	UptimeSeconds int64  `json:"uptimeSeconds"`
-	DataStore     string `json:"dataStore"`
+	Version             string `json:"version"`
+	Commit              string `json:"commit"`
+	BuildTime           string `json:"buildTime"`
+	GoVersion           string `json:"goVersion"`
+	TLSEnabled          bool   `json:"tlsEnabled"`
+	SchemaVersion       int    `json:"schemaVersion"`
+	Sessions            int    `json:"sessions"`
+	Users               int    `json:"users"`
+	Profiles            int    `json:"profiles"`
+	ActiveCertificates  int    `json:"activeCertificates"`
+	RevokedCertificates int    `json:"revokedCertificates"`
+	UptimeSeconds       int64  `json:"uptimeSeconds"`
+	DataStore           string `json:"dataStore"`
 }
 
 func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
@@ -363,17 +401,32 @@ func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, err)
 		return
 	}
+	users, profiles, err := s.store.AccountCounts(ctx)
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	activeCerts, revokedCerts, expiredCerts, err := s.store.CertificateStats(ctx, s.now())
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	validCerts := activeCerts - expiredCerts
 
 	writeJSON(w, http.StatusOK, systemResponse{
-		Version:       s.build.Version,
-		Commit:        s.build.Commit,
-		BuildTime:     s.build.BuildTime,
-		GoVersion:     s.build.GoVersion,
-		TLSEnabled:    s.cfg.TLSEnabled(),
-		SchemaVersion: schema,
-		Sessions:      sessions,
-		UptimeSeconds: int64(s.now().Sub(s.startedAt).Seconds()),
-		DataStore:     "sqlite",
+		Version:             s.build.Version,
+		Commit:              s.build.Commit,
+		BuildTime:           s.build.BuildTime,
+		GoVersion:           s.build.GoVersion,
+		TLSEnabled:          s.cfg.TLSEnabled(),
+		SchemaVersion:       schema,
+		Sessions:            sessions,
+		Users:               users,
+		Profiles:            profiles,
+		ActiveCertificates:  validCerts,
+		RevokedCertificates: revokedCerts,
+		UptimeSeconds:       int64(s.now().Sub(s.startedAt).Seconds()),
+		DataStore:           "sqlite",
 	})
 }
 
@@ -431,6 +484,10 @@ func (s *Server) requireSession(next http.Handler) http.Handler {
 			writeError(w, r, http.StatusUnauthorized, CodeUnauthorized, "会话已失效，请重新登录")
 			return
 		}
+		if !safeMethod(r.Method) && !s.csrfValid(r) {
+			writeError(w, r, http.StatusForbidden, CodeForbidden, "CSRF 校验失败")
+			return
+		}
 
 		if err := s.store.TouchSession(r.Context(), hash, s.now()); err != nil {
 			s.log.Warn("touch session failed", "error", err)
@@ -452,6 +509,12 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request, username s
 		return false
 	}
 
+	csrf, err := auth.NewCSRFToken()
+	if err != nil {
+		s.internalError(w, r, err)
+		return false
+	}
+
 	expires := s.now().Add(s.cfg.SessionTTL)
 	if err := s.store.CreateSession(r.Context(), hash, expires, remoteIP(r), r.UserAgent()); err != nil {
 		s.internalError(w, r, err)
@@ -468,19 +531,31 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request, username s
 		Expires:  expires,
 		MaxAge:   int(s.cfg.SessionTTL.Seconds()),
 	})
+	http.SetCookie(w, &http.Cookie{
+		Name:     csrfCookie,
+		Value:    csrf,
+		Path:     "/",
+		HttpOnly: false,
+		Secure:   s.cfg.TLSEnabled(),
+		SameSite: http.SameSiteStrictMode,
+		Expires:  expires,
+		MaxAge:   int(s.cfg.SessionTTL.Seconds()),
+	})
 	return true
 }
 
 func (s *Server) clearSessionCookie(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookie,
-		Value:    "",
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   s.cfg.TLSEnabled(),
-		SameSite: http.SameSiteStrictMode,
-		MaxAge:   -1,
-	})
+	for _, name := range []string{sessionCookie, csrfCookie} {
+		http.SetCookie(w, &http.Cookie{
+			Name:     name,
+			Value:    "",
+			Path:     "/",
+			HttpOnly: name == sessionCookie,
+			Secure:   s.cfg.TLSEnabled(),
+			SameSite: http.SameSiteStrictMode,
+			MaxAge:   -1,
+		})
+	}
 }
 
 func (s *Server) sessionToken(r *http.Request) string {
@@ -489,6 +564,28 @@ func (s *Server) sessionToken(r *http.Request) string {
 		return ""
 	}
 	return c.Value
+}
+
+// csrfValid 使用双提交 Cookie 校验写请求：攻击者无法在跨站请求中读取 Cookie。
+func (s *Server) csrfValid(r *http.Request) bool {
+	cookie, err := r.Cookie(csrfCookie)
+	if err != nil || cookie.Value == "" {
+		return false
+	}
+	header := r.Header.Get(csrfHeader)
+	if header == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(header)) == 1
+}
+
+func safeMethod(method string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return true
+	default:
+		return false
+	}
 }
 
 // tokenMatches 常数时间比较引导口令。
