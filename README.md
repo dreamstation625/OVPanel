@@ -12,7 +12,9 @@ Go 提供 HTTP 服务并内嵌 Vue 3 前端，SQLite 持久化。
 - `openvpn`：OpenVPN 与运行代理，不发布管理端口，不挂载 Docker Socket。
 
 面板前后端一体，运行期不需要 Node.js。面板没有网页自更新入口，升级通过宿主机
-Docker 命令完成。初始化为一次性口令，无默认管理员密码。
+Docker 命令完成。面板容器内的受限维护进程可以通过本机 Unix Socket 更新受管
+OpenVPN 容器；它单独持有 Docker Socket，面板 Web 进程不直接访问 Docker。
+初始化为一次性口令，无默认管理员密码。
 
 ## 普通终端运行
 
@@ -44,14 +46,14 @@ go run ./cmd/panel
 | `OVPANEL_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 
 `master.key` 与数据库同等敏感：丢失后无法解密已有证书私钥与 tls-crypt 密钥。
-备份与迁移必须同时保存它；当前版本尚未提供备份功能。
+加密备份包会包含主密钥；恢复密码仍需单独保管，二者不要放在同一位置。
 
 ## Docker 部署
 
 ```bash
 cp .env.example .env
 ./deploy/check-host.sh --data-dir ./data
-docker compose up -d --build
+./deploy/compose.sh up -d --build
 ```
 
 默认只绑定 `127.0.0.1:8080`，不会直接暴露到局域网。部署细节、HTTPS、容器边界、
@@ -84,6 +86,7 @@ docker compose up -d --build
 compose.yaml       严格双容器部署入口
 .env.example       环境变量示例
 cmd/panel/         面板进程入口（Web + 内嵌前端）
+cmd/ovpanel-maintain/ 面板容器内的受限 OpenVPN 维护进程
 cmd/vpn-agent/     OpenVPN 容器进程（运行代理）
 internal/accounts/ 用户、配置、证书与导出编排
 internal/admission/ 三种认证的共享准入判定
@@ -91,10 +94,14 @@ internal/agent/    OpenVPN 子进程、控制包应用与管理接口准入
 internal/agentproto/ 面板到运行代理的控制包格式
 internal/api/      路由、错误体、中间件、静态资源
 internal/auth/     Argon2id 密码、会话与 CSRF 令牌
+internal/backup/   加密备份包、保留策略与恢复编排
 internal/bootstrap/一次性初始化口令
 internal/config/   环境变量配置
 internal/devtls/   本机调试自签名证书
+internal/dockermaint/ 受限 Docker 维护服务（只更新受管 OpenVPN）
 internal/logging/  脱敏 JSON 日志
+internal/maintclient/ 面板到维护进程的本地客户端
+internal/maintapi/ 面板与维护进程的本地接口类型
 internal/openvpnprofile/ .ovpn 与 tls-crypt 生成
 internal/pki/      CA 与客户端证书生命周期
 internal/runtimeauth/数据库到认证快照的映射

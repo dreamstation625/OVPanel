@@ -3,6 +3,7 @@ package backup
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -103,6 +104,15 @@ func TestCreateBackupEncryptsAndLists(t *testing.T) {
 	}
 	if preview.Token == "" || preview.Manifest.Users != 1 || len(preview.Warnings) == 0 {
 		t.Fatalf("预览内容异常：%+v", preview)
+	}
+}
+
+func TestCreateRejectsDuringMaintenance(t *testing.T) {
+	service, st, _ := newTestService(t)
+	createTestUser(t, st, "u1")
+	service.maintenanceBusy = func(context.Context) error { return ErrMaintenanceBusy }
+	if _, err := service.Create(context.Background(), store.BackupManual, "", "correct-horse-backup-password"); !errors.Is(err, ErrMaintenanceBusy) {
+		t.Fatalf("维护任务进行中应拒绝备份：%v", err)
 	}
 }
 

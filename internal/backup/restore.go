@@ -206,6 +206,10 @@ func (s *Service) restoreWarnings(ctx context.Context, manifest Manifest, schema
 func (s *Service) ExecuteRestore(ctx context.Context, token string) (RestoreResult, error) {
 	s.createMu.Lock()
 	defer s.createMu.Unlock()
+	if err := s.beginMutation(ctx); err != nil {
+		return RestoreResult{}, err
+	}
+	defer s.mutating.Store(false)
 
 	s.stagingMu.Lock()
 	staging, ok := s.staging[token]

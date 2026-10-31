@@ -82,6 +82,8 @@ RUN ./configure \
 FROM ${RUNTIME_IMAGE}
 
 ARG OPENVPN_VERSION
+ARG VERSION=dev
+ARG COMMIT=none
 
 RUN apk add --no-cache \
       libssl3 \
@@ -108,7 +110,12 @@ RUN test "$(openvpn --version | awk 'NR==1 {print $2}')" = "${OPENVPN_VERSION}"
 
 LABEL org.opencontainers.image.title="OVPanel OpenVPN runtime" \
       org.opencontainers.image.description="OVPanel OpenVPN container with runtime agent" \
-      org.opencontainers.image.source="https://github.com/dreamstation625/OVPanel"
+      org.opencontainers.image.source="https://github.com/dreamstation625/OVPanel" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${COMMIT}" \
+      com.ovpanel.role="openvpn" \
+      com.ovpanel.agent-protocol="1" \
+      com.ovpanel.openvpn.version="${VERSION}"
 
 ENV OVPANEL_AGENT_LISTEN=:9443 \
     OVPANEL_AGENT_STATE_DIR=/var/lib/ovpanel

@@ -128,6 +128,10 @@ func (s *Server) handleCreateBackup(w http.ResponseWriter, r *http.Request) {
 			writeError(w, r, http.StatusConflict, CodeConflict, "请先设置备份恢复密码")
 			return
 		}
+		if errors.Is(err, backup.ErrMaintenanceBusy) {
+			writeError(w, r, http.StatusConflict, CodeConflict, "OpenVPN 更新任务进行中，暂不能创建备份")
+			return
+		}
 		s.internalError(w, r, err)
 		return
 	}
@@ -326,6 +330,10 @@ func (s *Server) handleRestoreExecute(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := s.backups.ExecuteRestore(r.Context(), strings.TrimSpace(req.Token))
 	if err != nil {
+		if errors.Is(err, backup.ErrMaintenanceBusy) {
+			writeError(w, r, http.StatusConflict, CodeConflict, "OpenVPN 更新任务进行中，暂不能恢复")
+			return
+		}
 		if errors.Is(err, backup.ErrRestoreToken) {
 			writeError(w, r, http.StatusConflict, CodeConflict, "恢复令牌无效或已过期，请重新上传备份包")
 			return

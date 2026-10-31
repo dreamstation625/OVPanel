@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -26,6 +27,8 @@ import (
 	"github.com/dreamstation625/ovpanel/internal/config"
 	"github.com/dreamstation625/ovpanel/internal/devtls"
 	"github.com/dreamstation625/ovpanel/internal/logging"
+	"github.com/dreamstation625/ovpanel/internal/maintapi"
+	"github.com/dreamstation625/ovpanel/internal/maintclient"
 	"github.com/dreamstation625/ovpanel/internal/pki"
 	"github.com/dreamstation625/ovpanel/internal/secretbox"
 	"github.com/dreamstation625/ovpanel/internal/statistics"
@@ -96,6 +99,11 @@ func run() error {
 	accountsService := accounts.New(st, pkiService, masterKey)
 	runtimeService := vpnruntime.New(st, pkiService, accountsService, cfg.ControlDir)
 	statisticsService := statistics.New(st, cfg.ControlDir, log)
+	maintenanceSocket := strings.TrimSpace(os.Getenv("OVPANEL_MAINTENANCE_SOCKET"))
+	if maintenanceSocket == "" {
+		maintenanceSocket = "/run/ovpanel/maintain.sock"
+	}
+	maintenanceClient := maintclient.New(maintenanceSocket)
 	backupService := backup.New(backup.Options{
 		Store:         st,
 		PKI:           pkiService,
@@ -109,8 +117,19 @@ func run() error {
 		Version:       version,
 		Commit:        commit,
 		Log:           log,
+		MaintenanceBusy: func(ctx context.Context) error {
+			state, err := maintenanceClient.State(ctx)
+			if err != nil {
+				// 维护进程不可用时不会发生 OpenVPN 更新，不阻断备份。
+				return nil
+			}
+			if state.Task != nil && (state.Task.State == maintapi.TaskPending || state.Task.State == maintapi.TaskRunning) {
+				return backup.ErrMaintenanceBusy
+			}
+			return nil
+		},
 	})
-	log.Info("runtime control ready", "dir", cfg.ControlDir)
+	log.Info("runtime control ready", "dir", cfg.ControlDir, "maintenance_socket", maintenanceSocket)
 	log.Info("master key ready",
 		"path", cfg.MasterKeyPath(),
 		"from_env", cfg.MasterKey != "")
@@ -139,14 +158,15 @@ func run() error {
 	}
 
 	srv := api.New(api.Options{
-		Config:     cfg,
-		Store:      st,
-		Accounts:   accountsService,
-		PKI:        pkiService,
-		Runtime:    runtimeService,
-		Statistics: statisticsService,
-		Backups:    backupService,
-		Log:        log,
+		Config:      cfg,
+		Store:       st,
+		Accounts:    accountsService,
+		PKI:         pkiService,
+		Runtime:     runtimeService,
+		Statistics:  statisticsService,
+		Backups:     backupService,
+		Maintenance: maintenanceClient,
+		Log:         log,
 		Build: api.BuildInfo{
 			Version:   version,
 			Commit:    commit,

@@ -3,18 +3,18 @@
 本目录提供 Dockerfile、部署前检查与运行手册；严格双容器部署入口是项目根目录的
 `compose.yaml`，环境变量示例是根目录的 `.env.example`。
 
-**范围限制：OpenVPN 容器只运行健康检查与数据面能力代理，尚未启动 OpenVPN。
-面板侧的用户、证书与导出已经可用，但运行代理的实际准入、CRL 应用、断连、限流
-和真实 VPN 连接尚未接入。** 容器显示 healthy 只代表进程与运行环境检查通过，
-不代表 VPN 已可用。
+OpenVPN 容器运行真实 OpenVPN 与运行代理，服务端配置、准入、网络策略、统计、
+限额和限速由代理执行。容器 healthy 代表进程、代理握手与数据面环境检查通过，
+不代替真实客户端连通验收。
 
 ## 目录
 
 ```text
 deploy/
-  Dockerfile.panel        Vue 构建 + Go 内嵌 + 非 root 运行
-  Dockerfile.openvpn      OpenVPN 2.7.7 与运行代理骨架
-  entrypoint-panel.sh     修正数据目录所有权后降权运行
+  Dockerfile.panel        Vue 构建 + Go 内嵌 + 非 root Web + 受限维护进程
+  Dockerfile.openvpn      OpenVPN 2.7.7 与运行代理
+  entrypoint-panel.sh     修正目录权限，分别启动 Web 与维护进程
+  compose.sh              统一 Compose 入口，加载网页更新的镜像固定值
   check-host.sh           宿主 Docker、TUN、nft、tc、内核模块检查
 ```
 
@@ -39,8 +39,8 @@ deploy/
 
 ```bash
 cp .env.example .env
-docker compose up -d --build
-docker compose ps
+./deploy/compose.sh up -d --build
+./deploy/compose.sh ps
 ```
 
 默认只绑定 `127.0.0.1:8080`，不会直接暴露到局域网。
@@ -54,8 +54,8 @@ OVPANEL_OPENVPN_IMAGE=dreamstation625/ovpanel-openvpn:0.0.1
 ```
 
 ```bash
-docker compose pull
-docker compose up -d --no-build
+./deploy/compose.sh pull
+./deploy/compose.sh up -d --no-build
 ```
 
 `latest` 跟随 `main` 的最新正式版本，`dev` 是 `dev` 分支的预发布镜像。
@@ -68,7 +68,7 @@ docker compose up -d --no-build
   一次性初始化口令。读取方式：
 
   ```bash
-  docker compose exec panel cat /data/bootstrap-token
+  ./deploy/compose.sh exec panel cat /data/bootstrap-token
   ```
 
 初始化成功后管理员落库，引导口令文件自动删除，初始化接口永久关闭。面板没有
@@ -96,14 +96,14 @@ OVPANEL_DEV_SELF_SIGNED=false
 然后只重建面板：
 
 ```bash
-docker compose up -d --no-deps --force-recreate panel
+./deploy/compose.sh up -d --no-deps --force-recreate panel
 ```
 
 访问 `https://<宿主地址>:8443`。`OVPANEL_DEV_SELF_SIGNED=true` 只用于本机调试，
 会在内存中生成短期自签名证书；它不能替代正式证书。
 
 如果 HTTPS 由外部反向代理终止，面板自身看到的是 HTTP，Cookie 的 `Secure`
-标记不会自动开启。P02 尚未实现代理头信任配置；这种部署方式需要在后续阶段
+标记不会自动开启。当前版本尚未实现代理头信任配置；这种部署方式需要在后续阶段
 补齐后再用于公网。
 
 ## 数据与持久化
@@ -113,18 +113,22 @@ docker compose up -d --no-deps --force-recreate panel
 ```text
 data/
   panel/
-    panel.db             面板 SQLite（管理员、会话、用户、配置、证书、任务）
+    panel.db             面板 SQLite（管理员、会话、用户、配置、证书、任务、统计）
     master.key           加密 CA/客户端私钥与 tls-crypt 的主密钥
     bootstrap-token      一次性初始化口令（初始化成功后删除）
-  openvpn/               运行代理状态目录（尚未写入账本）
-  openvpn-config/        OpenVPN 配置与 PKI 的未来挂载点
+    backups/             加密备份包与恢复临时目录
+    maintenance/         维护任务状态与 OpenVPN 镜像固定值
+  openvpn/               运行代理账本与会话状态
+  openvpn-config/        OpenVPN 配置与 PKI 运行材料
+  control/              面板与代理共享控制包/状态/事件
 ```
 
 - 面板容器以非 root 用户运行；入口脚本只修正 `/data` 顶层所有权。
 - **`master.key` 与数据库同等敏感。** 丢失后已有 CA/客户端私钥和 tls-crypt
   密钥无法解密；备份与迁移必须同时保存它。也可通过 `OVPANEL_MASTER_KEY`
   注入 32 字节主密钥，避免在数据目录落盘。
-- 备份与恢复在 P06 实现。**不要**在运行中直接复制 `panel.db` 当作一致备份。
+- 加密备份与恢复通过面板「备份」页面完成；**不要**在运行中直接复制 `panel.db`。
+  备份包包含数据库一致性快照、代理账本与主密钥，恢复密码需单独保管。
 - 面板与 OpenVPN 不共享可写 SQLite 文件。
 
 ## 网络能力检查
@@ -138,36 +142,49 @@ data/
 容器侧（不发布端口，只在容器网络内访问）：
 
 ```bash
-docker compose exec openvpn wget -qO- http://127.0.0.1:9443/readyz
-docker compose exec openvpn wget -qO- http://127.0.0.1:9443/v1/environment
+./deploy/compose.sh exec openvpn wget -qO- http://127.0.0.1:9443/readyz
+./deploy/compose.sh exec openvpn wget -qO- http://127.0.0.1:9443/v1/environment
 ```
 
 - `/healthz` 只表示代理进程存活。
 - `/readyz` 包含 TUN、OpenVPN、nft、tc、ip 与内核模块检查，缺项时返回 503。
-- `/v1/environment` 返回完整报告；`configured` 在 P02 固定为 `false`。
+- `/v1/environment` 返回完整报告与当前配置状态。
+
+## OpenVPN 网页更新
+
+系统页的「OpenVPN 维护」只允许把受管 OpenVPN 容器切换到
+`OVPANEL_OPENVPN_IMAGE_REPOSITORY` 指定仓库的合法标签。更新前自动创建加密备份；
+失败会重建旧容器并回退。维护进程单独持有 Docker Socket，通过容器内 Unix Socket
+接收面板请求，不提供任意 Docker API、镜像、宿主路径或命令执行。
+
+维护进程以容器 root 运行（Docker Socket 本身是 root 等价能力），面板 Web 进程
+仍以非 root 运行；不要把 Docker Socket 暴露给其他容器或用户。
+
+更新成功后写入 `data/panel/maintenance/openvpn-image.env`。之后手工处理 OpenVPN
+时必须使用 `./deploy/compose.sh`，它会加载该固定值，避免 Compose 回到旧镜像。
 
 ## 面板升级
 
-P02 只提供手工升级基线，不提供网页自更新：
+面板没有网页自更新入口，只按下述手工步骤升级：
 
 ```bash
-# 1. 先按 P06 提供的方式备份（P06 前不要依赖未实现的备份命令）
+# 1. 先创建并验证加密备份
 # 2. 固定新的 OVPANEL_PANEL_IMAGE 或版本
-# 3. 只重建 panel
-docker compose up -d --no-deps --force-recreate panel
-docker compose ps
+# 3. 只重建 panel，不联动 OpenVPN
+./deploy/compose.sh up -d --no-deps --force-recreate panel
+./deploy/compose.sh ps
 ```
 
 `--no-deps` 避免联动重建 OpenVPN。升级后检查 `/api/health` 与页面版本。
-OpenVPN 的网页更新属于 P07，当前没有入口，也没有第三个容器。
 
 ## 容器边界
 
 - 正常运行只有两个项目容器；可用
-  `docker ps --filter label=com.ovpanel.managed` 核对。
-- panel 不挂载 Docker Socket；P07 的维护进程也只能通过受限接口操作。
+  `docker ps --filter label=com.ovpanel.managed` 核对。网页更新先删除旧 OpenVPN
+  容器再创建新容器，任何时刻都不会保留第三个项目容器。
+- panel 容器挂载 Docker Socket，仅供 root 维护进程使用；Web 进程不直接打开 Socket。
 - openvpn 不发布 9443，不挂载 Docker Socket。
-- panel 根文件系统只读，仅 `/data` 与 `/tmp` 可写。
+- panel 根文件系统只读，仅 `/data`、`/tmp` 与维护 Socket 的 tmpfs 可写。
 - openvpn 需要 `NET_ADMIN`、`NET_RAW`、`/dev/net/tun` 与 `net.ipv4.ip_forward=1`。
 
 ## 本地开发

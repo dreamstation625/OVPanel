@@ -1,8 +1,17 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { Activity, Copy, Database, KeyRound, Network, RefreshCw, Settings } from '@lucide/vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { Activity, Copy, Database, KeyRound, Network, RefreshCw, Settings, Wrench } from '@lucide/vue'
 import { NAlert, NButton, NForm, NFormItem, NInput, NInputNumber, NSelect } from 'naive-ui'
-import { api, ApiError, type ExportSettings, type Operation, type PKIStatus, type SystemInfo } from '../api'
+import PasswordPromptModal from '../components/PasswordPromptModal.vue'
+import {
+  api,
+  ApiError,
+  type ExportSettings,
+  type OpenVPNMaintenance,
+  type Operation,
+  type PKIStatus,
+  type SystemInfo,
+} from '../api'
 import { errorMessage, formatDate } from '../labels'
 import { copyText } from '../utils'
 
@@ -28,6 +37,18 @@ const exportError = ref('')
 const exportSuccess = ref('')
 const copied = ref(false)
 
+const maintenance = ref<OpenVPNMaintenance | null>(null)
+const targetTag = ref('')
+const maintenanceBusy = ref(false)
+const maintenanceError = ref('')
+const maintenanceSuccess = ref('')
+const prompt = ref({
+  show: false,
+  loading: false,
+  error: '',
+})
+let pollTimer: number | undefined
+
 const protoOptions = [
   { label: 'UDP', value: 'udp' },
   { label: 'TCP', value: 'tcp' },
@@ -49,6 +70,85 @@ const facts = computed(() => {
   ]
 })
 
+const taskRunning = computed(() => {
+  const task = maintenance.value?.task
+  return task?.state === 'pending' || task?.state === 'running'
+})
+
+const taskStateLabel = computed(() => {
+  const task = maintenance.value?.task
+  switch (task?.state) {
+    case 'pending':
+      return '等待中'
+    case 'running':
+      return '进行中'
+    case 'succeeded':
+      return '已完成'
+    case 'failed':
+      return '失败'
+    case 'rolled_back':
+      return '已回退'
+    default:
+      return '无任务'
+  }
+})
+
+function stopPoll() {
+  if (pollTimer !== undefined) {
+    window.clearInterval(pollTimer)
+    pollTimer = undefined
+  }
+}
+
+function schedulePoll() {
+  stopPoll()
+  if (taskRunning.value) {
+    pollTimer = window.setInterval(refreshMaintenance, 2000)
+  }
+}
+
+async function refreshMaintenance() {
+  try {
+    maintenance.value = await api.openVPNMaintenance()
+    schedulePoll()
+  } catch {
+    stopPoll()
+  }
+}
+
+function startUpdate() {
+  maintenanceError.value = ''
+  maintenanceSuccess.value = ''
+  const tag = targetTag.value.trim()
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(tag)) {
+    maintenanceError.value = '目标版本标签需为字母、数字、点、下划线或连字符'
+    return
+  }
+  prompt.value = { show: true, loading: false, error: '' }
+}
+
+async function confirmUpdate(password: string) {
+  prompt.value.loading = true
+  prompt.value.error = ''
+  maintenanceBusy.value = true
+  try {
+    await api.updateOpenVPN(password, targetTag.value.trim())
+    prompt.value.show = false
+    maintenanceSuccess.value = '更新任务已启动；升级前备份已创建。'
+    await refreshMaintenance()
+  } catch (err) {
+    if (err instanceof ApiError && (err.code === 'reauth_failed' || err.code === 'rate_limited')) {
+      prompt.value.error = err.message
+      return
+    }
+    prompt.value.show = false
+    maintenanceError.value = errorMessage(err)
+  } finally {
+    prompt.value.loading = false
+    maintenanceBusy.value = false
+  }
+}
+
 async function load() {
   if (loading.value) {
     return
@@ -56,11 +156,12 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const [info, pkiInfo, settings, ops] = await Promise.all([
+    const [info, pkiInfo, settings, ops, maintenanceInfo] = await Promise.all([
       api.system(),
       api.pkiStatus(),
       api.getExportSettings(),
       api.operations(),
+      api.openVPNMaintenance(),
     ])
     system.value = info
     pki.value = pkiInfo
@@ -69,6 +170,8 @@ async function load() {
     exportPort.value = settings.port || 1194
     exportProto.value = settings.proto === 'tcp' ? 'tcp' : 'udp'
     operations.value = ops.operations ?? []
+    maintenance.value = maintenanceInfo
+    schedulePoll()
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) {
       return
@@ -156,6 +259,7 @@ function stateLabel(state: Operation['state']) {
 }
 
 onMounted(load)
+onBeforeUnmount(stopPoll)
 </script>
 
 <template>
@@ -305,6 +409,90 @@ onMounted(load)
 
       <section class="surface span-2">
         <header class="surface-head">
+          <h2><Wrench :size="17" /> OpenVPN 维护</h2>
+          <span class="surface-meta">
+            {{ maintenance?.available ? '维护进程可用' : maintenance?.reason || '读取中' }}
+          </span>
+        </header>
+
+        <NAlert v-if="maintenanceError" type="error" :bordered="false" class="stack-gap">
+          {{ maintenanceError }}
+        </NAlert>
+        <NAlert v-if="maintenanceSuccess" type="success" :bordered="false" class="stack-gap">
+          {{ maintenanceSuccess }}
+        </NAlert>
+        <NAlert type="warning" :bordered="false" class="stack-gap">
+          {{ maintenance?.imageSwapWarning || '更新 OpenVPN 会中断全部 VPN 连接。' }}
+        </NAlert>
+
+        <dl class="fact-list maintenance-facts">
+          <div>
+            <dt>当前镜像</dt>
+            <dd class="is-code">{{ maintenance?.container?.image || '—' }}</dd>
+          </div>
+          <div>
+            <dt>版本 / 健康</dt>
+            <dd>
+              {{ maintenance?.container?.version || '—' }} ·
+              {{ maintenance?.container?.health || (maintenance?.container?.running ? '运行中' : '未运行') }}
+            </dd>
+          </div>
+          <div>
+            <dt>部署固定值</dt>
+            <dd class="is-code">{{ maintenance?.pinImage || '尚未由网页更新' }}</dd>
+          </div>
+          <div>
+            <dt>允许仓库</dt>
+            <dd class="is-code">{{ maintenance?.allowedRepository || '—' }}</dd>
+          </div>
+        </dl>
+
+        <div class="update-row">
+          <NInput
+            v-model:value="targetTag"
+            placeholder="目标标签，例如 0.0.2 或 dev"
+            maxlength="128"
+            :disabled="taskRunning || !maintenance?.available"
+          />
+          <NButton
+            type="primary"
+            :loading="maintenanceBusy"
+            :disabled="taskRunning || !maintenance?.available"
+            @click="startUpdate"
+          >
+            更新 OpenVPN
+          </NButton>
+        </div>
+        <p class="section-description">
+          只允许更新受管 OpenVPN 容器到允许仓库的合法标签；升级前会自动创建加密备份。不会提供面板自更新入口。
+        </p>
+
+        <div v-if="maintenance?.task" class="maint-task">
+          <div class="maint-task-head">
+            <strong>{{ maintenance.task.phase }}</strong>
+            <span class="chip" :class="`chip--${maintenance.task.state === 'succeeded' ? 'ok' : maintenance.task.state === 'failed' ? 'danger' : maintenance.task.state === 'rolled_back' ? 'warn' : 'pending'}`">
+              {{ taskStateLabel }}
+            </span>
+          </div>
+          <p>{{ maintenance.task.message }}</p>
+          <p v-if="maintenance.task.error" class="maint-error">{{ maintenance.task.error }}</p>
+          <span class="muted">
+            {{ maintenance.task.oldImage }} → {{ maintenance.task.newImage || maintenance.task.targetImage }}
+            <template v-if="maintenance.task.backupId"> · 升级前备份 {{ maintenance.task.backupId.slice(0, 8) }}</template>
+          </span>
+        </div>
+
+        <div class="panel-upgrade">
+          <strong>面板手工升级（不会自动执行）</strong>
+          <ol>
+            <li v-for="step in maintenance?.panelManualSteps || []" :key="step">{{ step }}</li>
+          </ol>
+          <span class="muted">当前面板版本 {{ maintenance?.panelVersion || system?.version || '—' }}</span>
+        </div>
+      </section>
+
+      <section class="surface span-2">
+        <header class="surface-head">
           <h2>最近任务</h2>
           <span class="surface-meta">{{ operations.length }} 条</span>
         </header>
@@ -323,6 +511,16 @@ onMounted(load)
         <div v-else class="surface-empty">暂无任务记录</div>
       </section>
     </div>
+
+    <PasswordPromptModal
+      v-model:show="prompt.show"
+      title="更新 OpenVPN"
+      :description="`将拉取并切换到 ${targetTag || '目标版本'}；会先创建升级前备份，随后中断全部 VPN 连接。`"
+      action-label="开始更新"
+      :loading="prompt.loading"
+      :error="prompt.error"
+      @confirm="confirmUpdate"
+    />
   </div>
 </template>
 
@@ -555,6 +753,70 @@ onMounted(load)
   font-size: 12.5px;
 }
 
+.maintenance-facts {
+  margin-bottom: 14px;
+}
+
+.update-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.update-row .n-input {
+  max-width: 360px;
+}
+
+.maint-task {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-2);
+}
+
+.maint-task-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.maint-task p {
+  margin: 0 0 6px;
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.maint-task .maint-error {
+  color: var(--danger);
+}
+
+.panel-upgrade {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+
+.panel-upgrade strong {
+  font-size: 13px;
+}
+
+.panel-upgrade ol {
+  margin: 8px 0;
+  padding-left: 20px;
+  line-height: 1.7;
+}
+
+.muted {
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+
 @media (max-width: 860px) {
   .settings-grid {
     grid-template-columns: 1fr;
@@ -576,6 +838,15 @@ onMounted(load)
 
   .fact-list > div {
     grid-template-columns: 88px minmax(0, 1fr);
+  }
+
+  .update-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .update-row .n-input {
+    max-width: none;
   }
 
   .fingerprint {

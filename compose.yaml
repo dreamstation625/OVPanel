@@ -28,6 +28,7 @@ services:
     read_only: true
     tmpfs:
       - /tmp:size=16m
+      - /run/ovpanel:size=1m
     security_opt:
       - no-new-privileges:true
     environment:
@@ -44,6 +45,12 @@ services:
       # 备份清单记录部署镜像固定值；不参与运行逻辑。
       OVPANEL_PANEL_IMAGE_REF: ${OVPANEL_PANEL_IMAGE:-ovpanel-panel:dev}
       OVPANEL_OPENVPN_IMAGE_REF: ${OVPANEL_OPENVPN_IMAGE:-ovpanel-openvpn:dev}
+      # 受限维护进程：只允许更新受管 OpenVPN 容器到该仓库的合法标签。
+      OVPANEL_MAINTENANCE_SOCKET: /run/ovpanel/maintain.sock
+      OVPANEL_DOCKER_SOCKET: /var/run/docker.sock
+      OVPANEL_MAINTENANCE_STATE_DIR: /data/maintenance
+      OVPANEL_OPENVPN_CONTAINER: ovpanel-openvpn
+      OVPANEL_OPENVPN_IMAGE_REPOSITORY: ${OVPANEL_OPENVPN_REPOSITORY:-dreamstation625/ovpanel-openvpn}
     ports:
       # 默认只绑定回环地址。公网访问前必须配置 HTTPS 并显式修改绑定地址。
       - "${OVPANEL_ADMIN_BIND:-127.0.0.1}:${OVPANEL_ADMIN_PORT:-8080}:8080"
@@ -51,6 +58,8 @@ services:
       - "${OVPANEL_DATA_ROOT:-./data}/panel:/data"
       - "${OVPANEL_DATA_ROOT:-./data}/control:/control"
       - "${OVPANEL_CERT_DIR:-./certs}:/certs:ro"
+      # 仅维护进程使用；Web 进程不直接打开 Docker Socket。
+      - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:
       # 直接 HTTPS 与 HTTP 都可能出现；两次尝试任一成功即可。
       test:
@@ -84,6 +93,7 @@ services:
     labels:
       com.ovpanel.managed: "true"
       com.ovpanel.role: "openvpn"
+      com.ovpanel.openvpn.version: ${OVPANEL_VERSION:-dev}
     restart: unless-stopped
     init: true
     cap_add:

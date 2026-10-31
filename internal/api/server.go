@@ -17,6 +17,7 @@ import (
 	"github.com/dreamstation625/ovpanel/internal/auth"
 	"github.com/dreamstation625/ovpanel/internal/backup"
 	"github.com/dreamstation625/ovpanel/internal/config"
+	"github.com/dreamstation625/ovpanel/internal/maintclient"
 	"github.com/dreamstation625/ovpanel/internal/pki"
 	"github.com/dreamstation625/ovpanel/internal/statistics"
 	"github.com/dreamstation625/ovpanel/internal/store"
@@ -50,6 +51,7 @@ type Options struct {
 	Runtime        *vpnruntime.Service
 	Statistics     *statistics.Service
 	Backups        *backup.Service
+	Maintenance    *maintclient.Client
 	Log            *slog.Logger
 	Build          BuildInfo
 	BootstrapToken string
@@ -68,6 +70,7 @@ type Server struct {
 	runtime         *vpnruntime.Service
 	statistics      *statistics.Service
 	backups         *backup.Service
+	maintenance     *maintclient.Client
 	log             *slog.Logger
 	build           BuildInfo
 	bootstrapToken  string
@@ -91,6 +94,7 @@ func New(opts Options) *Server {
 		runtime:         opts.Runtime,
 		statistics:      opts.Statistics,
 		backups:         opts.Backups,
+		maintenance:     opts.Maintenance,
 		log:             opts.Log,
 		build:           opts.Build,
 		bootstrapToken:  opts.BootstrapToken,
@@ -159,6 +163,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/backups/{id}/delete", s.requireSession(http.HandlerFunc(s.handleDeleteBackup)))
 	mux.Handle("POST /api/backups/restore/preview", s.requireSession(http.HandlerFunc(s.handleRestorePreview)))
 	mux.Handle("POST /api/backups/restore/execute", s.requireSession(http.HandlerFunc(s.handleRestoreExecute)))
+
+	mux.Handle("GET /api/maintenance/openvpn", s.requireSession(http.HandlerFunc(s.handleOpenVPNMaintenance)))
+	mux.Handle("POST /api/maintenance/openvpn/update", s.requireSession(http.HandlerFunc(s.handleOpenVPNUpdate)))
 
 	// 未匹配的 API 路径必须返回 JSON 404，不能落到单页应用回退。
 	mux.HandleFunc("/api/", s.handleAPINotFound)

@@ -300,6 +300,46 @@ export interface RestoreResult {
   warnings: string[]
 }
 
+export type MaintenanceTaskState = 'pending' | 'running' | 'succeeded' | 'failed' | 'rolled_back'
+
+export interface MaintenanceTask {
+  id: string
+  state: MaintenanceTaskState
+  phase: string
+  targetImage: string
+  oldImage: string
+  newImage?: string
+  oldContainerId?: string
+  newContainerId?: string
+  backupId?: string
+  message: string
+  error?: string
+  rolledBack: boolean
+  startedAt: string
+  finishedAt?: string
+}
+
+export interface MaintenanceContainer {
+  name: string
+  id: string
+  image: string
+  version?: string
+  running: boolean
+  health?: string
+}
+
+export interface OpenVPNMaintenance {
+  available: boolean
+  reason?: string
+  allowedRepository?: string
+  container?: MaintenanceContainer
+  task?: MaintenanceTask
+  pinImage?: string
+  panelVersion: string
+  panelManualSteps: string[]
+  imageSwapWarning: string
+}
+
 export interface ProfileLimitsInput {
   expiresAt: string
   concurrentLimit: number
@@ -530,6 +570,12 @@ export const api = {
   },
   executeRestore: (token: string, adminPassword: string) =>
     post<RestoreResult>('/api/backups/restore/execute', { token, adminPassword }),
+  openVPNMaintenance: () => request<OpenVPNMaintenance>('/api/maintenance/openvpn'),
+  updateOpenVPN: (adminPassword: string, targetTag: string) =>
+    post<{ task: MaintenanceTask; backup: BackupItem }>('/api/maintenance/openvpn/update', {
+      adminPassword,
+      targetTag,
+    }),
   overview: () => request<Overview>('/api/overview'),
   operations: () => request<{ operations: Operation[] }>('/api/operations'),
   connections: () => request<ConnectionsResponse>('/api/connections'),

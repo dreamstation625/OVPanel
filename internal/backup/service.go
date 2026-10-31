@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dreamstation625/ovpanel/internal/accounts"
@@ -42,9 +43,10 @@ const (
 )
 
 var (
-	ErrNotConfigured  = errors.New("尚未设置备份恢复密码")
-	ErrInvalidPackage = errors.New("备份包无效或恢复密码错误")
-	ErrRestoreToken   = errors.New("恢复令牌无效或已过期")
+	ErrNotConfigured   = errors.New("尚未设置备份恢复密码")
+	ErrInvalidPackage  = errors.New("备份包无效或恢复密码错误")
+	ErrRestoreToken    = errors.New("恢复令牌无效或已过期")
+	ErrMaintenanceBusy = errors.New("OpenVPN 更新任务进行中，暂不能备份或恢复")
 )
 
 var schedulePattern = regexp.MustCompile(`^([01][0-9]|2[0-3]):[0-5][0-9]$`)
@@ -68,24 +70,28 @@ type Options struct {
 	Version       string
 	Commit        string
 	Log           *slog.Logger
+	// MaintenanceBusy 在 OpenVPN 更新期间返回错误，用于与升级任务互斥。
+	MaintenanceBusy func(context.Context) error
 }
 
 // Service 生成、管理和恢复备份包。
 type Service struct {
-	store         *store.Store
-	pki           *pki.Service
-	accounts      *accounts.Service
-	runtime       *vpnruntime.Service
-	masterKey     secretbox.Key
-	masterKeyPath string
-	masterKeyEnv  bool
-	dataDir       string
-	controlDir    string
-	backupsDir    string
-	version       string
-	commit        string
-	log           *slog.Logger
-	now           func() time.Time
+	store           *store.Store
+	pki             *pki.Service
+	accounts        *accounts.Service
+	runtime         *vpnruntime.Service
+	masterKey       secretbox.Key
+	masterKeyPath   string
+	masterKeyEnv    bool
+	dataDir         string
+	controlDir      string
+	backupsDir      string
+	version         string
+	commit          string
+	log             *slog.Logger
+	now             func() time.Time
+	maintenanceBusy func(context.Context) error
+	mutating        atomic.Bool
 
 	createMu             sync.Mutex
 	scheduleMu           sync.Mutex
@@ -98,21 +104,22 @@ type Service struct {
 func New(opts Options) *Service {
 	now := func() time.Time { return time.Now().UTC() }
 	return &Service{
-		store:         opts.Store,
-		pki:           opts.PKI,
-		accounts:      opts.Accounts,
-		runtime:       opts.Runtime,
-		masterKey:     opts.MasterKey,
-		masterKeyPath: opts.MasterKeyPath,
-		masterKeyEnv:  opts.MasterKeyEnv,
-		dataDir:       opts.DataDir,
-		controlDir:    opts.ControlDir,
-		backupsDir:    filepath.Join(opts.DataDir, "backups"),
-		version:       opts.Version,
-		commit:        opts.Commit,
-		log:           opts.Log,
-		now:           now,
-		staging:       map[string]*stagingPackage{},
+		store:           opts.Store,
+		pki:             opts.PKI,
+		accounts:        opts.Accounts,
+		runtime:         opts.Runtime,
+		masterKey:       opts.MasterKey,
+		masterKeyPath:   opts.MasterKeyPath,
+		masterKeyEnv:    opts.MasterKeyEnv,
+		dataDir:         opts.DataDir,
+		controlDir:      opts.ControlDir,
+		backupsDir:      filepath.Join(opts.DataDir, "backups"),
+		version:         opts.Version,
+		commit:          opts.Commit,
+		log:             opts.Log,
+		maintenanceBusy: opts.MaintenanceBusy,
+		now:             now,
+		staging:         map[string]*stagingPackage{},
 	}
 }
 
@@ -207,6 +214,21 @@ func (s *Service) passphrase(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("解密备份恢复密码: %w", err)
 	}
 	return strings.TrimSpace(string(plaintext)), nil
+}
+
+// Mutating 表示备份或恢复正在修改状态。
+func (s *Service) Mutating() bool {
+	return s.mutating.Load()
+}
+
+func (s *Service) beginMutation(ctx context.Context) error {
+	if s.maintenanceBusy != nil {
+		if err := s.maintenanceBusy(ctx); err != nil {
+			return ErrMaintenanceBusy
+		}
+	}
+	s.mutating.Store(true)
+	return nil
 }
 
 // List 返回备份列表与存储占用。

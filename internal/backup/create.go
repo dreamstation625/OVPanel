@@ -54,6 +54,10 @@ type Manifest struct {
 func (s *Service) Create(ctx context.Context, kind, note, passphrase string) (store.BackupRecord, error) {
 	s.createMu.Lock()
 	defer s.createMu.Unlock()
+	if err := s.beginMutation(ctx); err != nil {
+		return store.BackupRecord{}, err
+	}
+	defer s.mutating.Store(false)
 	return s.createLocked(ctx, kind, note, passphrase)
 }
 
