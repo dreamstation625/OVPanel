@@ -35,7 +35,10 @@ ARG TARGETARCH=amd64
 RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
       -trimpath -buildvcs=false \
       -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.buildTime=${BUILD_TIME}" \
-      -o /out/vpn-agent ./cmd/vpn-agent
+      -o /out/vpn-agent ./cmd/vpn-agent \
+ && GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
+      -trimpath -buildvcs=false -ldflags "-s -w" \
+      -o /out/vpn-connect ./cmd/vpn-connect
 
 FROM ${RUNTIME_IMAGE} AS openvpn-build
 
@@ -98,6 +101,8 @@ RUN apk add --no-cache \
 
 COPY --from=openvpn-build /out/usr/sbin/openvpn /usr/sbin/openvpn
 COPY --from=build /out/vpn-agent /usr/local/bin/vpn-agent
+COPY --from=build /out/vpn-connect /usr/local/bin/vpn-connect
+RUN chmod 0755 /usr/local/bin/vpn-agent /usr/local/bin/vpn-connect
 
 RUN test "$(openvpn --version | awk 'NR==1 {print $2}')" = "${OPENVPN_VERSION}"
 

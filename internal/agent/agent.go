@@ -25,24 +25,27 @@ import (
 
 	"github.com/dreamstation625/ovpanel/internal/admission"
 	"github.com/dreamstation625/ovpanel/internal/agentproto"
+	"github.com/dreamstation625/ovpanel/internal/connectpolicy"
 	"github.com/dreamstation625/ovpanel/internal/netpolicy"
 	"github.com/dreamstation625/ovpanel/internal/serverconfig"
 )
 
 const (
-	bundleFile       = "bundle.json"
-	commandFile      = "command.json"
-	lastGoodFile     = "last-good.json"
-	stoppedFile      = "stopped"
-	defaultConfigDir = "/etc/openvpn/ovpanel"
-	managementDir    = "/run/ovpanel"
-	managementSocket = serverconfig.ManagementSocket
-	openvpnLogFile   = "openvpn.log"
+	bundleFile        = "bundle.json"
+	commandFile       = "command.json"
+	lastGoodFile      = "last-good.json"
+	stoppedFile       = "stopped"
+	connectPolicyFile = "connect-policy.json"
+	defaultConfigDir  = "/etc/openvpn/ovpanel"
+	managementDir     = "/run/ovpanel"
+	managementSocket  = serverconfig.ManagementSocket
+	openvpnLogFile    = "openvpn.log"
 )
 
 type sessionInfo struct {
 	profileID  string
 	certSerial string
+	vpnIP      string
 }
 
 // Status 是运行代理当前应用状态。
@@ -82,6 +85,9 @@ type Runtime struct {
 	stopped             bool
 	lastCommandID       string
 	sessions            map[string]sessionInfo
+	pendingAddr         map[string]string
+	serverPolicy        netpolicy.Policy
+	policyDirty         bool
 	lastError           string
 	appliedAt           time.Time
 
@@ -100,12 +106,13 @@ type Runtime struct {
 // New 创建运行代理。
 func New(controlDir, stateDir string, log *slog.Logger) *Runtime {
 	return &Runtime{
-		controlDir: controlDir,
-		stateDir:   stateDir,
-		configDir:  defaultConfigDir,
-		log:        log,
-		now:        func() time.Time { return time.Now().UTC() },
-		sessions:   map[string]sessionInfo{},
+		controlDir:  controlDir,
+		stateDir:    stateDir,
+		configDir:   defaultConfigDir,
+		log:         log,
+		now:         func() time.Time { return time.Now().UTC() },
+		sessions:    map[string]sessionInfo{},
+		pendingAddr: map[string]string{},
 	}
 }
 
@@ -122,6 +129,14 @@ func (r *Runtime) Run(ctx context.Context) {
 		if err := r.applyOnce(ctx); err != nil {
 			r.setError(err)
 			r.log.Warn("apply control bundle failed", "error", err)
+		}
+		r.mu.Lock()
+		dirty := r.policyDirty
+		r.mu.Unlock()
+		if dirty {
+			if err := r.refreshPolicy(); err != nil {
+				r.log.Warn("retry session policy failed", "error", err)
+			}
 		}
 		r.writeStatus()
 		select {
@@ -289,15 +304,23 @@ func (r *Runtime) applyBundle(ctx context.Context, bundle agentproto.Bundle, bun
 	if err := r.writeMaterials(bundle); err != nil {
 		return err
 	}
-	if err := r.applyPolicy(bundle.Policy); err != nil {
+	if err := r.writeConnectPolicy(bundle); err != nil {
 		return err
 	}
 
+	base := bundle.Policy
+	base.Sessions = nil
 	r.mu.Lock()
 	r.snapshot = bundle.Snapshot
+	r.serverPolicy = base
+	needsRestart := r.configHash != bundle.ConfigHash || !r.openvpnRunning || !r.managementConnected
+	r.mu.Unlock()
+	if err := r.refreshPolicy(); err != nil {
+		return err
+	}
+	r.mu.Lock()
 	r.configured = true
 	r.appliedAt = bundle.IssuedAt
-	needsRestart := r.configHash != bundle.ConfigHash || !r.openvpnRunning || !r.managementConnected
 	r.mu.Unlock()
 
 	if needsRestart {
@@ -421,6 +444,71 @@ func (r *Runtime) writeMaterials(bundle agentproto.Bundle) error {
 	return nil
 }
 
+// writeConnectPolicy 为 client-connect 助手生成身份到路由策略的映射。
+// 文件只包含有效策略，不含证书或密码材料。
+func (r *Runtime) writeConnectPolicy(bundle agentproto.Bundle) error {
+	file, err := connectpolicy.Build(bundle.Snapshot, connectpolicy.Policy{
+		GlobalExit:      bundle.Policy.GlobalExit,
+		AllowedInternal: bundle.Policy.AllowedInternal,
+	})
+	if err != nil {
+		return fmt.Errorf("生成连接路由策略: %w", err)
+	}
+	if err := connectpolicy.Write(filepath.Join(r.stateDir, connectPolicyFile), file); err != nil {
+		return err
+	}
+	return nil
+}
+
+// refreshPolicy 依据当前在线会话重建逐连接 nftables 规则。
+// 未取得地址或未登记的会话由地址池默认拒绝兜底。
+func (r *Runtime) refreshPolicy() error {
+	r.mu.Lock()
+	base := r.serverPolicy
+	snapshot := r.snapshot
+	sessions := make([]netpolicy.Session, 0, len(r.sessions))
+	for _, info := range r.sessions {
+		if info.vpnIP == "" {
+			continue
+		}
+		effective := connectpolicy.Policy{}
+		if profile, ok := findProfile(snapshot, info.profileID); ok {
+			effective = connectpolicy.Effective(profile, connectpolicy.Policy{
+				GlobalExit:      base.GlobalExit,
+				AllowedInternal: base.AllowedInternal,
+			})
+		}
+		sessions = append(sessions, netpolicy.Session{
+			IP:              info.vpnIP,
+			AllowedInternal: effective.AllowedInternal,
+			GlobalExit:      effective.GlobalExit,
+		})
+	}
+	base.Sessions = sessions
+	base.ProtectTargets = nil
+	r.mu.Unlock()
+
+	if err := r.applyPolicy(base); err != nil {
+		r.mu.Lock()
+		r.policyDirty = true
+		r.mu.Unlock()
+		return err
+	}
+	r.mu.Lock()
+	r.policyDirty = false
+	r.mu.Unlock()
+	return nil
+}
+
+func findProfile(snapshot admission.Snapshot, id string) (admission.Profile, bool) {
+	for i := range snapshot.Profiles {
+		if snapshot.Profiles[i].ID == id {
+			return snapshot.Profiles[i], true
+		}
+	}
+	return admission.Profile{}, false
+}
+
 func (r *Runtime) restartOpenVPN(ctx context.Context, configHash string) error {
 	r.stopProcess()
 
@@ -452,7 +540,11 @@ func (r *Runtime) restartOpenVPN(ctx context.Context, configHash string) error {
 	r.openvpnRunning = true
 	r.configHash = configHash
 	r.sessions = map[string]sessionInfo{}
+	r.pendingAddr = map[string]string{}
 	r.mu.Unlock()
+	if err := r.refreshPolicy(); err != nil {
+		r.log.Warn("clear session policy after restart failed", "error", err)
+	}
 
 	go func() {
 		err := cmd.Wait()
@@ -572,11 +664,19 @@ func (r *Runtime) readManagement(ctx context.Context, conn net.Conn) {
 			if len(parts) >= 3 {
 				pending = &pendingAuth{cid: parts[1], kid: parts[2], env: map[string]string{}}
 			}
+		case "CLIENT:ADDRESS":
+			if len(parts) >= 3 {
+				r.setSessionAddress(parts[1], parts[2])
+			}
 		case "CLIENT:DISCONNECT":
 			if len(parts) >= 2 {
 				r.mu.Lock()
 				delete(r.sessions, parts[1])
+				delete(r.pendingAddr, parts[1])
 				r.mu.Unlock()
+				if err := r.refreshPolicy(); err != nil {
+					r.log.Warn("refresh policy after disconnect failed", "error", err)
+				}
 			}
 		}
 	}
@@ -586,6 +686,34 @@ type pendingAuth struct {
 	cid string
 	kid string
 	env map[string]string
+}
+
+// setSessionAddress 记录会话取得的 VPN 地址并立即重建逐连接规则。
+func (r *Runtime) setSessionAddress(cid, address string) {
+	address = strings.TrimSpace(address)
+	r.mu.Lock()
+	info, ok := r.sessions[cid]
+	if ok {
+		// 断线重连可能在旧会话超时前重新分配到同一地址；
+		// 移除持有该地址的旧记录，避免规则重复或沿用旧策略。
+		for otherCID, other := range r.sessions {
+			if otherCID != cid && other.vpnIP == address {
+				delete(r.sessions, otherCID)
+				delete(r.pendingAddr, otherCID)
+			}
+		}
+		info.vpnIP = address
+		r.sessions[cid] = info
+	} else {
+		r.pendingAddr[cid] = address
+	}
+	r.mu.Unlock()
+	if !ok {
+		return
+	}
+	if err := r.refreshPolicy(); err != nil {
+		r.log.Warn("refresh policy after address failed", "error", err, "cid", cid)
+	}
 }
 
 func (r *Runtime) evaluate(pending *pendingAuth) {
@@ -601,11 +729,27 @@ func (r *Runtime) evaluate(pending *pendingAuth) {
 			return
 		}
 		r.mu.Lock()
+		vpnIP := r.pendingAddr[pending.cid]
+		delete(r.pendingAddr, pending.cid)
+		if vpnIP != "" {
+			for otherCID, other := range r.sessions {
+				if otherCID != pending.cid && other.vpnIP == vpnIP {
+					delete(r.sessions, otherCID)
+					delete(r.pendingAddr, otherCID)
+				}
+			}
+		}
 		r.sessions[pending.cid] = sessionInfo{
 			profileID:  decision.ProfileID,
 			certSerial: incoming.CertSerial,
+			vpnIP:      vpnIP,
 		}
 		r.mu.Unlock()
+		if vpnIP != "" {
+			if err := r.refreshPolicy(); err != nil {
+				r.log.Warn("refresh policy after admission failed", "error", err)
+			}
+		}
 		r.log.Info("client admitted",
 			"profile_id", decision.ProfileID,
 			"cid", pending.cid,
@@ -633,6 +777,7 @@ func (r *Runtime) pruneSessions() {
 	r.mu.Unlock()
 
 	now := r.now()
+	killed := false
 	for cid, info := range sessions {
 		kill := !admission.ProfileUsable(snapshot, info.profileID, now)
 		if !kill && info.certSerial != "" {
@@ -655,8 +800,15 @@ func (r *Runtime) pruneSessions() {
 			}
 			r.mu.Lock()
 			delete(r.sessions, cid)
+			delete(r.pendingAddr, cid)
 			r.mu.Unlock()
+			killed = true
 			r.log.Warn("session killed after policy update", "cid", cid, "profile_id", info.profileID)
+		}
+	}
+	if killed {
+		if err := r.refreshPolicy(); err != nil {
+			r.log.Warn("refresh policy after session prune failed", "error", err)
 		}
 	}
 }

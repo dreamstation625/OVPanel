@@ -10,10 +10,12 @@ func TestRenderPolicyOrderAndRules(t *testing.T) {
 		VPNPool:          "10.8.0.0/16",
 		TunDevice:        "tun0",
 		AllowInterClient: false,
-		GlobalExit:       false,
 		BlockIPv6:        true,
-		AllowedInternal:  []string{"192.168.99.0/24"},
 		ProtectTargets:   []string{"172.18.0.0/16"},
+		Sessions: []Session{
+			{IP: "10.8.0.2", AllowedInternal: []string{"192.168.99.0/24"}},
+			{IP: "10.8.0.3", GlobalExit: true},
+		},
 	})
 	if err != nil {
 		t.Fatalf("渲染失败：%v", err)
@@ -24,8 +26,9 @@ func TestRenderPolicyOrderAndRules(t *testing.T) {
 		"ip daddr 172.18.0.0/16 counter drop",
 		"meta nfproto ipv6 counter drop",
 		"ip saddr 10.8.0.0/16 ip daddr 10.8.0.0/16 counter drop",
-		"ip saddr 10.8.0.0/16 ip daddr 192.168.99.0/24 counter accept",
+		"ip saddr 10.8.0.2 ip daddr 192.168.99.0/24 counter accept",
 		"ip saddr 10.8.0.0/16 ip daddr 10.0.0.0/8 counter drop",
+		"ip saddr 10.8.0.3 counter accept",
 		"ip saddr 10.8.0.0/16 counter drop",
 		"ct state established,related counter accept",
 		"masquerade",
@@ -34,13 +37,43 @@ func TestRenderPolicyOrderAndRules(t *testing.T) {
 			t.Fatalf("缺少规则 %q：\n%s", want, script)
 		}
 	}
-	if strings.Index(script, "ip daddr 172.18.0.0/16 counter drop") >
-		strings.Index(script, "ip saddr 10.8.0.0/16 ip daddr 192.168.99.0/24 counter accept") {
-		t.Fatal("保护规则必须在内网授权之前")
+	if strings.Contains(script, "ip saddr 10.8.0.0/16 counter accept") {
+		t.Fatal("不应存在整个地址池的全局放行")
 	}
-	if strings.Index(script, "ip saddr 10.8.0.0/16 ip daddr 10.8.0.0/16 counter drop") >
-		strings.Index(script, "ct state established,related counter accept") {
-		t.Fatal("互访收紧规则必须在 established 放行之前")
+	allowIndex := strings.Index(script, "ip saddr 10.8.0.2 ip daddr 192.168.99.0/24 counter accept")
+	privateIndex := strings.Index(script, "ip saddr 10.8.0.0/16 ip daddr 10.0.0.0/8 counter drop")
+	globalIndex := strings.Index(script, "ip saddr 10.8.0.3 counter accept")
+	defaultIndex := strings.Index(script, "ip saddr 10.8.0.0/16 counter drop")
+	establishedIndex := strings.Index(script, "ct state established,related counter accept")
+	if allowIndex > privateIndex {
+		t.Fatal("授权内网必须排在私有网段拒绝之前")
+	}
+	if globalIndex > defaultIndex {
+		t.Fatal("全局出口会话必须在默认拒绝之前放行")
+	}
+	if defaultIndex > establishedIndex {
+		t.Fatal("默认拒绝必须在 established 放行之前")
+	}
+}
+
+func TestRenderGlobalAndInterClient(t *testing.T) {
+	script, err := Render(Policy{
+		VPNPool:          "10.8.0.0/16",
+		AllowInterClient: true,
+		BlockIPv6:        false,
+		Sessions:         []Session{{IP: "10.8.0.2", GlobalExit: true}},
+	})
+	if err != nil {
+		t.Fatalf("渲染失败：%v", err)
+	}
+	if !strings.Contains(script, "ip saddr 10.8.0.0/16 ip daddr 10.8.0.0/16 counter accept") {
+		t.Fatal("互访开启规则缺失")
+	}
+	if !strings.Contains(script, "ip saddr 10.8.0.2 counter accept") {
+		t.Fatal("全局出口会话规则缺失")
+	}
+	if strings.Contains(script, "meta nfproto ipv6") {
+		t.Fatal("关闭 IPv6 阻断时不应出现 IPv6 drop")
 	}
 }
 
@@ -58,32 +91,29 @@ func TestRenderRebuildsOnlyOwnTable(t *testing.T) {
 	}
 }
 
-func TestRenderGlobalAndInterClient(t *testing.T) {
-	script, err := Render(Policy{
-		VPNPool:          "10.8.0.0/16",
-		AllowInterClient: true,
-		GlobalExit:       true,
-		BlockIPv6:        false,
-	})
-	if err != nil {
-		t.Fatalf("渲染失败：%v", err)
-	}
-	if !strings.Contains(script, "ip saddr 10.8.0.0/16 ip daddr 10.8.0.0/16 counter accept") {
-		t.Fatal("互访开启规则缺失")
-	}
-	if !strings.Contains(script, "ip saddr 10.8.0.0/16 counter accept") {
-		t.Fatal("全局出口规则缺失")
-	}
-	if strings.Contains(script, "meta nfproto ipv6") {
-		t.Fatal("关闭 IPv6 阻断时不应出现 IPv6 drop")
-	}
-}
-
-func TestRejectsBadCIDR(t *testing.T) {
+func TestRejectsBadCIDRAndSession(t *testing.T) {
 	if _, err := Render(Policy{VPNPool: "bad"}); err == nil {
 		t.Fatal("非法地址池应被拒绝")
 	}
-	if _, err := Render(Policy{VPNPool: "10.8.0.0/16", AllowedInternal: []string{"0.0.0.0/0.0.0.0"}}); err == nil {
+	if _, err := Render(Policy{
+		VPNPool:  "10.8.0.0/16",
+		Sessions: []Session{{IP: "10.8.0.2", AllowedInternal: []string{"0.0.0.0/0.0.0.0"}}},
+	}); err == nil {
 		t.Fatal("非法内网网段应被拒绝")
+	}
+	if _, err := Render(Policy{
+		VPNPool:  "10.8.0.0/16",
+		Sessions: []Session{{IP: "192.168.1.2"}},
+	}); err == nil {
+		t.Fatal("地址池外的会话地址应被拒绝")
+	}
+	if _, err := Render(Policy{
+		VPNPool: "10.8.0.0/16",
+		Sessions: []Session{
+			{IP: "10.8.0.2"},
+			{IP: "10.8.0.2"},
+		},
+	}); err == nil {
+		t.Fatal("重复会话地址应被拒绝")
 	}
 }

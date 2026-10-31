@@ -47,6 +47,17 @@ type UserSummary struct {
 	ActiveProfileCount int
 }
 
+// 配置级路由与内网权限取值。
+const (
+	RouteInherit = "inherit"
+	RouteSplit   = "split"
+	RouteGlobal  = "global"
+
+	AccessInherit = "inherit"
+	AccessAllow   = "allow"
+	AccessDeny    = "deny"
+)
+
 // Profile 是一份独立的认证与授权单位。
 type Profile struct {
 	ID       string
@@ -54,6 +65,12 @@ type Profile struct {
 	Name     string
 	AuthType string
 	Username string
+
+	// RouteMode 与 AccessMode 默认继承服务端；AllowedInternal 只在
+	// AccessMode = AccessAllow 时生效。路由推送与访问权限分别执行。
+	RouteMode       string
+	AccessMode      string
+	AllowedInternal []string
 
 	// HasPassword 用于详情展示；PasswordHash 只在创建或改密时写入，
 	// 读取详情时不会加载哈希。
@@ -197,16 +214,29 @@ func insertUser(ctx context.Context, ex dbExec, u User) error {
 }
 
 func insertProfile(ctx context.Context, ex dbExec, p Profile) error {
-	_, err := ex.ExecContext(ctx,
+	routeMode, accessMode := p.RouteMode, p.AccessMode
+	if routeMode == "" {
+		routeMode = RouteInherit
+	}
+	if accessMode == "" {
+		accessMode = AccessInherit
+	}
+	allowed, err := encodeStringList(p.AllowedInternal)
+	if err != nil {
+		return err
+	}
+	_, err = ex.ExecContext(ctx,
 		`INSERT INTO client_profile (
 			id, user_id, name, auth_type, username, password_hash, status, expires_at,
-			concurrent_limit, quota_bytes, upload_bps, download_bps, created_at, updated_at
-		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			concurrent_limit, quota_bytes, upload_bps, download_bps,
+			route_mode, access_mode, allowed_internal_json, created_at, updated_at
+		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		p.ID, p.UserID, p.Name, p.AuthType,
 		nullableString(p.Username), nullableString(p.PasswordHash),
 		p.Status, nullableTimeValue(p.ExpiresAt),
 		nullableInt(p.ConcurrentLimit), nullableInt(p.QuotaBytes),
 		nullableInt(p.UploadBps), nullableInt(p.DownloadBps),
+		routeMode, accessMode, allowed,
 		formatTime(p.CreatedAt), formatTime(p.UpdatedAt))
 	if err != nil {
 		if isUsernameConflict(err) {
@@ -272,6 +302,26 @@ func (s *Store) UpdateProfileName(ctx context.Context, id, name string) error {
 		name, formatTime(nowUTC()), id)
 	if err != nil {
 		return fmt.Errorf("更新配置名称 %s: %w", id, err)
+	}
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// UpdateProfilePolicy 更新配置级路由方式与内网权限。
+func (s *Store) UpdateProfilePolicy(ctx context.Context, id, routeMode, accessMode string, allowedInternal []string) error {
+	allowed, err := encodeStringList(allowedInternal)
+	if err != nil {
+		return err
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE client_profile
+		    SET route_mode = ?, access_mode = ?, allowed_internal_json = ?, updated_at = ?
+		  WHERE id = ?`,
+		routeMode, accessMode, allowed, formatTime(nowUTC()), id)
+	if err != nil {
+		return fmt.Errorf("更新配置网络策略 %s: %w", id, err)
 	}
 	if n, err := res.RowsAffected(); err == nil && n == 0 {
 		return ErrNotFound
@@ -509,7 +559,8 @@ func (s *Store) ProfileByUsername(ctx context.Context, username string) (Profile
 
 const profileDetailSelect = `p.id, p.user_id, p.name, p.auth_type, COALESCE(p.username, ''),
 	CASE WHEN p.password_hash IS NULL THEN 0 ELSE 1 END, p.status, p.expires_at,
-	p.concurrent_limit, p.quota_bytes, p.upload_bps, p.download_bps, p.created_at, p.updated_at,
+	p.concurrent_limit, p.quota_bytes, p.upload_bps, p.download_bps,
+	p.route_mode, p.access_mode, p.allowed_internal_json, p.created_at, p.updated_at,
 	u.display_name, u.status,
 	c.id, c.serial_number, c.fingerprint_sha256, c.common_name, c.status,
 	c.issued_at, c.expires_at, c.revoked_at, c.revoke_reason`
@@ -521,6 +572,7 @@ func scanProfileDetail(row rowScanner) (ProfileDetail, error) {
 		hasPassword                      int
 		expiresAt                        sql.NullString
 		concurrent, quota, upload, down  sql.NullInt64
+		routeMode, accessMode, allowed   string
 		createdAt, updatedAt             string
 		certID, certSerial, certFP       sql.NullString
 		certCN, certStatus, certIssued   sql.NullString
@@ -528,7 +580,8 @@ func scanProfileDetail(row rowScanner) (ProfileDetail, error) {
 	)
 	err := row.Scan(
 		&d.ID, &d.UserID, &d.Name, &d.AuthType, &username, &hasPassword, &d.Status, &expiresAt,
-		&concurrent, &quota, &upload, &down, &createdAt, &updatedAt,
+		&concurrent, &quota, &upload, &down,
+		&routeMode, &accessMode, &allowed, &createdAt, &updatedAt,
 		&d.UserDisplayName, &d.UserStatus,
 		&certID, &certSerial, &certFP, &certCN, &certStatus, &certIssued, &certExpires, &certRevoked, &reason,
 	)
@@ -542,6 +595,9 @@ func scanProfileDetail(row rowScanner) (ProfileDetail, error) {
 	d.QuotaBytes = nullableIntPtr(quota)
 	d.UploadBps = nullableIntPtr(upload)
 	d.DownloadBps = nullableIntPtr(down)
+	d.RouteMode = routeMode
+	d.AccessMode = accessMode
+	d.AllowedInternal = decodeStringList(allowed)
 	d.CreatedAt = parseTime(createdAt)
 	d.UpdatedAt = parseTime(updatedAt)
 
@@ -759,6 +815,25 @@ func decodeTags(raw string) []string {
 		return []string{}
 	}
 	return tags
+}
+
+func encodeStringList(values []string) (string, error) {
+	if values == nil {
+		values = []string{}
+	}
+	data, err := json.Marshal(values)
+	if err != nil {
+		return "", fmt.Errorf("编码字符串列表: %w", err)
+	}
+	return string(data), nil
+}
+
+func decodeStringList(raw string) []string {
+	var values []string
+	if err := json.Unmarshal([]byte(raw), &values); err != nil || values == nil {
+		return []string{}
+	}
+	return values
 }
 
 func nullableString(value string) any {

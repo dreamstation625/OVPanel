@@ -17,6 +17,8 @@ const (
 	PathCRL          = "/etc/openvpn/ovpanel/crl.pem"
 	PathPoolState    = "/var/lib/ovpanel/ipp.txt"
 	ManagementSocket = "/run/ovpanel/mgmt.sock"
+	// PathConnectHelper 按登录身份为该连接写入路由推送。
+	PathConnectHelper = "/usr/local/bin/vpn-connect"
 )
 
 // Render 生成服务端配置文本与 SHA-256 哈希。
@@ -67,14 +69,10 @@ func Render(input Config) (string, string, error) {
 	b.WriteString("persist-key\n")
 	b.WriteString("persist-tun\n")
 
-	if cfg.RouteMode == RouteGlobal {
-		b.WriteString("push \"redirect-gateway def1\"\n")
-	} else {
-		for _, cidr := range cfg.AllowedInternal {
-			_, n, _ := net.ParseCIDR(cidr)
-			fmt.Fprintf(&b, "push \"route %s %s\"\n", n.IP.String(), ipv4MaskString(n.Mask))
-		}
-	}
+	// 路由与内网权限按配置在 client-connect 中逐连接下发，
+	// 不能在服务端全局 push，否则配置级覆盖无法生效。
+	b.WriteString("script-security 2\n")
+	fmt.Fprintf(&b, "client-connect %s\n", PathConnectHelper)
 	for _, dns := range cfg.DNS {
 		fmt.Fprintf(&b, "push \"dhcp-option DNS %s\"\n", dns)
 	}

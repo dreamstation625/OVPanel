@@ -9,14 +9,17 @@ import (
 
 // AuthRecord 是运行代理认证快照所需的用户/配置/生效证书组合。
 type AuthRecord struct {
-	UserID        string
-	UserStatus    string
-	ProfileID     string
-	AuthType      string
-	Username      string
-	PasswordHash  string
-	ProfileStatus string
-	ExpiresAt     *time.Time
+	UserID          string
+	UserStatus      string
+	ProfileID       string
+	AuthType        string
+	Username        string
+	PasswordHash    string
+	ProfileStatus   string
+	ExpiresAt       *time.Time
+	RouteMode       string
+	AccessMode      string
+	AllowedInternal []string
 
 	CertSerial      string
 	CertFingerprint string
@@ -32,7 +35,7 @@ func (s *Store) AuthRecords(ctx context.Context) ([]AuthRecord, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT u.id, u.status,
 		        p.id, p.auth_type, COALESCE(p.username, ''), COALESCE(p.password_hash, ''),
-		        p.status, p.expires_at,
+		        p.status, p.expires_at, p.route_mode, p.access_mode, p.allowed_internal_json,
 		        c.serial_number, c.fingerprint_sha256, c.status, c.expires_at
 		   FROM app_user u
 		   JOIN client_profile p ON p.user_id = u.id
@@ -48,17 +51,20 @@ func (s *Store) AuthRecords(ctx context.Context) ([]AuthRecord, error) {
 		var (
 			record                         AuthRecord
 			profileExpires, certExpires    sql.NullString
+			allowedInternal                string
 			certSerial, certFP, certStatus sql.NullString
 		)
 		if err := rows.Scan(
 			&record.UserID, &record.UserStatus,
 			&record.ProfileID, &record.AuthType, &record.Username, &record.PasswordHash,
 			&record.ProfileStatus, &profileExpires,
+			&record.RouteMode, &record.AccessMode, &allowedInternal,
 			&certSerial, &certFP, &certStatus, &certExpires,
 		); err != nil {
 			return nil, fmt.Errorf("读取认证记录: %w", err)
 		}
 		record.ExpiresAt = nullableTime(profileExpires)
+		record.AllowedInternal = decodeStringList(allowedInternal)
 		record.CertSerial = certSerial.String
 		record.CertFingerprint = certFP.String
 		record.CertStatus = certStatus.String

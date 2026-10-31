@@ -28,13 +28,16 @@ func Build(ctx context.Context, st *store.Store) (admission.Snapshot, error) {
 			})
 		}
 		profile := admission.Profile{
-			ID:           record.ProfileID,
-			UserID:       record.UserID,
-			AuthType:     admission.AuthType(record.AuthType),
-			Username:     record.Username,
-			PasswordHash: record.PasswordHash,
-			Status:       record.ProfileStatus,
-			ExpiresAt:    record.ExpiresAt,
+			ID:              record.ProfileID,
+			UserID:          record.UserID,
+			AuthType:        admission.AuthType(record.AuthType),
+			Username:        record.Username,
+			PasswordHash:    record.PasswordHash,
+			Status:          record.ProfileStatus,
+			ExpiresAt:       record.ExpiresAt,
+			RouteMode:       record.RouteMode,
+			AccessMode:      record.AccessMode,
+			AllowedInternal: record.AllowedInternal,
 		}
 		if record.CertSerial != "" {
 			profile.CertSerial = record.CertSerial

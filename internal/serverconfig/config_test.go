@@ -18,6 +18,7 @@ func TestDefaultsRender(t *testing.T) {
 		"management /run/ovpanel/mgmt.sock unix", "management-client-auth",
 		"verify-client-cert optional", "auth-user-pass-optional", "duplicate-cn",
 		"crl-verify /etc/openvpn/ovpanel/crl.pem",
+		"script-security 2", "client-connect /usr/local/bin/vpn-connect",
 		"push \"block-ipv6\"", "keepalive 10 60",
 	} {
 		if !strings.Contains(text, want) {
@@ -28,7 +29,7 @@ func TestDefaultsRender(t *testing.T) {
 		t.Fatal("默认不应启用 client-to-client")
 	}
 	if strings.Contains(text, "redirect-gateway") {
-		t.Fatal("默认分流不应推送全局出口")
+		t.Fatal("路由必须逐连接下发，服务端不能全局推送")
 	}
 }
 
@@ -42,28 +43,34 @@ func TestGlobalAndDNSRender(t *testing.T) {
 		t.Fatalf("渲染失败：%v", err)
 	}
 	for _, want := range []string{
-		"push \"redirect-gateway def1\"",
 		"push \"dhcp-option DNS 1.1.1.1\"",
 		"push \"dhcp-option DNS 8.8.8.8\"",
+		"client-connect /usr/local/bin/vpn-connect",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("缺少 %q", want)
 		}
+	}
+	if strings.Contains(text, "redirect-gateway") || strings.Contains(text, "push \"route ") {
+		t.Fatal("全局出口与内网路由必须逐连接下发")
 	}
 	if strings.Contains(text, "client-to-client") {
 		t.Fatal("互访不应通过 OpenVPN client-to-client 实现")
 	}
 }
 
-func TestSplitRoutes(t *testing.T) {
+func TestSplitRoutesNotPushedGlobally(t *testing.T) {
 	cfg := Defaults()
 	cfg.AllowedInternal = []string{"192.168.99.0/24"}
 	text, _, err := Render(cfg)
 	if err != nil {
 		t.Fatalf("渲染失败：%v", err)
 	}
-	if !strings.Contains(text, "push \"route 192.168.99.0 255.255.255.0\"") {
-		t.Fatalf("缺少内网路由：\n%s", text)
+	if strings.Contains(text, "push \"route 192.168.99.0 255.255.255.0\"") {
+		t.Fatalf("内网路由不能在服务端全局推送：\n%s", text)
+	}
+	if !strings.Contains(text, "client-connect /usr/local/bin/vpn-connect") {
+		t.Fatal("缺少按连接下发路由的 client-connect")
 	}
 }
 

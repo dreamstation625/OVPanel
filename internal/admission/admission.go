@@ -8,6 +8,7 @@ package admission
 import (
 	"fmt"
 	"math/big"
+	"net"
 	"strings"
 	"time"
 
@@ -60,6 +61,11 @@ type Profile struct {
 	Status       string     `json:"status"`
 	ExpiresAt    *time.Time `json:"expiresAt,omitempty"`
 
+	// 配置级路由与内网权限；空值等价于 inherit。
+	RouteMode       string   `json:"routeMode,omitempty"`
+	AccessMode      string   `json:"accessMode,omitempty"`
+	AllowedInternal []string `json:"allowedInternal,omitempty"`
+
 	CertSerial      string     `json:"certSerial,omitempty"`
 	CertFingerprint string     `json:"certFingerprint,omitempty"`
 	CertStatus      string     `json:"certStatus,omitempty"`
@@ -107,6 +113,7 @@ func (s Snapshot) Validate() error {
 	ids := map[string]struct{}{}
 	usernames := map[string]string{}
 	serials := map[string]string{}
+	fingerprints := map[string]string{}
 	for _, profile := range s.Profiles {
 		if profile.ID == "" {
 			return fmt.Errorf("存在空配置 ID")
@@ -157,6 +164,36 @@ func (s Snapshot) Validate() error {
 				return fmt.Errorf("证书序列号同时属于配置 %s 和 %s", other, profile.ID)
 			}
 			serials[key] = profile.ID
+		}
+		if profile.CertFingerprint != "" {
+			key := normalizeFingerprint(profile.CertFingerprint)
+			if other, dup := fingerprints[key]; dup {
+				return fmt.Errorf("证书指纹同时属于配置 %s 和 %s", other, profile.ID)
+			}
+			fingerprints[key] = profile.ID
+		}
+
+		switch profile.RouteMode {
+		case "", "inherit", "split", "global":
+		default:
+			return fmt.Errorf("配置 %s 的路由方式未知：%q", profile.ID, profile.RouteMode)
+		}
+		switch profile.AccessMode {
+		case "", "inherit", "allow", "deny":
+		default:
+			return fmt.Errorf("配置 %s 的内网权限未知：%q", profile.ID, profile.AccessMode)
+		}
+		for _, raw := range profile.AllowedInternal {
+			ip, network, err := net.ParseCIDR(strings.TrimSpace(raw))
+			if err != nil || ip.To4() == nil {
+				return fmt.Errorf("配置 %s 的授权内网网段非法：%q", profile.ID, raw)
+			}
+			if ones, bits := network.Mask.Size(); bits != 32 || ones == 0 {
+				return fmt.Errorf("配置 %s 的授权内网网段不能是 0.0.0.0/0：%q", profile.ID, raw)
+			}
+			if !ip.Equal(network.IP) {
+				return fmt.Errorf("配置 %s 的授权内网网段必须使用网络地址：%q", profile.ID, raw)
+			}
 		}
 	}
 	return nil

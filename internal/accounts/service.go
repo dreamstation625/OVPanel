@@ -7,6 +7,7 @@ package accounts
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -18,6 +19,7 @@ import (
 	"github.com/dreamstation625/ovpanel/internal/openvpnprofile"
 	"github.com/dreamstation625/ovpanel/internal/pki"
 	"github.com/dreamstation625/ovpanel/internal/secretbox"
+	"github.com/dreamstation625/ovpanel/internal/serverconfig"
 	"github.com/dreamstation625/ovpanel/internal/store"
 	"github.com/google/uuid"
 )
@@ -238,6 +240,61 @@ func (s *Service) UpdateProfileName(ctx context.Context, id, name string) (store
 		return store.ProfileDetail{}, err
 	}
 	return s.profileDetail(ctx, id)
+}
+
+// UpdateProfilePolicy 更新配置级路由方式与内网权限。
+// 路由推送与访问权限分别生效：前者决定客户端拿到哪些路由，
+// 后者由运行代理的 nftables 规则执行。
+func (s *Service) UpdateProfilePolicy(ctx context.Context, id, routeMode, accessMode string, allowedInternal []string) (store.ProfileDetail, error) {
+	routeMode = strings.TrimSpace(routeMode)
+	accessMode = strings.TrimSpace(accessMode)
+	switch routeMode {
+	case store.RouteInherit, store.RouteSplit, store.RouteGlobal:
+	default:
+		return store.ProfileDetail{}, validation("路由方式不合法")
+	}
+	switch accessMode {
+	case store.AccessInherit, store.AccessAllow, store.AccessDeny:
+	default:
+		return store.ProfileDetail{}, validation("内网权限不合法")
+	}
+	allowedInternal = normalizeStringList(allowedInternal)
+	if accessMode != store.AccessAllow {
+		allowedInternal = []string{}
+	}
+	if accessMode == store.AccessAllow && len(allowedInternal) == 0 {
+		return store.ProfileDetail{}, validation("仅允许指定网段时至少填写一个网段")
+	}
+	vpnNetwork, err := s.activeVPNNetwork(ctx)
+	if err != nil {
+		return store.ProfileDetail{}, err
+	}
+	if err := serverconfig.ValidateInternalCIDRs(vpnNetwork, allowedInternal); err != nil {
+		return store.ProfileDetail{}, validation(err.Error())
+	}
+	if err := s.store.UpdateProfilePolicy(ctx, id, routeMode, accessMode, allowedInternal); err != nil {
+		return store.ProfileDetail{}, err
+	}
+	return s.profileDetail(ctx, id)
+}
+
+func (s *Service) activeVPNNetwork(ctx context.Context) (string, error) {
+	state, err := s.store.ServerConfigState(ctx)
+	if err != nil {
+		return "", err
+	}
+	if state.Active == nil {
+		return serverconfig.Defaults().VPNNetwork, nil
+	}
+	var cfg serverconfig.Config
+	if err := json.Unmarshal([]byte(state.Active.ConfigJSON), &cfg); err != nil {
+		return "", fmt.Errorf("解析生效服务端配置: %w", err)
+	}
+	prepared, err := serverconfig.Prepare(cfg)
+	if err != nil {
+		return "", err
+	}
+	return prepared.VPNNetwork, nil
 }
 
 // ResetPassword 为证书+密码或仅密码配置生成新密码，只返回一次。
@@ -489,15 +546,18 @@ func EffectiveStatus(detail store.ProfileDetail, now time.Time) (code, reason st
 func (s *Service) buildProfile(ctx context.Context, userID string, input ProfileInput, now time.Time) (store.Profile, *store.CertificateRecord, string, error) {
 	profileID := uuid.NewString()
 	profile := store.Profile{
-		ID:        profileID,
-		UserID:    userID,
-		Name:      input.Name,
-		AuthType:  input.AuthType,
-		Username:  input.Username,
-		Status:    store.StatusActive,
-		ExpiresAt: input.ExpiresAt,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:              profileID,
+		UserID:          userID,
+		Name:            input.Name,
+		AuthType:        input.AuthType,
+		Username:        input.Username,
+		Status:          store.StatusActive,
+		ExpiresAt:       input.ExpiresAt,
+		RouteMode:       store.RouteInherit,
+		AccessMode:      store.AccessInherit,
+		AllowedInternal: []string{},
+		CreatedAt:       now,
+		UpdatedAt:       now,
 	}
 
 	password := ""
@@ -649,6 +709,23 @@ func validatePassword(password, username string) error {
 		return validation("密码不能与登录名相同")
 	}
 	return nil
+}
+
+func normalizeStringList(values []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, raw := range values {
+		value := strings.TrimSpace(raw)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func normalizeExportSettings(input ExportSettings) (ExportSettings, error) {

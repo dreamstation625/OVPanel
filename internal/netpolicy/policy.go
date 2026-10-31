@@ -21,23 +21,41 @@ var defaultProtect = []string{
 	"169.254.0.0/16",
 }
 
+// Session 是一个已取得 VPN 地址的在线连接及其有效策略。
+type Session struct {
+	IP              string   `json:"ip"`
+	AllowedInternal []string `json:"allowedInternal,omitempty"`
+	GlobalExit      bool     `json:"globalExit"`
+}
+
 // Policy 是计算后的有效网络策略。
+// GlobalExit 与 AllowedInternal 是服务端默认值，用于生成连接策略；
+// 真正的逐连接规则来自 Sessions，未登记地址默认拒绝。
 type Policy struct {
-	VPNPool          string   `json:"vpnPool"`
-	TunDevice        string   `json:"tunDevice"`
-	AllowInterClient bool     `json:"allowInterClient"`
-	GlobalExit       bool     `json:"globalExit"`
-	BlockIPv6        bool     `json:"blockIpv6"`
-	AllowedInternal  []string `json:"allowedInternal,omitempty"`
-	ProtectTargets   []string `json:"protectTargets,omitempty"`
+	VPNPool          string    `json:"vpnPool"`
+	TunDevice        string    `json:"tunDevice"`
+	AllowInterClient bool      `json:"allowInterClient"`
+	BlockIPv6        bool      `json:"blockIpv6"`
+	GlobalExit       bool      `json:"globalExit"`
+	AllowedInternal  []string  `json:"allowedInternal,omitempty"`
+	ProtectTargets   []string  `json:"protectTargets,omitempty"`
+	Sessions         []Session `json:"sessions,omitempty"`
+}
+
+type renderedSession struct {
+	ip      string
+	allowed []string
+	global  bool
 }
 
 // Render 生成完整规则脚本。
 func Render(p Policy) (string, error) {
-	pool, err := parseCIDR("VPN 地址池", p.VPNPool)
-	if err != nil {
-		return "", err
+	_, pool, err := net.ParseCIDR(strings.TrimSpace(p.VPNPool))
+	if err != nil || pool.IP.To4() == nil {
+		return "", fmt.Errorf("VPN 地址池不是合法 IPv4 CIDR：%q", p.VPNPool)
 	}
+	poolText := pool.String()
+
 	protect := append([]string{}, defaultProtect...)
 	protect = append(protect, p.ProtectTargets...)
 	protectCIDRs := make([]string, 0, len(protect))
@@ -48,13 +66,31 @@ func Render(p Policy) (string, error) {
 		}
 		protectCIDRs = append(protectCIDRs, cidr)
 	}
-	allowed := make([]string, 0, len(p.AllowedInternal))
-	for _, raw := range p.AllowedInternal {
-		cidr, err := parseCIDR("授权内网网段", raw)
-		if err != nil {
-			return "", err
+
+	sessions := make([]renderedSession, 0, len(p.Sessions))
+	seenIPs := map[string]struct{}{}
+	for _, session := range p.Sessions {
+		raw := strings.TrimSpace(session.IP)
+		if raw == "" {
+			continue
 		}
-		allowed = append(allowed, cidr)
+		ip := net.ParseIP(raw)
+		if ip == nil || ip.To4() == nil || !pool.Contains(ip) {
+			return "", fmt.Errorf("会话地址不在 VPN 地址池内：%q", raw)
+		}
+		if _, dup := seenIPs[ip.String()]; dup {
+			return "", fmt.Errorf("会话地址重复：%q", raw)
+		}
+		seenIPs[ip.String()] = struct{}{}
+		allowed := make([]string, 0, len(session.AllowedInternal))
+		for _, rawCIDR := range session.AllowedInternal {
+			cidr, err := parseCIDR("授权内网网段", rawCIDR)
+			if err != nil {
+				return "", err
+			}
+			allowed = append(allowed, cidr)
+		}
+		sessions = append(sessions, renderedSession{ip: ip.String(), allowed: allowed, global: session.GlobalExit})
 	}
 
 	var b strings.Builder
@@ -78,32 +114,36 @@ func Render(p Policy) (string, error) {
 
 	b.WriteString("\n\t\t# 3) VPN 地址池互访\n")
 	if p.AllowInterClient {
-		fmt.Fprintf(&b, "\t\tip saddr %s ip daddr %s counter accept\n", pool, pool)
+		fmt.Fprintf(&b, "\t\tip saddr %s ip daddr %s counter accept\n", poolText, poolText)
 	} else {
-		fmt.Fprintf(&b, "\t\tip saddr %s ip daddr %s counter drop\n", pool, pool)
+		fmt.Fprintf(&b, "\t\tip saddr %s ip daddr %s counter drop\n", poolText, poolText)
 	}
 
-	b.WriteString("\n\t\t# 4) 内网权限：只放行授权网段，其余私有网段拒绝\n")
-	for _, cidr := range allowed {
-		fmt.Fprintf(&b, "\t\tip saddr %s ip daddr %s counter accept\n", pool, cidr)
+	b.WriteString("\n\t\t# 4) 内网权限：只放行每份配置的授权网段\n")
+	for _, session := range sessions {
+		for _, cidr := range session.allowed {
+			fmt.Fprintf(&b, "\t\tip saddr %s ip daddr %s counter accept\n", session.ip, cidr)
+		}
 	}
 	for _, cidr := range []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"} {
-		fmt.Fprintf(&b, "\t\tip saddr %s ip daddr %s counter drop\n", pool, cidr)
+		fmt.Fprintf(&b, "\t\tip saddr %s ip daddr %s counter drop\n", poolText, cidr)
 	}
 
-	b.WriteString("\n\t\t# 5) 出口策略\n")
-	if p.GlobalExit {
-		fmt.Fprintf(&b, "\t\tip saddr %s counter accept\n", pool)
-	} else {
-		fmt.Fprintf(&b, "\t\tip saddr %s counter drop\n", pool)
+	b.WriteString("\n\t\t# 5) 出口策略：逐连接决定是否允许公网\n")
+	for _, session := range sessions {
+		if session.global {
+			fmt.Fprintf(&b, "\t\tip saddr %s counter accept\n", session.ip)
+		}
 	}
-	b.WriteString("\n\t\t# 6) 回程流量：放在所有收紧规则之后\n")
+	b.WriteString("\n\t\t# 6) 未迁移到公网出口或未登记的会话默认拒绝\n")
+	fmt.Fprintf(&b, "\t\tip saddr %s counter drop\n", poolText)
+	b.WriteString("\n\t\t# 7) 回程流量：放在所有收紧规则之后\n")
 	b.WriteString("\t\tct state established,related counter accept\n")
 	b.WriteString("\t}\n")
 
 	b.WriteString("\n\tchain postrouting {\n")
 	b.WriteString("\t\ttype nat hook postrouting priority srcnat; policy accept;\n")
-	fmt.Fprintf(&b, "\t\tip saddr %s ip daddr != %s counter masquerade\n", pool, pool)
+	fmt.Fprintf(&b, "\t\tip saddr %s ip daddr != %s counter masquerade\n", poolText, poolText)
 	b.WriteString("\t}\n")
 	b.WriteString("}\n")
 	return b.String(), nil

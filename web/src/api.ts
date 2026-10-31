@@ -48,6 +48,8 @@ export interface Operation {
 
 export type AuthType = 'certificate' | 'certificate_password' | 'password'
 export type UserStatus = 'active' | 'disabled'
+export type RouteMode = 'inherit' | 'split' | 'global'
+export type AccessMode = 'inherit' | 'allow' | 'deny'
 export type EffectiveStatus =
   | 'active'
   | 'user_disabled'
@@ -92,6 +94,9 @@ export interface Profile {
   effectiveStatus: EffectiveStatus
   statusReason: string
   expiresAt?: string
+  routeMode: RouteMode
+  accessMode: AccessMode
+  allowedInternal: string[]
   certificate?: CertificateInfo
   createdAt: string
   updatedAt: string
@@ -205,6 +210,9 @@ export interface UserPatch {
 export interface ProfilePatch {
   name?: string
   status?: UserStatus
+  routeMode?: RouteMode
+  accessMode?: AccessMode
+  allowedInternal?: string[]
 }
 
 export class ApiError extends Error {

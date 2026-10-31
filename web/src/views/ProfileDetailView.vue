@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, Copy, Download, KeyRound, RefreshCw, ShieldOff, ShieldCheck } from '@lucide/vue'
-import { NAlert, NButton, NPopconfirm } from 'naive-ui'
+import { NAlert, NButton, NForm, NFormItem, NInput, NPopconfirm, NSelect } from 'naive-ui'
 import PasswordPromptModal from '../components/PasswordPromptModal.vue'
 import OneTimePasswordModal from '../components/OneTimePasswordModal.vue'
-import { api, ApiError, type Profile } from '../api'
+import { api, ApiError, type AccessMode, type Profile, type RouteMode } from '../api'
 import {
   authLabel,
   authRequiresCertificate,
@@ -45,6 +45,23 @@ const prompt = ref<PromptState>({
   error: '',
   action: null,
 })
+
+const policy = reactive({
+  routeMode: 'inherit' as RouteMode,
+  accessMode: 'inherit' as AccessMode,
+  allowedText: '',
+})
+const policyBusy = ref(false)
+const routeOptions = [
+  { label: '继承服务端', value: 'inherit' },
+  { label: '仅访问内网', value: 'split' },
+  { label: '全部 IPv4 流量经过 VPN', value: 'global' },
+]
+const accessOptions = [
+  { label: '继承服务端', value: 'inherit' },
+  { label: '仅允许指定网段', value: 'allow' },
+  { label: '禁止访问内网', value: 'deny' },
+]
 
 const backTarget = computed(() => (profile.value ? `/users/${profile.value.userId}` : '/users'))
 const hasCertificate = computed(() => Boolean(profile.value?.certificate))
@@ -197,6 +214,47 @@ async function copyFingerprint() {
   copied.value = await copyText(profile.value.certificate.fingerprint)
 }
 
+async function savePolicy() {
+  const current = profile.value
+  if (!current || policyBusy.value) {
+    return
+  }
+  policyBusy.value = true
+  error.value = ''
+  success.value = ''
+  try {
+    profile.value = await api.updateProfile(current.id, {
+      routeMode: policy.routeMode,
+      accessMode: policy.accessMode,
+      allowedInternal:
+        policy.accessMode === 'allow'
+          ? policy.allowedText
+              .split(/[,，\s]+/)
+              .map((value) => value.trim())
+              .filter(Boolean)
+          : [],
+    })
+    success.value = '网络策略已保存；路由变更在重新连接后生效。'
+  } catch (err) {
+    error.value = errorMessage(err)
+  } finally {
+    policyBusy.value = false
+  }
+}
+
+watch(
+  profile,
+  (value) => {
+    if (!value) {
+      return
+    }
+    policy.routeMode = value.routeMode
+    policy.accessMode = value.accessMode
+    policy.allowedText = value.allowedInternal.join(', ')
+  },
+  { immediate: true },
+)
+
 watch(() => route.params.id, load, { immediate: true })
 </script>
 
@@ -298,6 +356,37 @@ watch(() => route.params.id, load, { immediate: true })
             <dd class="is-code">{{ profile.id }}</dd>
           </div>
         </dl>
+      </section>
+
+      <section class="surface">
+        <header class="surface-head">
+          <h2>网络策略</h2>
+          <span class="surface-meta">路由与访问权限分别执行</span>
+        </header>
+        <NForm>
+          <div class="policy-grid">
+            <NFormItem label="路由方式">
+              <NSelect v-model:value="policy.routeMode" :options="routeOptions" />
+            </NFormItem>
+            <NFormItem label="内网权限">
+              <NSelect v-model:value="policy.accessMode" :options="accessOptions" />
+            </NFormItem>
+          </div>
+          <NFormItem v-if="policy.accessMode === 'allow'" label="授权内网网段">
+            <NInput
+              v-model:value="policy.allowedText"
+              type="textarea"
+              :autosize="{ minRows: 2, maxRows: 4 }"
+              placeholder="例如 10.0.16.0/22，用逗号或换行分隔"
+            />
+          </NFormItem>
+          <p class="policy-hint">
+            路由方式决定客户端拿到哪些路由；内网权限决定运行代理实际放行哪些目标。继承时使用服务端默认值。
+          </p>
+          <div class="policy-actions">
+            <NButton type="primary" :loading="policyBusy" @click="savePolicy">保存网络策略</NButton>
+          </div>
+        </NForm>
       </section>
 
       <section v-if="authRequiresCertificate(profile.authType)" class="surface">
@@ -514,6 +603,24 @@ watch(() => route.params.id, load, { immediate: true })
   white-space: nowrap;
 }
 
+.policy-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.policy-hint {
+  margin: 0 0 14px;
+  color: var(--text-3);
+  font-size: 11.5px;
+  line-height: 1.65;
+}
+
+.policy-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .loading-surface {
   color: var(--text-3);
   font-size: 13px;
@@ -544,6 +651,15 @@ watch(() => route.params.id, load, { immediate: true })
 
   .fact-list > div {
     grid-template-columns: 88px minmax(0, 1fr);
+  }
+
+  .policy-grid {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+
+  .policy-actions {
+    justify-content: flex-start;
   }
 
   .fingerprint {

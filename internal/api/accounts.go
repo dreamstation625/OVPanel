@@ -51,6 +51,9 @@ type profileDTO struct {
 	EffectiveStatus string          `json:"effectiveStatus"`
 	StatusReason    string          `json:"statusReason"`
 	ExpiresAt       string          `json:"expiresAt,omitempty"`
+	RouteMode       string          `json:"routeMode"`
+	AccessMode      string          `json:"accessMode"`
+	AllowedInternal []string        `json:"allowedInternal"`
 	Certificate     *certificateDTO `json:"certificate,omitempty"`
 	CreatedAt       string          `json:"createdAt"`
 	UpdatedAt       string          `json:"updatedAt"`
@@ -86,8 +89,11 @@ type updateUserRequest struct {
 }
 
 type updateProfileRequest struct {
-	Name   *string `json:"name"`
-	Status *string `json:"status"`
+	Name            *string   `json:"name"`
+	Status          *string   `json:"status"`
+	RouteMode       *string   `json:"routeMode"`
+	AccessMode      *string   `json:"accessMode"`
+	AllowedInternal *[]string `json:"allowedInternal"`
 }
 
 // ---------- 用户 ----------
@@ -288,7 +294,7 @@ func (s *Server) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 	if !s.decodeJSON(w, r, &req) {
 		return
 	}
-	if req.Name == nil && req.Status == nil {
+	if req.Name == nil && req.Status == nil && req.RouteMode == nil && req.AccessMode == nil && req.AllowedInternal == nil {
 		writeError(w, r, http.StatusBadRequest, CodeInvalidRequest, "没有需要更新的字段")
 		return
 	}
@@ -307,6 +313,37 @@ func (s *Server) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			s.writeAccountError(w, r, err)
 			return
+		}
+	}
+	if req.RouteMode != nil || req.AccessMode != nil || req.AllowedInternal != nil {
+		current, ok, err := s.store.Profile(r.Context(), id)
+		if err != nil {
+			s.internalError(w, r, err)
+			return
+		}
+		if !ok {
+			s.writeAccountError(w, r, store.ErrNotFound)
+			return
+		}
+		routeMode, accessMode := current.RouteMode, current.AccessMode
+		allowed := current.AllowedInternal
+		if req.RouteMode != nil {
+			routeMode = *req.RouteMode
+		}
+		if req.AccessMode != nil {
+			accessMode = *req.AccessMode
+		}
+		if req.AllowedInternal != nil {
+			allowed = *req.AllowedInternal
+		}
+		detail, err = s.accounts.UpdateProfilePolicy(r.Context(), id, routeMode, accessMode, allowed)
+		if err != nil {
+			s.writeAccountError(w, r, err)
+			return
+		}
+		// 立即把新策略同步到运行代理；尚未配置导出地址时没有运行配置可下发。
+		if _, err := s.runtime.Apply(r.Context()); err != nil && !errors.Is(err, accounts.ErrExportNotConfigured) {
+			s.log.Warn("apply runtime after profile policy update failed", "profile_id", id, "error", err)
 		}
 	}
 	s.log.Info("profile updated", "profile_id", id)
@@ -602,8 +639,20 @@ func profileToDTO(detail store.ProfileDetail, now time.Time) profileDTO {
 		Status:          detail.Status,
 		EffectiveStatus: effective,
 		StatusReason:    reason,
+		RouteMode:       detail.RouteMode,
+		AccessMode:      detail.AccessMode,
+		AllowedInternal: detail.AllowedInternal,
 		CreatedAt:       detail.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:       detail.UpdatedAt.Format(time.RFC3339),
+	}
+	if dto.RouteMode == "" {
+		dto.RouteMode = store.RouteInherit
+	}
+	if dto.AccessMode == "" {
+		dto.AccessMode = store.AccessInherit
+	}
+	if dto.AllowedInternal == nil {
+		dto.AllowedInternal = []string{}
 	}
 	if detail.ExpiresAt != nil {
 		dto.ExpiresAt = detail.ExpiresAt.Format(time.RFC3339)
