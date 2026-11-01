@@ -14,7 +14,7 @@ deploy/
   Dockerfile.panel        Vue 构建 + Go 内嵌 + 非 root Web + 受限维护进程
   Dockerfile.openvpn      OpenVPN 2.7.7 与运行代理
   entrypoint-panel.sh     修正目录权限，分别启动 Web 与维护进程
-  compose.sh              统一 Compose 入口，加载网页更新的镜像固定值
+  compose.sh              统一 Compose 入口，加载镜像固定值
   check-host.sh           宿主 Docker、TUN、nft、tc、内核模块检查
 ```
 
@@ -167,39 +167,34 @@ data/
 - `/readyz` 包含 TUN、OpenVPN、nft、tc、ip 与内核模块检查，缺项时返回 503。
 - `/v1/environment` 返回完整报告与当前配置状态。
 
-## OpenVPN 网页更新
+## 版本检查与升级
 
-系统页的「OpenVPN 维护」只允许把受管 OpenVPN 容器切换到
-`OVPANEL_OPENVPN_IMAGE_REPOSITORY` 指定仓库的合法标签。更新前自动创建加密备份；
-失败会重建旧容器并回退。维护进程单独持有 Docker Socket，通过容器内 Unix Socket
-接收面板请求，不提供任意 Docker API、镜像、宿主路径或命令执行。
+面板侧栏显示当前版本，并会检查 GitHub Release；有新版本时显示提示，可在
+「版本与更新」中查看版本号和更新说明。面板不会在网页内执行更新。
+面板需要能访问 `api.github.com`；网络不通时只提示检查失败，不影响其他功能。
 
-维护进程以容器 root 运行（Docker Socket 本身是 root 等价能力），面板 Web 进程
-仍以非 root 运行；不要把 Docker Socket 暴露给其他容器或用户。
-
-更新成功后写入 `data/panel/maintenance/openvpn-image.env`。之后手工处理 OpenVPN
-时必须使用 `./deploy/compose.sh`，它会加载该固定值，避免 Compose 回到旧镜像。
-
-## 面板升级
-
-面板没有网页自更新入口，只按下述手工步骤升级：
+升级时按 Release 说明把面板与 OpenVPN 镜像切到同一版本，再逐个重建；先更新
+面板不影响在线连接，重建 OpenVPN 会断开现有客户端，应安排在维护窗口：
 
 ```bash
 # 1. 先创建并验证加密备份
-# 2. 固定新的 OVPANEL_PANEL_IMAGE 或版本
-# 3. 只重建 panel，不联动 OpenVPN
+# 2. 在 .env 中设置对应版本的镜像
+#    OVPANEL_PANEL_IMAGE=dreamstation625/ovpanel:0.0.2
+#    OVPANEL_OPENVPN_IMAGE=dreamstation625/ovpanel-openvpn:0.0.2
+./deploy/compose.sh pull
 ./deploy/compose.sh up -d --no-deps --force-recreate panel
+./deploy/compose.sh up -d --no-deps --force-recreate openvpn
 ./deploy/compose.sh ps
 ```
 
-`--no-deps` 避免联动重建 OpenVPN。升级后检查 `/api/health` 与页面版本。
+`--no-deps` 避免重建一个容器时联动另一个。升级后检查 `/api/health` 与页面版本。
 
 ## 容器边界
 
 - 正常运行只有两个项目容器；可用
-  `docker ps --filter label=com.ovpanel.managed` 核对。网页更新先删除旧 OpenVPN
-  容器再创建新容器，任何时刻都不会保留第三个项目容器。
-- panel 容器挂载 Docker Socket，仅供 root 维护进程使用；Web 进程不直接打开 Socket。
+  `docker ps --filter label=com.ovpanel.managed` 核对。
+- panel 容器内的维护进程持有 Docker Socket；Web 进程不直接打开 Socket，网页也
+  不提供 OpenVPN 或面板的更新操作。
 - openvpn 只发布数据面端口（`OVPANEL_VPN_PORT`/`OVPANEL_VPN_PROTO`，须与面板
   配置一致）；管理端口 9443 不发布，也不挂载 Docker Socket。
 - panel 根文件系统只读，仅 `/data`、`/tmp` 与维护 Socket 的 tmpfs 可写。

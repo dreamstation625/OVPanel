@@ -21,6 +21,7 @@ import (
 	"github.com/dreamstation625/ovpanel/internal/pki"
 	"github.com/dreamstation625/ovpanel/internal/statistics"
 	"github.com/dreamstation625/ovpanel/internal/store"
+	"github.com/dreamstation625/ovpanel/internal/updatecheck"
 	"github.com/dreamstation625/ovpanel/internal/vpnruntime"
 )
 
@@ -71,6 +72,7 @@ type Server struct {
 	statistics      *statistics.Service
 	backups         *backup.Service
 	maintenance     *maintclient.Client
+	updateChecker   *updatecheck.Checker
 	log             *slog.Logger
 	build           BuildInfo
 	bootstrapToken  string
@@ -95,6 +97,7 @@ func New(opts Options) *Server {
 		statistics:      opts.Statistics,
 		backups:         opts.Backups,
 		maintenance:     opts.Maintenance,
+		updateChecker:   updatecheck.New(),
 		log:             opts.Log,
 		build:           opts.Build,
 		bootstrapToken:  opts.BootstrapToken,
@@ -123,6 +126,7 @@ func (s *Server) Handler() http.Handler {
 
 	mux.Handle("GET /api/me", s.requireSession(http.HandlerFunc(s.handleMe)))
 	mux.Handle("GET /api/system", s.requireSession(http.HandlerFunc(s.handleSystem)))
+	mux.Handle("GET /api/update", s.requireSession(http.HandlerFunc(s.handleUpdateCheck)))
 	mux.Handle("GET /api/overview", s.requireSession(http.HandlerFunc(s.handleOverview)))
 	mux.Handle("GET /api/connections", s.requireSession(http.HandlerFunc(s.handleConnections)))
 	mux.Handle("GET /api/connections/history", s.requireSession(http.HandlerFunc(s.handleConnectionHistory)))

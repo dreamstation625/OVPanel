@@ -104,7 +104,7 @@ onMounted(load)
       <div>
         <span class="eyebrow"><ScrollText :size="14" /> 日志</span>
         <h1>日志</h1>
-        <p class="page-meta">查看连接历史，以及备份、恢复和 OpenVPN 更新等操作记录。</p>
+        <p class="page-meta">查看连接历史，以及备份、恢复等操作记录。</p>
       </div>
       <div class="header-tools">
         <span v-if="updatedAt" class="muted">更新于 {{ updatedAt }}</span>
@@ -199,7 +199,7 @@ onMounted(load)
       </ul>
       <div v-else class="surface-empty">
         <strong>暂无操作记录</strong>
-        <span>备份、恢复和 OpenVPN 更新会显示在这里。</span>
+        <span>备份、恢复等操作会显示在这里。</span>
       </div>
     </section>
   </div>

@@ -240,7 +240,7 @@ onBeforeUnmount(() => {
         </ul>
         <div v-else class="surface-empty">
           <strong>暂无操作记录</strong>
-          <span>备份、恢复和 OpenVPN 更新会显示在这里。</span>
+          <span>备份、恢复等操作会显示在这里。</span>
         </div>
       </section>
     </div>

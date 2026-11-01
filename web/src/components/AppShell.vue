@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import {
   Archive,
@@ -13,10 +13,11 @@ import {
   Users,
   X,
 } from '@lucide/vue'
-import { NButton } from 'naive-ui'
+import { NButton, NModal } from 'naive-ui'
 import BrandMark from './BrandMark.vue'
 import ThemeToggle from './ThemeToggle.vue'
-import { api } from '../api'
+import { api, type UpdateCheck } from '../api'
+import { errorMessage, formatDate } from '../labels'
 
 defineProps<{
   username: string
@@ -29,6 +30,34 @@ const emit = defineEmits<{
 const route = useRoute()
 const menuOpen = ref(false)
 const drawer = ref<HTMLElement | null>(null)
+const version = ref('')
+const versionCommit = ref('')
+const update = ref<UpdateCheck | null>(null)
+const updateError = ref('')
+const checkingUpdate = ref(false)
+const showUpdate = ref(false)
+
+function formatVersion(value?: string) {
+  if (!value || value === 'none') {
+    return '—'
+  }
+  return value === 'dev' ? '开发版' : `v${value.replace(/^v/, '')}`
+}
+
+const versionLabel = computed(() => {
+  if (!version.value) {
+    return '版本读取中'
+  }
+  return formatVersion(version.value)
+})
+const hasUpdate = computed(() => Boolean(update.value?.updateAvailable))
+const releaseURL = computed(() => update.value?.url || 'https://github.com/dreamstation625/OVPanel/releases')
+const releaseNotes = computed(() =>
+  (update.value?.notes ?? '')
+    .replace(/^#{1,6}\s*/gm, '')
+    .replace(/^\s*[-*]\s+/gm, '• ')
+    .trim(),
+)
 
 const navItems = [
   { to: '/overview', label: '概览', icon: LayoutDashboard },
@@ -77,13 +106,56 @@ function onGlobalKeydown(event: KeyboardEvent) {
   }
 }
 
-onMounted(() => window.addEventListener('keydown', onGlobalKeydown))
+onMounted(() => {
+  window.addEventListener('keydown', onGlobalKeydown)
+  void loadVersion()
+  void checkUpdates(true)
+})
 onBeforeUnmount(() => window.removeEventListener('keydown', onGlobalKeydown))
 
 watch(
   () => route.path,
   () => setMenu(false),
 )
+
+async function loadVersion() {
+  try {
+    const info = await api.system()
+    version.value = info.version
+    versionCommit.value = info.commit
+  } catch {
+    // 版本读取失败不阻断页面；点击检测时仍会显示当前构建结果。
+  }
+}
+
+async function checkUpdates(auto = false) {
+  if (checkingUpdate.value) {
+    if (!auto) {
+      showUpdate.value = true
+    }
+    return
+  }
+  checkingUpdate.value = true
+  updateError.value = ''
+  if (!auto) {
+    showUpdate.value = true
+  }
+  try {
+    const result = await api.updateCheck()
+    version.value = result.currentVersion || version.value
+    versionCommit.value = result.currentCommit || versionCommit.value
+    if (result.error) {
+      updateError.value = result.error
+      update.value = null
+    } else {
+      update.value = result
+    }
+  } catch (err) {
+    updateError.value = errorMessage(err)
+  } finally {
+    checkingUpdate.value = false
+  }
+}
 
 async function logout() {
   try {
@@ -134,6 +206,17 @@ async function logout() {
             <Menu v-else :size="18" />
           </template>
         </NButton>
+        <button
+          class="version-button"
+          :class="{ 'has-update': hasUpdate }"
+          :disabled="checkingUpdate"
+          :title="hasUpdate ? '发现新版本，查看更新内容' : '检测更新'"
+          @click="checkUpdates(false)"
+        >
+          <span class="version-label">{{ versionLabel }}</span>
+          <span v-if="hasUpdate" class="update-badge">有新版本</span>
+          <span v-else class="version-action">{{ checkingUpdate ? '检测中…' : '检测更新' }}</span>
+        </button>
         <ThemeToggle />
         <div class="account">
           <span class="account-name" :title="username">{{ username }}</span>
@@ -169,6 +252,43 @@ async function logout() {
     <main class="workspace">
       <slot />
     </main>
+
+    <NModal
+      v-model:show="showUpdate"
+      preset="card"
+      title="版本与更新"
+      :style="{ width: 'min(640px, calc(100vw - 28px))' }"
+      :mask-closable="!checkingUpdate"
+    >
+      <div class="update-body">
+        <p>
+          当前版本：<strong>{{ versionLabel }}</strong>
+          <span v-if="versionCommit && versionCommit !== 'none'" class="update-meta">
+            （{{ versionCommit.slice(0, 8) }}）
+          </span>
+        </p>
+        <p v-if="checkingUpdate" class="update-meta">正在检测更新…</p>
+        <div v-else-if="updateError" class="update-warning">{{ updateError }}</div>
+        <template v-else-if="update">
+          <p>
+            最新版本：<strong>{{ formatVersion(update.latestVersion) }}</strong>
+            <span v-if="update.prerelease" class="update-meta">（预发布）</span>
+          </p>
+          <p v-if="update.publishedAt" class="update-meta">发布时间 {{ formatDate(update.publishedAt) }}</p>
+          <div class="update-state" :class="{ 'is-available': update.updateAvailable }">
+            {{ update.updateAvailable ? '发现新版本，请按 Release 说明更新。' : '当前已是最新版本。' }}
+          </div>
+          <pre v-if="releaseNotes" class="release-notes">{{ releaseNotes }}</pre>
+          <p class="update-hint">
+            更新方式：按 Release 说明拉取对应版本的面板和 OpenVPN 镜像并重建容器。面板不会在网页内自动更新。
+          </p>
+        </template>
+        <div class="update-actions">
+          <NButton @click="showUpdate = false">关闭</NButton>
+          <a class="update-link" :href="releaseURL" target="_blank" rel="noreferrer">打开发布页</a>
+        </div>
+      </div>
+    </NModal>
   </div>
 </template>
 
@@ -266,6 +386,140 @@ async function logout() {
 
 .sidebar-foot :deep(.theme-toggle) {
   align-self: flex-start;
+}
+
+.version-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-height: 28px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-3);
+  font: inherit;
+  font-size: 11.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.version-button:hover {
+  background: var(--surface-2);
+  color: var(--text-1);
+}
+
+.version-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.version-button:disabled {
+  cursor: wait;
+}
+
+.version-label {
+  white-space: nowrap;
+}
+
+.version-action {
+  color: var(--text-3);
+  font-size: 11px;
+}
+
+.version-button.has-update .version-label::after {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  content: '';
+  vertical-align: 1px;
+}
+
+.update-badge {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.update-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.update-body p {
+  margin: 0;
+}
+
+.update-meta {
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+
+.update-warning {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+
+.update-state {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+
+.update-state.is-available {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.release-notes {
+  max-height: 300px;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-family: var(--font-body);
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.update-hint {
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+
+.update-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.update-link {
+  color: var(--accent);
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.update-link:hover {
+  text-decoration: underline;
 }
 
 .account {
@@ -376,6 +630,17 @@ async function logout() {
   }
 
   .account-name {
+    display: none;
+  }
+
+  .version-button {
+    width: auto;
+    padding: 0 4px;
+    flex: none;
+  }
+
+  .version-action,
+  .update-badge {
     display: none;
   }
 

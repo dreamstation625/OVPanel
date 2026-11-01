@@ -29,6 +29,7 @@ jobs:
     outputs:
       should_publish: ${{ steps.version.outputs.should_publish }}
       tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
       prerelease: ${{ steps.version.outputs.prerelease }}
       latest: ${{ steps.version.outputs.latest }}
     steps:
@@ -75,6 +76,7 @@ jobs:
 
           {
             echo "tag=${tag}"
+            echo "version=${version}"
             echo "prerelease=${prerelease}"
             echo "latest=${latest}"
             echo "should_publish=${should_publish}"
@@ -139,11 +141,11 @@ jobs:
           provenance: false
           sbom: false
           build-args: |
-            VERSION=${{ needs.prepare.outputs.tag }}
+            VERSION=${{ needs.prepare.outputs.version }}
             COMMIT=${{ github.sha }}
             BUILD_TIME=${{ steps.meta.outputs.build_time }}
           labels: |
-            org.opencontainers.image.version=${{ needs.prepare.outputs.tag }}
+            org.opencontainers.image.version=${{ needs.prepare.outputs.version }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.created=${{ steps.meta.outputs.build_time }}
           cache-from: type=gha,scope=panel
@@ -159,11 +161,11 @@ jobs:
           provenance: false
           sbom: false
           build-args: |
-            VERSION=${{ needs.prepare.outputs.tag }}
+            VERSION=${{ needs.prepare.outputs.version }}
             COMMIT=${{ github.sha }}
             BUILD_TIME=${{ steps.meta.outputs.build_time }}
           labels: |
-            org.opencontainers.image.version=${{ needs.prepare.outputs.tag }}
+            org.opencontainers.image.version=${{ needs.prepare.outputs.version }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.created=${{ steps.meta.outputs.build_time }}
           cache-from: type=gha,scope=openvpn
@@ -193,7 +195,9 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release delete "$TAG" --yes --cleanup-tag
           fi
-          args=(--target "$GITHUB_SHA" --title "$TAG" --generate-notes)
+          changes="$(git log --pretty=format:'- %s' --no-merges -n 20)"
+          notes="$(printf '## 更新内容\n\n%s\n\n## 交付\n\n- 源代码：GitHub Release 页面自动提供 Source code (zip/tar.gz)\n- 容器镜像：ovpanel 与 ovpanel-openvpn 对应版本镜像\n' "$changes")"
+          args=(--target "$GITHUB_SHA" --title "$TAG" --notes "$notes")
           if [ "$PRERELEASE" = "true" ]; then
             args+=(--prerelease)
           fi

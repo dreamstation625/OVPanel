@@ -11,10 +11,10 @@ Go 提供 HTTP 服务并内嵌 Vue 3 前端，SQLite 持久化。
 - `panel`：面板 Web、内嵌前端与 SQLite 数据，唯一发布管理端口的容器。
 - `openvpn`：OpenVPN 与运行代理，不发布管理端口，不挂载 Docker Socket。
 
-面板前后端一体，运行期不需要 Node.js。面板没有网页自更新入口，升级通过宿主机
-Docker 命令完成。面板容器内的受限维护进程可以通过本机 Unix Socket 更新受管
-OpenVPN 容器；它单独持有 Docker Socket，面板 Web 进程不直接访问 Docker。
-初始化为一次性口令，无默认管理员密码。
+面板前后端一体，运行期不需要 Node.js。侧栏显示当前版本，并会检查 GitHub Release：
+有新版本时提示并展示更新说明，但网页不执行自更新；面板与 OpenVPN 的升级都按
+Release 说明在宿主机用 Docker 命令完成。面板容器内的受限维护进程单独持有
+Docker Socket，Web 进程不直接访问 Docker。初始化为一次性口令，无默认管理员密码。
 
 ## 部署方式
 
@@ -62,6 +62,10 @@ cp .env.example .env
 - `main` 的 `VERSION` 必须是正式版本，不能带预发布后缀。
 - `dev` 分支使用 `<version>-dev`，始终只对应一个 `dev` 标签和一份预发布
   Release；每次推送覆盖重建，不会堆积多个版本号。
+- 镜像内嵌的版本号来自 `VERSION`（例如 `0.0.1-dev`），Docker 标签仍按上表。
+- 每份 Release 都附带源代码归档（Source code zip/tar.gz），并由面板侧栏检查
+  新版本、展示该版本的更新说明。面板需要能访问 `api.github.com`；网络不通时
+  只提示检查失败，不影响其他功能。
 - 两个镜像都是 `linux/amd64` + `linux/arm64`：
   `dreamstation625/ovpanel`、`dreamstation625/ovpanel-openvpn`。
 - 工作流读取仓库环境 `DOCKERHUB` 的变量 `DOCKERHUB_USERNAME` 与保密值
@@ -99,6 +103,7 @@ internal/runtimeenv/容器数据面能力探测
 internal/secretbox/主密钥与私密材料加密
 internal/serverconfig/服务端配置校验、指令兼容清单与渲染
 internal/store/    SQLite 与迁移
+internal/updatecheck/ GitHub Release 版本检查
 internal/vpnruntime/控制包组装与共享控制目录下发
 web/               Vue 3 + Vue Router 源码，构建产物内嵌
 deploy/            Dockerfile、环境变量示例、宿主检查、运行手册
