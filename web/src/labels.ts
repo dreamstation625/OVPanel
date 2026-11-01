@@ -30,9 +30,9 @@ export function statusLabel(status: EffectiveStatus | 'active' | 'disabled'): st
     case 'profile_disabled':
       return '配置已停用'
     case 'certificate_missing':
-      return '证书已吊销或缺失'
+      return '证书已作废或缺失'
     case 'certificate_revoked':
-      return '证书已吊销'
+      return '证书已作废'
     case 'certificate_expired':
       return '证书已过期'
     case 'expired':
@@ -114,9 +114,9 @@ export function suggestUsername(): string {
 export function operationKindLabel(kind: string): string {
   switch (kind) {
     case 'backup':
-      return '加密备份'
+      return '备份'
     case 'restore':
-      return '数据恢复'
+      return '恢复'
     case 'openvpn_update':
       return 'OpenVPN 更新'
     default:

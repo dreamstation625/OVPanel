@@ -19,6 +19,7 @@ func TestDefaultsRender(t *testing.T) {
 		"verify-client-cert optional", "auth-user-pass-optional", "duplicate-cn",
 		"crl-verify /etc/openvpn/ovpanel/crl.pem",
 		"script-security 2", "client-connect /usr/local/bin/vpn-connect",
+		"push \"dhcp-option DNS 119.29.29.29\"",
 		"push \"block-ipv6\"", "keepalive 10 60",
 	} {
 		if !strings.Contains(text, want) {

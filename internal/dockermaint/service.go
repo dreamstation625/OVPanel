@@ -247,7 +247,7 @@ func (s *Service) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		s.refreshAvailability(r.Context())
 	}
 	if !s.isAvailable() {
-		s.writeError(w, http.StatusServiceUnavailable, "维护进程不可用："+s.reasonLocked())
+		s.writeError(w, http.StatusServiceUnavailable, "更新服务不可用："+s.reasonLocked())
 		return
 	}
 
@@ -325,7 +325,7 @@ func (s *Service) runUpdate(target, tag, backupID string, oldRaw json.RawMessage
 	}
 	s.mu.Unlock()
 
-	s.updatePhase("检查镜像", "拉取并校验目标镜像")
+	s.updatePhase("检查版本", "检查目标版本")
 	image, err := s.docker.inspectImage(ctx, target)
 	if err != nil {
 		// 目标不在本机时再拉取；已固定的本地镜像不依赖外网。
@@ -344,7 +344,7 @@ func (s *Service) runUpdate(target, tag, backupID string, oldRaw json.RawMessage
 		return
 	}
 
-	s.updatePhase("停止旧容器", "停止并删除旧 OpenVPN 容器")
+	s.updatePhase("停止当前版本", "停止当前 OpenVPN")
 	if err := s.docker.stopContainer(ctx, old.ID, 20); err != nil {
 		s.fail(ctx, "停止旧容器失败："+err.Error())
 		return
@@ -355,7 +355,7 @@ func (s *Service) runUpdate(target, tag, backupID string, oldRaw json.RawMessage
 		return
 	}
 
-	s.updatePhase("创建新容器", "使用原部署规格创建新容器")
+	s.updatePhase("启动新版本", "启动新版本 OpenVPN")
 	id, err := s.docker.createContainer(ctx, s.cfg.ContainerName, old, target)
 	if err != nil {
 		s.rollback(ctx, oldRaw, "创建新容器失败："+err.Error())
@@ -367,7 +367,7 @@ func (s *Service) runUpdate(target, tag, backupID string, oldRaw json.RawMessage
 		return
 	}
 
-	s.updatePhase("健康检查", "等待新容器健康并与代理就绪")
+	s.updatePhase("启动检查", "等待 OpenVPN 启动")
 	if err := s.waitHealthy(ctx, id, 120*time.Second); err != nil {
 		s.rollback(ctx, oldRaw, "新容器健康检查失败："+err.Error())
 		return
@@ -401,7 +401,7 @@ func validateImage(image imageInspect) error {
 	}
 	entrypoint := strings.Join(image.Config.Entrypoint, " ")
 	if !strings.Contains(entrypoint, "vpn-agent") {
-		return fmt.Errorf("镜像入口不是 OVPanel 运行代理：%q", entrypoint)
+		return fmt.Errorf("镜像不是有效的 OVPanel 更新版本：%q", entrypoint)
 	}
 	if role := image.Config.Labels["com.ovpanel.role"]; role != "" && role != "openvpn" {
 		return fmt.Errorf("镜像角色标签不是 openvpn：%q", role)
@@ -413,7 +413,7 @@ func validateImage(image imageInspect) error {
 }
 
 func (s *Service) rollback(ctx context.Context, oldRaw json.RawMessage, cause string) {
-	s.updatePhase("回退", "更新失败，恢复旧容器")
+	s.updatePhase("恢复上一版本", "更新失败，正在恢复上一版本")
 	var old inspectContainer
 	if err := json.Unmarshal(oldRaw, &old); err != nil {
 		s.fail(ctx, cause+"；解析旧容器信息失败："+err.Error())
@@ -441,7 +441,7 @@ func (s *Service) rollback(ctx context.Context, oldRaw json.RawMessage, cause st
 	s.mu.Lock()
 	if s.task != nil {
 		s.task.State = maintapi.TaskRolledBack
-		s.task.Phase = "已回退"
+		s.task.Phase = "已恢复上一版本"
 		s.task.NewContainerID = id
 		s.task.RolledBack = true
 		s.task.Error = cause
@@ -580,7 +580,7 @@ func (s *Service) resumeInterrupted(ctx context.Context) {
 						s.task.NewImage = task.TargetImage
 						s.task.NewContainerID = info.ID
 						s.task.FinishedAt = &now
-						s.task.Message = "维护进程重启后确认更新完成"
+						s.task.Message = "更新服务重启后确认更新完成"
 						s.saveTaskLocked()
 					}
 					s.mu.Unlock()
@@ -588,7 +588,7 @@ func (s *Service) resumeInterrupted(ctx context.Context) {
 				}
 			}
 		}
-		s.rollback(runCtx, oldRaw, "维护进程重启时任务未完成")
+		s.rollback(runCtx, oldRaw, "更新服务重启时任务未完成")
 	}()
 }
 

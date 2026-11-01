@@ -101,14 +101,14 @@ func (s *Store) Load() error {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("读取用量账本: %w", err)
+		return fmt.Errorf("读取用量记录: %w", err)
 	}
 	var state stateFile
 	if err := json.Unmarshal(data, &state); err != nil {
-		return fmt.Errorf("解析用量账本: %w", err)
+		return fmt.Errorf("解析用量记录: %w", err)
 	}
 	if state.SchemaVersion != stateSchema {
-		return fmt.Errorf("用量账本版本不兼容：%d", state.SchemaVersion)
+		return fmt.Errorf("用量记录版本不兼容：%d", state.SchemaVersion)
 	}
 	s.seq = state.Seq
 	s.profiles = state.Profiles
@@ -139,10 +139,10 @@ func (s *Store) Save() error {
 func (s *Store) Import(data []byte) error {
 	var state stateFile
 	if err := json.Unmarshal(data, &state); err != nil {
-		return fmt.Errorf("解析恢复账本: %w", err)
+		return fmt.Errorf("解析备份的用量记录: %w", err)
 	}
 	if state.SchemaVersion != stateSchema {
-		return fmt.Errorf("恢复账本版本不兼容：%d", state.SchemaVersion)
+		return fmt.Errorf("备份的用量记录版本不兼容：%d", state.SchemaVersion)
 	}
 	if state.Profiles == nil {
 		state.Profiles = map[string]*profileState{}
@@ -194,12 +194,12 @@ func (s *Store) writeCheckpointLocked() error {
 		UpdatedAt:     s.now().Format(time.RFC3339),
 	}, "", "  ")
 	if err != nil {
-		return fmt.Errorf("编码用量检查点: %w", err)
+		return fmt.Errorf("编码用量记录: %w", err)
 	}
 	path := filepath.Join(s.controlDir, telemetry.CheckpointFile)
 	tmp, err := os.CreateTemp(s.controlDir, ".checkpoint-*.tmp")
 	if err != nil {
-		return fmt.Errorf("创建用量检查点临时文件: %w", err)
+		return fmt.Errorf("创建用量记录临时文件: %w", err)
 	}
 	name := tmp.Name()
 	defer os.Remove(name)
@@ -209,20 +209,20 @@ func (s *Store) writeCheckpointLocked() error {
 	}
 	if _, err := tmp.Write(payload); err != nil {
 		tmp.Close()
-		return fmt.Errorf("写入用量检查点: %w", err)
+		return fmt.Errorf("写入用量记录: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
 	if err := os.Rename(name, path); err != nil {
-		return fmt.Errorf("替换用量检查点: %w", err)
+		return fmt.Errorf("更新用量记录: %w", err)
 	}
 	return os.Chmod(path, 0o644)
 }
 
 func (s *Store) saveLocked() error {
 	if err := os.MkdirAll(filepath.Dir(s.statePath), 0o700); err != nil {
-		return fmt.Errorf("创建用量账本目录: %w", err)
+		return fmt.Errorf("创建用量记录目录: %w", err)
 	}
 	payload, err := json.MarshalIndent(stateFile{
 		SchemaVersion: stateSchema,
@@ -231,11 +231,11 @@ func (s *Store) saveLocked() error {
 		UpdatedAt:     s.now().Format(time.RFC3339),
 	}, "", "  ")
 	if err != nil {
-		return fmt.Errorf("编码用量账本: %w", err)
+		return fmt.Errorf("编码用量记录: %w", err)
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(s.statePath), ".usage-*.tmp")
 	if err != nil {
-		return fmt.Errorf("创建用量账本临时文件: %w", err)
+		return fmt.Errorf("创建用量记录临时文件: %w", err)
 	}
 	name := tmp.Name()
 	defer os.Remove(name)
@@ -245,7 +245,7 @@ func (s *Store) saveLocked() error {
 	}
 	if _, err := tmp.Write(payload); err != nil {
 		tmp.Close()
-		return fmt.Errorf("写入用量账本: %w", err)
+		return fmt.Errorf("写入用量记录: %w", err)
 	}
 	if err := tmp.Sync(); err != nil {
 		tmp.Close()
@@ -255,7 +255,7 @@ func (s *Store) saveLocked() error {
 		return err
 	}
 	if err := os.Rename(name, s.statePath); err != nil {
-		return fmt.Errorf("替换用量账本: %w", err)
+		return fmt.Errorf("更新用量记录: %w", err)
 	}
 	return os.Chmod(s.statePath, 0o600)
 }

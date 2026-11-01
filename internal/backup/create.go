@@ -98,7 +98,7 @@ func (s *Service) createLocked(ctx context.Context, kind, note, passphrase strin
 	}
 
 	// 请求代理写出最新账本检查点；代理离线时保留现有检查点并标注时间。
-	s.updateOperation(ctx, opID, 30, "读取运行代理用量检查点")
+	s.updateOperation(ctx, opID, 30, "读取用量记录")
 	checkpointAt := s.requestCheckpoint(ctx, 3*time.Second)
 	agentPath := filepath.Join(s.controlDir, telemetry.CheckpointFile)
 	agentMeta := agentCheckpointMeta{}

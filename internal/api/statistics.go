@@ -238,7 +238,7 @@ func (s *Server) handleDisconnect(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	snapshot, present := s.liveSnapshot()
 	if !present {
-		writeError(w, r, http.StatusConflict, CodeConflict, "运行代理未提供实时状态")
+		writeError(w, r, http.StatusConflict, CodeConflict, "暂时无法获取 VPN 实时状态")
 		return
 	}
 	var target *telemetry.LiveSession

@@ -20,7 +20,7 @@ func TestServerCommandRequiresControlBundle(t *testing.T) {
 	}
 
 	start := doJSON(t, h, http.MethodPost, "/api/server/command", "127.0.0.1:5000", command("start"), cookies...)
-	if start.Code != http.StatusConflict || !strings.Contains(start.Body.String(), "控制包尚未下发") {
+	if start.Code != http.StatusConflict || !strings.Contains(start.Body.String(), "配置尚未应用") {
 		t.Fatalf("缺少控制包时应拒绝启动：%d %s", start.Code, start.Body.String())
 	}
 

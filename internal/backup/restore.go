@@ -160,7 +160,7 @@ func (s *Service) PreviewRestore(ctx context.Context, reader io.Reader, passphra
 
 func (s *Service) restoreWarnings(ctx context.Context, manifest Manifest, schema, currentSchema int, stagingDir string) ([]string, error) {
 	warnings := []string{
-		"恢复会把面板、证书、额度和统计回退到备份时间点；备份之后的修改将丢失。",
+		"恢复会把面板、证书、额度和统计退回到备份时间点，备份之后的修改将丢失。",
 		"恢复会断开全部 VPN 连接，并要求重新登录面板。",
 	}
 	if schema < currentSchema {
@@ -171,33 +171,33 @@ func (s *Service) restoreWarnings(ctx context.Context, manifest Manifest, schema
 		return nil, err
 	}
 	if ok && manifest.AdminUpdatedAt != nil && manifest.AdminUpdatedAt.Before(admin.UpdatedAt) {
-		warnings = append(warnings, "管理员密码将回退到备份时间点，之后修改的密码失效。")
+		warnings = append(warnings, "管理员密码将恢复到备份时间点，之后修改的密码会失效。")
 	}
 	_, revoked, _, err := s.store.CertificateStats(ctx, s.now())
 	if err != nil {
 		return nil, err
 	}
 	if manifest.RevokedCertificates < revoked {
-		warnings = append(warnings, "部分证书吊销记录将回退，备份之后新增的吊销可能失效，请恢复后复核。")
+		warnings = append(warnings, "部分证书作废记录将被撤销，备份后新增的作废可能失效，请恢复后检查。")
 	}
 	quotaResets, err := s.store.QuotaResetCount(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if manifest.QuotaResets < quotaResets {
-		warnings = append(warnings, "部分额度重置记录将回退，恢复后请复核用量与额度。")
+		warnings = append(warnings, "部分额度重置记录将被撤销，恢复后请检查用量和额度。")
 	}
 	if manifest.AdminUpdatedAt == nil {
-		warnings = append(warnings, "备份未记录管理员密码更新时间，无法比较密码回退范围。")
+		warnings = append(warnings, "备份未记录管理员密码的修改时间，无法判断密码是否会变化。")
 	}
 	if !manifest.AgentPresent {
-		warnings = append(warnings, "备份未包含运行代理用量检查点，恢复后用量与额度可能滞后。")
+		warnings = append(warnings, "备份未包含用量记录，恢复后用量和额度可能不准确。")
 	}
 	if manifest.MasterKeyFingerprint != "" && manifest.MasterKeyFingerprint != s.masterKey.Fingerprint() {
-		warnings = append(warnings, "备份使用不同的主密钥；恢复后将切换为备份中的主密钥。")
+		warnings = append(warnings, "备份使用了不同的加密密钥，恢复后将切换为备份中的密钥。")
 	}
 	if _, err := os.Stat(filepath.Join(stagingDir, "master.key")); err != nil {
-		warnings = append(warnings, "备份包不含主密钥；恢复主机必须使用原主密钥，否则证书材料无法解密。")
+		warnings = append(warnings, "备份包不含加密密钥；恢复时必须使用原来的密钥，否则证书将无法解密。")
 	}
 	return warnings, nil
 }
@@ -249,10 +249,10 @@ func (s *Service) ExecuteRestore(ctx context.Context, token string) (RestoreResu
 		hasAgentUsage = true
 	}
 	if hasAgentUsage && !agentAvailable {
-		return fail(errors.New("运行代理不可用，无法导入备份中的用量账本；未执行恢复"))
+		return fail(errors.New("VPN 服务不可用，无法导入备份中的用量记录；未执行恢复"))
 	}
 
-	s.updateOperation(ctx, opID, 25, "停止 VPN 并导入用量检查点")
+	s.updateOperation(ctx, opID, 25, "停止 VPN 并导入用量记录")
 	if agentAvailable {
 		if err := s.runtime.Command("stop"); err != nil {
 			return fail(fmt.Errorf("停止 VPN 失败: %w", err))
@@ -263,10 +263,10 @@ func (s *Service) ExecuteRestore(ctx context.Context, token string) (RestoreResu
 			return stopped || (hasRunning && !running)
 		}) {
 			_ = s.runtime.Command("start")
-			return fail(errors.New("运行代理未确认停止，未执行恢复"))
+			return fail(errors.New("VPN 服务未确认停止，未执行恢复"))
 		}
 	} else {
-		warnings = append(warnings, "运行代理当前不可用，未执行停止与账本导入。")
+		warnings = append(warnings, "VPN 服务当前不可用，未停止 VPN，也未导入用量记录。")
 	}
 
 	if hasAgentUsage && agentAvailable {
@@ -275,7 +275,7 @@ func (s *Service) ExecuteRestore(ctx context.Context, token string) (RestoreResu
 			return fail(err)
 		}
 	} else if !hasAgentUsage {
-		warnings = append(warnings, "备份未包含代理账本，恢复后沿用当前用量。")
+		warnings = append(warnings, "备份未包含用量记录，恢复后沿用当前用量。")
 	}
 
 	s.updateOperation(ctx, opID, 50, "替换面板数据库")
@@ -300,7 +300,7 @@ func (s *Service) ExecuteRestore(ctx context.Context, token string) (RestoreResu
 		s.log.Warn("register pre-restore backup after restore failed", "error", err)
 	}
 
-	s.updateOperation(ctx, opID, 75, "切换主密钥并重新应用配置")
+	s.updateOperation(ctx, opID, 75, "切换加密密钥并重新应用配置")
 	if err := s.restoreMasterKey(staging.MasterKey, &warnings); err != nil {
 		return fail(err)
 	}
@@ -337,11 +337,11 @@ func (s *Service) ExecuteRestore(ctx context.Context, token string) (RestoreResu
 
 func (s *Service) importAgentUsage(ctx context.Context, path string) error {
 	if s.runtime == nil {
-		return errors.New("运行控制未配置，无法导入账本")
+		return errors.New("VPN 服务未配置，无法导入用量记录")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("读取备份账本: %w", err)
+		return fmt.Errorf("读取备份中的用量记录: %w", err)
 	}
 	if err := os.MkdirAll(s.controlDir, 0o700); err != nil {
 		return fmt.Errorf("创建控制目录: %w", err)
@@ -369,7 +369,7 @@ func (s *Service) importAgentUsage(ctx context.Context, path string) error {
 	}
 	started := s.now()
 	if err := s.runtime.Command("restore-usage"); err != nil {
-		return fmt.Errorf("导入代理账本命令失败: %w", err)
+		return fmt.Errorf("导入用量记录失败: %w", err)
 	}
 	if !s.waitAgent(20*time.Second, func(status map[string]any) bool {
 		raw, ok := status["usageRestoredAt"].(string)
@@ -382,7 +382,7 @@ func (s *Service) importAgentUsage(ctx context.Context, path string) error {
 		}
 		return !restored.Before(started.Add(-time.Second))
 	}) {
-		return errors.New("运行代理未确认导入用量账本")
+		return errors.New("VPN 服务未确认导入用量记录")
 	}
 	return nil
 }
@@ -390,15 +390,15 @@ func (s *Service) importAgentUsage(ctx context.Context, path string) error {
 func (s *Service) restoreMasterKey(path string, warnings *[]string) error {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		*warnings = append(*warnings, "备份不含主密钥，继续使用当前主密钥。")
+		*warnings = append(*warnings, "备份不含加密密钥，将继续使用当前密钥。")
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("读取备份主密钥: %w", err)
+		return fmt.Errorf("读取备份加密密钥: %w", err)
 	}
 	key, err := secretbox.Parse(string(data))
 	if err != nil {
-		return fmt.Errorf("解析备份主密钥: %w", err)
+		return fmt.Errorf("解析备份加密密钥: %w", err)
 	}
 	if key.Fingerprint() == s.masterKey.Fingerprint() {
 		return nil
@@ -408,16 +408,16 @@ func (s *Service) restoreMasterKey(path string, warnings *[]string) error {
 	}
 	tmp := s.masterKeyPath + ".restore.tmp"
 	if err := os.WriteFile(tmp, []byte(key.Encode()+"\n"), 0o600); err != nil {
-		return fmt.Errorf("写入恢复主密钥: %w", err)
+		return fmt.Errorf("写入恢复加密密钥: %w", err)
 	}
 	if err := os.Rename(tmp, s.masterKeyPath); err != nil {
-		return fmt.Errorf("替换主密钥文件: %w", err)
+		return fmt.Errorf("替换加密密钥文件: %w", err)
 	}
 	s.masterKey = key
 	s.pki.SetKey(key)
 	s.accounts.SetKey(key)
 	if s.masterKeyEnv {
-		*warnings = append(*warnings, "当前通过 OVPANEL_MASTER_KEY 注入主密钥；请把环境变量更新为备份主密钥，否则重启会再次不匹配。")
+		*warnings = append(*warnings, "当前通过 OVPANEL_MASTER_KEY 注入加密密钥；请把环境变量更新为备份中的密钥，否则重启后仍会不匹配。")
 	}
 	return nil
 }
@@ -513,13 +513,13 @@ func verifyManifest(stagingDir string, manifest Manifest) error {
 		path := filepath.Join(stagingDir, entry.Name)
 		sum, size, err := hashFile(path)
 		if err != nil {
-			return fmt.Errorf("校验备份文件 %s: %w", entry.Name, err)
+			return fmt.Errorf("检查备份文件 %s 时出错: %w", entry.Name, err)
 		}
 		if size != entry.Size {
 			return fmt.Errorf("备份文件 %s 大小与清单不一致", entry.Name)
 		}
 		if !strings.EqualFold(sum, entry.SHA256) {
-			return fmt.Errorf("备份文件 %s 校验和不一致", entry.Name)
+			return fmt.Errorf("备份文件 %s 内容不一致", entry.Name)
 		}
 	}
 	if _, err := os.Stat(filepath.Join(stagingDir, "panel.db")); err != nil {

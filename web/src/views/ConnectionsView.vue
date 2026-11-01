@@ -33,7 +33,7 @@ const summary = computed(() => {
     return []
   }
   return [
-    { label: '在线连接', value: String(data.online), hint: data.agentPresent ? '运行代理实时数据' : '运行代理未提供状态' },
+    { label: '在线连接', value: String(data.online), hint: data.agentPresent ? '实时统计' : '实时数据暂不可用' },
     { label: '上行速率', value: formatRate(data.upRate), hint: '全部连接合计' },
     { label: '下行速率', value: formatRate(data.downRate), hint: '全部连接合计' },
   ]
@@ -131,9 +131,9 @@ function endReasonLabel(reason: string) {
     case 'quota_exhausted':
       return '流量额度用尽'
     case 'policy_revoked':
-      return '配置或权限已收紧'
+      return '配置或权限已变更'
     case 'certificate_changed':
-      return '证书已变更'
+      return '证书已更换'
     case 'certificate_expired':
       return '证书已过期'
     case 'profile_expired':
@@ -141,14 +141,14 @@ function endReasonLabel(reason: string) {
     case 'admin_disconnect':
       return '管理员断开'
     case 'address_reused':
-      return '地址复用'
+      return '地址被重新分配'
     case 'runtime_stop':
-      return '运行代理停止'
+      return 'VPN 服务停止'
     case 'proxy_restart':
     case '代理重启或离线':
-      return '代理重启或离线'
+      return 'VPN 服务重启或离线'
     case '未收到结束事件':
-      return '未收到结束事件'
+      return '未正常结束'
     default:
       return reason || '—'
   }
@@ -161,9 +161,9 @@ function endReasonLabel(reason: string) {
       <div>
         <span class="eyebrow"><Radio :size="14" /> 在线连接</span>
         <div class="title-row">
-          <h1>连接与历史</h1>
+          <h1>连接管理</h1>
           <span v-if="online" class="chip" :class="online.agentPresent ? 'chip--ok' : 'chip--warn'">
-            <i class="dot" />{{ online.agentPresent ? '运行代理在线' : '运行代理无状态' }}
+            <i class="dot" />{{ online.agentPresent ? '实时数据正常' : '实时数据暂不可用' }}
           </span>
         </div>
       </div>
@@ -256,14 +256,14 @@ function endReasonLabel(reason: string) {
                     断开
                   </NButton>
                 </template>
-                仅断开这一条连接，凭据仍可重新连接。确认继续？
+                仅断开这一条连接，该用户仍可重新连接。确认继续？
               </NPopconfirm>
             </div>
           </div>
         </div>
         <div v-else class="surface-empty">
           <strong>当前没有在线连接</strong>
-          <span>客户端连上后会出现在这里；运行代理不可用时不会伪造在线状态。</span>
+          <span>客户端连接后会显示在这里。</span>
         </div>
       </section>
     </template>
@@ -305,14 +305,14 @@ function endReasonLabel(reason: string) {
           </div>
           <div class="cell cell-reason">
             <span>{{ endReasonLabel(item.endReason) }}</span>
-            <span v-if="!item.disconnectedAt" class="muted">仍在线或未收到结束事件</span>
+            <span v-if="!item.disconnectedAt" class="muted">仍在线或没有正常结束</span>
             <span v-else class="muted">{{ formatDate(item.disconnectedAt) }}</span>
           </div>
         </div>
       </div>
       <div v-else class="surface-empty">
         <strong>还没有连接历史</strong>
-        <span>运行代理会把连接开始、用量与结束事件补传到面板。</span>
+        <span>连接开始、流量和结束记录会自动保存在这里。</span>
       </div>
     </section>
   </div>

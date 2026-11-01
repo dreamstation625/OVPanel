@@ -60,14 +60,19 @@ const facts = computed(() => {
     return []
   }
   return [
-    { label: '版本', value: info.version },
-    { label: '提交', value: info.commit === 'none' ? 'none' : info.commit.slice(0, 7), code: true },
-    { label: '构建时间', value: formatDate(info.buildTime) },
-    { label: 'Go 版本', value: info.goVersion },
-    { label: '数据库', value: `SQLite · schema v${info.schemaVersion}` },
-    { label: '直连 HTTPS', value: info.tlsEnabled ? '已启用' : '未启用' },
-    { label: '数据存储', value: info.dataStore },
+    { label: '版本', value: info.version === 'dev' ? '开发版' : info.version },
+    { label: '构建时间', value: info.buildTime === 'unknown' ? '未知' : formatDate(info.buildTime) },
+    { label: '数据存储', value: info.dataStore === 'sqlite' ? '本地数据库' : info.dataStore },
+    { label: 'HTTPS', value: info.tlsEnabled ? '已启用' : '未启用' },
   ]
+})
+
+const panelVersionLabel = computed(() => {
+  const version = maintenance.value?.panelVersion || system.value?.version
+  if (!version || version === 'none') {
+    return '—'
+  }
+  return version === 'dev' ? '开发版' : version
 })
 
 const taskRunning = computed(() => {
@@ -87,7 +92,7 @@ const taskStateLabel = computed(() => {
     case 'failed':
       return '失败'
     case 'rolled_back':
-      return '已回退'
+      return '已恢复上一版本'
     default:
       return '无任务'
   }
@@ -121,7 +126,7 @@ function startUpdate() {
   maintenanceSuccess.value = ''
   const tag = targetTag.value.trim()
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(tag)) {
-    maintenanceError.value = '目标版本标签需为字母、数字、点、下划线或连字符'
+    maintenanceError.value = '目标版本只能包含字母、数字、点、下划线或连字符'
     return
   }
   prompt.value = { show: true, loading: false, error: '' }
@@ -134,7 +139,7 @@ async function confirmUpdate(password: string) {
   try {
     await api.updateOpenVPN(password, targetTag.value.trim())
     prompt.value.show = false
-    maintenanceSuccess.value = '更新任务已启动；升级前备份已创建。'
+    maintenanceSuccess.value = '更新已开始，更新前的备份已创建。'
     await refreshMaintenance()
   } catch (err) {
     if (err instanceof ApiError && (err.code === 'reauth_failed' || err.code === 'rate_limited')) {
@@ -199,7 +204,7 @@ async function changePassword() {
   passwordBusy.value = true
   try {
     await api.changeAdminPassword(currentPassword.value, newPassword.value)
-    passwordSuccess.value = '密码已更新，全部会话已失效，即将返回登录页。'
+    passwordSuccess.value = '密码已更新，需要重新登录，即将返回登录页。'
     currentPassword.value = ''
     newPassword.value = ''
     confirmPassword.value = ''
@@ -228,7 +233,7 @@ async function saveExportSettings() {
       port: exportPort.value,
       proto: exportProto.value,
     })
-    exportSuccess.value = '导出连接设置已保存。'
+    exportSuccess.value = 'VPN 连接地址已保存。'
   } catch (err) {
     exportError.value = errorMessage(err)
   } finally {
@@ -285,11 +290,11 @@ onBeforeUnmount(stopPoll)
     <div class="settings-grid">
       <section class="surface">
         <header class="surface-head">
-          <h2><Network :size="17" /> VPN 导出设置</h2>
+          <h2><Network :size="17" /> VPN 连接地址</h2>
           <span class="surface-meta">{{ exportSettings?.configured ? '已配置' : '未配置' }}</span>
         </header>
         <p class="section-description">
-          生成的 .ovpn 会写入这里的连接地址。修改地址不会更换 tls-crypt 密钥。
+          下载的 .ovpn 会使用这里的地址和端口。修改地址不会更换加密密钥。
         </p>
         <NAlert v-if="exportSettings && !exportSettings.configured" type="info" :bordered="false" class="stack-gap">
           下载客户端配置前需要先填写 VPN 地址与端口。
@@ -313,26 +318,26 @@ onBeforeUnmount(stopPoll)
             <NSelect v-model:value="exportProto" :options="protoOptions" />
           </NFormItem>
         </NForm>
-        <NButton type="primary" :loading="exportBusy" @click="saveExportSettings">保存连接设置</NButton>
+        <NButton type="primary" :loading="exportBusy" @click="saveExportSettings">保存连接地址</NButton>
       </section>
 
       <section class="surface">
         <header class="surface-head">
-          <h2><Database :size="17" /> 证书与 PKI</h2>
+          <h2><Database :size="17" /> 证书</h2>
         </header>
         <div v-if="pki" class="pki-counts">
-          <div><strong>{{ pki.activeCertificates }}</strong><span>生效证书</span></div>
-          <div><strong>{{ pki.revokedCertificates }}</strong><span>已吊销</span></div>
+          <div><strong>{{ pki.activeCertificates }}</strong><span>有效证书</span></div>
+          <div><strong>{{ pki.revokedCertificates }}</strong><span>已作废</span></div>
           <div><strong>{{ pki.expiredCertificates }}</strong><span>已过期</span></div>
         </div>
         <template v-if="pki?.ca">
           <dl class="fact-list">
             <div>
-              <dt>CA 主体</dt>
+              <dt>颁发机构</dt>
               <dd>{{ pki.ca.subject }}</dd>
             </div>
             <div>
-              <dt>序列号</dt>
+              <dt>证书编号</dt>
               <dd class="is-code">{{ pki.ca.serial }}</dd>
             </div>
             <div>
@@ -341,7 +346,7 @@ onBeforeUnmount(stopPoll)
             </div>
           </dl>
           <div class="fingerprint">
-            <span>CA 指纹</span>
+            <span>证书指纹</span>
             <code tabindex="0">{{ pki.ca.fingerprint }}</code>
             <NButton size="tiny" @click="copyFingerprint">
               <template #icon><Copy :size="13" /></template>
@@ -350,7 +355,7 @@ onBeforeUnmount(stopPoll)
           </div>
         </template>
         <NAlert v-else-if="pki" type="info" :bordered="false">
-          尚未生成 CA。创建首份证书配置或导出仅密码配置时会生成。
+          还没有证书。创建首个证书配置或导出仅密码配置时会自动创建。
         </NAlert>
       </section>
 
@@ -358,7 +363,7 @@ onBeforeUnmount(stopPoll)
         <header class="surface-head">
           <h2><KeyRound :size="17" /> 管理员密码</h2>
         </header>
-        <p class="section-description">修改后所有管理员会话立即失效，需要重新登录。</p>
+        <p class="section-description">修改后需要重新登录，其他设备上的登录也会失效。</p>
         <NAlert v-if="passwordError" type="error" :bordered="false" class="stack-gap">{{ passwordError }}</NAlert>
         <NAlert v-if="passwordSuccess" type="success" :bordered="false" class="stack-gap">{{ passwordSuccess }}</NAlert>
         <NForm>
@@ -401,7 +406,7 @@ onBeforeUnmount(stopPoll)
         <dl v-if="system" class="fact-list">
           <div v-for="fact in facts" :key="fact.label">
             <dt>{{ fact.label }}</dt>
-            <dd :class="{ 'is-code': fact.code }">{{ fact.value }}</dd>
+            <dd>{{ fact.value }}</dd>
           </div>
         </dl>
         <div v-else class="surface-empty">正在读取…</div>
@@ -409,9 +414,9 @@ onBeforeUnmount(stopPoll)
 
       <section class="surface span-2">
         <header class="surface-head">
-          <h2><Wrench :size="17" /> OpenVPN 维护</h2>
+          <h2><Wrench :size="17" /> OpenVPN 更新</h2>
           <span class="surface-meta">
-            {{ maintenance?.available ? '维护进程可用' : maintenance ? '维护进程不可用' : '读取中' }}
+            {{ maintenance?.available ? '可以更新' : maintenance ? '暂时无法更新' : '读取中' }}
           </span>
         </header>
 
@@ -425,31 +430,27 @@ onBeforeUnmount(stopPoll)
           {{ maintenance?.imageSwapWarning || '更新 OpenVPN 会中断全部 VPN 连接。' }}
         </NAlert>
         <NAlert v-if="maintenance && !maintenance.available" type="info" :bordered="false" class="stack-gap">
-          维护进程不可用，当前无法更新 OpenVPN。请检查 Docker Socket、维护进程和容器权限。
+          当前无法更新 OpenVPN。请检查更新服务是否正常运行，或联系服务器管理员。
           <details class="maintenance-diagnostic">
-            <summary>诊断信息</summary>
+            <summary>详细信息</summary>
             <code>{{ maintenance.reason }}</code>
           </details>
         </NAlert>
 
         <dl class="fact-list maintenance-facts">
           <div>
-            <dt>当前镜像</dt>
-            <dd class="is-code">{{ maintenance?.container?.image || '—' }}</dd>
-          </div>
-          <div>
-            <dt>版本 / 健康</dt>
+            <dt>当前版本</dt>
             <dd>
-              {{ maintenance?.container?.version || '—' }} ·
+              {{ maintenance?.container?.version || maintenance?.container?.image || '—' }} ·
               {{ maintenance?.container?.health || (maintenance?.container?.running ? '运行中' : '未运行') }}
             </dd>
           </div>
           <div>
-            <dt>部署固定值</dt>
-            <dd class="is-code">{{ maintenance?.pinImage || '尚未由网页更新' }}</dd>
+            <dt>已应用版本</dt>
+            <dd class="is-code">{{ maintenance?.pinImage || '尚未通过网页更新' }}</dd>
           </div>
           <div>
-            <dt>允许仓库</dt>
+            <dt>更新来源</dt>
             <dd class="is-code">{{ maintenance?.allowedRepository || '—' }}</dd>
           </div>
         </dl>
@@ -457,7 +458,7 @@ onBeforeUnmount(stopPoll)
         <div class="update-row">
           <NInput
             v-model:value="targetTag"
-            placeholder="目标标签，例如 0.0.2 或 dev"
+            placeholder="目标版本，例如 0.0.2 或 dev"
             maxlength="128"
             :disabled="taskRunning || !maintenance?.available"
           />
@@ -471,7 +472,7 @@ onBeforeUnmount(stopPoll)
           </NButton>
         </div>
         <p class="section-description">
-          只允许更新受管 OpenVPN 容器到允许仓库的合法标签；升级前会自动创建加密备份。不会提供面板自更新入口。
+          输入要切换到的 OpenVPN 版本。更新前会自动备份，更新过程中 VPN 会短暂中断。面板本身不能在网页内自动更新。
         </p>
 
         <div v-if="maintenance?.task" class="maint-task">
@@ -485,22 +486,23 @@ onBeforeUnmount(stopPoll)
           <p v-if="maintenance.task.error" class="maint-error">{{ maintenance.task.error }}</p>
           <span class="muted">
             {{ maintenance.task.oldImage }} → {{ maintenance.task.newImage || maintenance.task.targetImage }}
-            <template v-if="maintenance.task.backupId"> · 升级前备份 {{ maintenance.task.backupId.slice(0, 8) }}</template>
+            <template v-if="maintenance.task.backupId"> · 更新前备份 {{ maintenance.task.backupId.slice(0, 8) }}</template>
           </span>
         </div>
 
         <div class="panel-upgrade">
-          <strong>面板手工升级（不会自动执行）</strong>
+          <strong>面板升级</strong>
+          <p class="section-description">面板不能在网页内自动更新，请在服务器上按以下步骤操作。</p>
           <ol>
             <li v-for="step in maintenance?.panelManualSteps || []" :key="step">{{ step }}</li>
           </ol>
-          <span class="muted">当前面板版本 {{ maintenance?.panelVersion || system?.version || '—' }}</span>
+          <span class="muted">当前面板版本 {{ panelVersionLabel }}</span>
         </div>
       </section>
 
       <section class="surface span-2">
         <header class="surface-head">
-          <h2>最近任务</h2>
+          <h2>最近操作</h2>
           <span class="surface-meta">{{ operations.length }} 条</span>
         </header>
         <ul v-if="operations.length" class="operation-list">
@@ -515,14 +517,14 @@ onBeforeUnmount(stopPoll)
             </div>
           </li>
         </ul>
-        <div v-else class="surface-empty">暂无任务记录</div>
+        <div v-else class="surface-empty">暂无操作记录</div>
       </section>
     </div>
 
     <PasswordPromptModal
       v-model:show="prompt.show"
       title="更新 OpenVPN"
-      :description="`将拉取并切换到 ${targetTag || '目标版本'}；会先创建升级前备份，随后中断全部 VPN 连接。`"
+      :description="`将切换到 ${targetTag || '目标版本'}。更新前会自动备份，随后所有 VPN 连接会短暂中断。`"
       action-label="开始更新"
       :loading="prompt.loading"
       :error="prompt.error"

@@ -74,8 +74,8 @@ async function submit() {
 
       <div class="auth-heading">
         <span class="eyebrow"><ShieldCheck :size="14" /> 创建管理员</span>
-        <h1 id="setup-title">设置面板的唯一管理员</h1>
-        <p>初始化成功后，这个入口会永久关闭。密码只保存为哈希，无法找回明文。</p>
+        <h1 id="setup-title">设置管理员账号</h1>
+        <p>初始化成功后，这个入口会关闭。密码不会以明文保存，也无法找回。</p>
       </div>
 
       <NAlert v-if="error" type="error" :bordered="false" class="stack-gap">{{ error }}</NAlert>

@@ -113,7 +113,7 @@ async function submit() {
       <div class="profile-switch">
         <div>
           <strong>同时创建首份配置</strong>
-          <span>创建后直接得到可下载的客户端配置。</span>
+          <span>创建后即可下载客户端配置文件。</span>
         </div>
         <NSwitch v-model:value="withProfile" aria-label="同时创建首份配置" />
       </div>

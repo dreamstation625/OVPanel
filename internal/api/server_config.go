@@ -56,11 +56,11 @@ func (s *Server) serverConfigDTO(r *http.Request, revision *store.ServerConfigRe
 	}
 	var config serverconfig.Config
 	if err := json.Unmarshal([]byte(revision.ConfigJSON), &config); err != nil {
-		return nil, fmt.Errorf("解析服务端配置修订 %d: %w", revision.Revision, err)
+		return nil, fmt.Errorf("解析服务端配置版本 %d: %w", revision.Revision, err)
 	}
 	prepared, err := serverconfig.Prepare(config)
 	if err != nil {
-		return nil, fmt.Errorf("校验服务端配置修订 %d: %w", revision.Revision, err)
+		return nil, fmt.Errorf("检查服务端配置版本 %d: %w", revision.Revision, err)
 	}
 	rendered, hash, err := serverconfig.Render(prepared)
 	if err != nil {
@@ -174,7 +174,7 @@ func (s *Server) handleApplyServerConfig(w http.ResponseWriter, r *http.Request)
 		}
 		result = runtimeResultMap(applied)
 	default:
-		writeError(w, r, http.StatusConflict, CodeConflict, "请先保存服务端配置草稿")
+		writeError(w, r, http.StatusConflict, CodeConflict, "请先保存服务端配置")
 		return
 	}
 
@@ -200,7 +200,7 @@ func (s *Server) handleServerCommand(w http.ResponseWriter, r *http.Request) {
 	// 代理没有控制包时不会启动 OpenVPN，却仍按“已启动”记录日志；
 	// 这里先拦住，避免页面下发一条不会生效的命令。
 	if (req.Action == "start" || req.Action == "restart") && !s.runtime.BundlePresent() {
-		writeError(w, r, http.StatusConflict, CodeConflict, "控制包尚未下发，请先保存并应用服务端配置")
+		writeError(w, r, http.StatusConflict, CodeConflict, "配置尚未应用，请先保存并应用服务端配置")
 		return
 	}
 	if err := s.runtime.Command(req.Action); err != nil {

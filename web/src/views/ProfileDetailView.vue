@@ -82,7 +82,7 @@ const limits = reactive({
 const limitsBusy = ref(false)
 const routeOptions = [
   { label: '继承服务端', value: 'inherit' },
-  { label: '仅访问内网', value: 'split' },
+  { label: '仅内网流量经过 VPN', value: 'split' },
   { label: '全部 IPv4 流量经过 VPN', value: 'global' },
 ]
 const accessOptions = [
@@ -161,7 +161,7 @@ function exportProfile() {
   const id = profile.value.id
   openPrompt(
     '下载客户端配置',
-    '文件包含客户端私钥与 tls-crypt 密钥，请通过安全方式交给使用者，不要再次公开传输。',
+    '文件包含客户端私钥和加密密钥，请通过安全方式交给使用者，不要公开转发。',
     '下载',
     async (password) => {
       const result = await api.exportProfile(id, password)
@@ -194,13 +194,13 @@ function rotateCertificate() {
   }
   const id = profile.value.id
   openPrompt(
-    '轮换客户端证书',
-    '旧证书会立即吊销，所有使用旧配置的设备都需要重新下载 .ovpn。',
-    '轮换证书',
+    '更换客户端证书',
+    '旧证书会立即失效，所有使用旧配置的设备都需要重新下载 .ovpn。',
+    '更换证书',
     async (password) => {
       const result = await api.rotateCertificate(id, password)
       profile.value = result.profile
-      success.value = '证书已轮换。'
+      success.value = '证书已更换。'
     },
   )
 }
@@ -211,13 +211,13 @@ function revokeCertificate() {
   }
   const id = profile.value.id
   openPrompt(
-    '吊销客户端证书',
-    '吊销不可恢复。吊销后该配置无法连接，需要签发新证书才能恢复。',
-    '吊销证书',
+    '作废客户端证书',
+    '作废后无法恢复。该配置将无法连接，需要重新签发证书。',
+    '作废证书',
     async (password) => {
       const result = await api.revokeCertificate(id, password)
       profile.value = result.profile
-      success.value = '证书已吊销。'
+      success.value = '证书已作废。'
     },
   )
 }
@@ -304,7 +304,7 @@ async function saveLimits() {
       downloadBps: limits.downloadEnabled ? mbpsToBps(limits.downloadMbps) : 0,
     })
     profile.value = result.profile
-    success.value = '使用限制已保存，并已通知运行代理执行。'
+    success.value = '使用限制已保存并生效。'
   } catch (err) {
     error.value = errorMessage(err)
   } finally {
@@ -319,13 +319,13 @@ function resetQuota() {
   }
   openPrompt(
     '重置流量额度',
-    '新额度周期从当前累计开始计算，历史连接与日统计不会被删除；在线连接不会因重置而断开。',
+    '重置后从当前用量重新计算；历史连接和统计不会删除，在线连接不会断开。',
     '重置额度',
     async (password) => {
       const result = await api.resetQuota(current.id, password)
       profile.value = result.profile
-      success.value = '流量额度已重置，新的额度周期已生效。'
-      // 运行代理按秒轮询控制包；短暂延迟后静默刷新，显示新的用量基线。
+      success.value = '流量额度已重置，并从当前用量重新计算。'
+      // VPN 服务按秒读取新配置；短暂延迟后静默刷新，显示新的用量基线。
       window.setTimeout(async () => {
         try {
           const fresh = await api.getProfile(current.id)
@@ -405,7 +405,7 @@ watch(() => route.params.id, load, { immediate: true })
       </header>
 
       <NAlert v-if="profile.effectiveStatus !== 'active'" type="warning" :bordered="false" class="stack-gap">
-        {{ profile.statusReason }}。运行代理会拒绝新连接，并断开受影响的现有连接。
+        {{ profile.statusReason }}。VPN 服务会拒绝新连接，并断开已有连接。
       </NAlert>
 
       <section class="surface">
@@ -418,11 +418,11 @@ watch(() => route.params.id, load, { immediate: true })
             </NButton>
             <NButton v-if="authRequiresCertificate(profile.authType)" size="small" @click="rotateCertificate">
               <template #icon><RefreshCw :size="14" /></template>
-              {{ hasCertificate ? '轮换证书' : '签发新证书' }}
+              {{ hasCertificate ? '更换证书' : '签发新证书' }}
             </NButton>
             <NButton v-if="hasCertificate" size="small" type="error" ghost @click="revokeCertificate">
               <template #icon><ShieldOff :size="14" /></template>
-              吊销证书
+              作废证书
             </NButton>
             <NPopconfirm @positive-click="toggleStatus">
               <template #trigger>
@@ -455,12 +455,8 @@ watch(() => route.params.id, load, { immediate: true })
             <dd>{{ formatDate(profile.createdAt) }}</dd>
           </div>
           <div v-if="profile.expiresAt">
-            <dt>访问到期</dt>
+            <dt>到期时间</dt>
             <dd>{{ formatDate(profile.expiresAt) }}</dd>
-          </div>
-          <div>
-            <dt>配置 ID</dt>
-            <dd class="is-code">{{ profile.id }}</dd>
           </div>
         </dl>
       </section>
@@ -468,7 +464,7 @@ watch(() => route.params.id, load, { immediate: true })
       <section class="surface">
         <header class="surface-head">
           <h2>网络策略</h2>
-          <span class="surface-meta">路由与访问权限分别执行</span>
+          <span class="surface-meta">分别设置路由和内网访问权限</span>
         </header>
         <NForm>
           <div class="policy-grid">
@@ -479,7 +475,7 @@ watch(() => route.params.id, load, { immediate: true })
               <NSelect v-model:value="policy.accessMode" :options="accessOptions" />
             </NFormItem>
           </div>
-          <NFormItem v-if="policy.accessMode === 'allow'" label="授权内网网段">
+          <NFormItem v-if="policy.accessMode === 'allow'" label="可访问内网网段">
             <NInput
               v-model:value="policy.allowedText"
               type="textarea"
@@ -488,7 +484,7 @@ watch(() => route.params.id, load, { immediate: true })
             />
           </NFormItem>
           <p class="policy-hint">
-            路由方式决定客户端拿到哪些路由；内网权限决定运行代理实际放行哪些目标。继承时使用服务端默认值。
+            路由方式决定哪些流量经过 VPN；内网权限决定能访问哪些内网地址。选择“继承服务端”时使用服务端设置。
           </p>
           <div class="policy-actions">
             <NButton type="primary" :loading="policyBusy" @click="savePolicy">保存网络策略</NButton>
@@ -499,12 +495,12 @@ watch(() => route.params.id, load, { immediate: true })
       <section class="surface">
         <header class="surface-head">
           <h2>使用限制</h2>
-          <span class="surface-meta">由运行代理执行；0 或关闭表示不限制</span>
+          <span class="surface-meta">由 VPN 服务执行；0 或关闭表示不限制</span>
         </header>
 
         <div class="usage-row">
           <div class="usage-main">
-            <span class="usage-label">当前额度周期</span>
+            <span class="usage-label">当前用量周期</span>
             <strong>{{ profile.usageKnown ? formatBytes(profile.usageBytes) : '—' }}</strong>
             <span class="usage-total">
               / {{ profile.quotaBytes > 0 ? formatBytes(profile.quotaBytes) : '不限量' }}
@@ -512,10 +508,10 @@ watch(() => route.params.id, load, { immediate: true })
           </div>
           <div class="usage-side">
             <span v-if="profile.usageKnown">在线 {{ profile.onlineSessions }} 条</span>
-            <span v-else>运行代理离线，用量未知</span>
+            <span v-else>暂时无法获取用量</span>
             <span v-if="profile.quotaResetAt">上次重置 {{ formatDate(profile.quotaResetAt) }}</span>
             <span v-if="profile.usageGaps > 0" class="usage-gap">
-              检测到 {{ profile.usageGaps }} 次计数回退，期间用量可能低估
+              统计中断 {{ profile.usageGaps }} 次，期间流量可能少计
             </span>
           </div>
         </div>
@@ -532,7 +528,7 @@ watch(() => route.params.id, load, { immediate: true })
         </div>
 
         <NForm class="limits-form">
-          <NFormItem label="访问到期">
+          <NFormItem label="到期时间">
             <NDatePicker
               v-model:value="limits.expiresAt"
               type="datetime"
@@ -618,17 +614,17 @@ watch(() => route.params.id, load, { immediate: true })
       <section v-if="authRequiresCertificate(profile.authType)" class="surface">
         <header class="surface-head">
           <h2>客户端证书</h2>
-          <span class="surface-meta">{{ profile.certificate ? '当前生效' : '无生效证书' }}</span>
+          <span class="surface-meta">{{ profile.certificate ? '当前有效' : '没有有效证书' }}</span>
         </header>
 
         <template v-if="profile.certificate">
           <dl class="fact-list">
             <div>
-              <dt>序列号</dt>
+              <dt>证书编号</dt>
               <dd class="is-code">{{ profile.certificate.serialNumber }}</dd>
             </div>
             <div>
-              <dt>Common Name</dt>
+              <dt>证书名称</dt>
               <dd class="is-code">{{ profile.certificate.commonName }}</dd>
             </div>
             <div>
@@ -637,7 +633,7 @@ watch(() => route.params.id, load, { immediate: true })
             </div>
           </dl>
           <div class="fingerprint">
-            <span>SHA-256 指纹</span>
+            <span>证书指纹</span>
             <code tabindex="0">{{ formatFingerprint(profile.certificate.fingerprint) }}</code>
             <NButton size="tiny" @click="copyFingerprint">
               <template #icon><Copy :size="13" /></template>
@@ -646,7 +642,7 @@ watch(() => route.params.id, load, { immediate: true })
           </div>
         </template>
         <NAlert v-else type="error" :bordered="false">
-          没有生效证书。请签发新证书后再下载配置。
+          没有有效证书。请先签发新证书，再下载配置。
         </NAlert>
       </section>
     </template>

@@ -20,7 +20,7 @@ const stats = computed(() => {
     return []
   }
   return [
-    { label: '在线连接', value: String(info.onlineConnections), hint: info.agentPresent ? '运行代理实时数据' : '代理无状态', icon: Activity },
+    { label: '在线连接', value: String(info.onlineConnections), hint: info.agentPresent ? '实时统计' : '实时数据暂不可用', icon: Activity },
     {
       label: '实时速率',
       value: `↑ ${formatRate(info.upRate)}`,
@@ -28,7 +28,7 @@ const stats = computed(() => {
       icon: Activity,
     },
     { label: '今日流量', value: formatBytes(info.todayUpBytes + info.todayDownBytes), hint: `上行 ${formatBytes(info.todayUpBytes)} · 下行 ${formatBytes(info.todayDownBytes)}`, icon: FileBadge },
-    { label: '用户 / 配置', value: `${info.users} / ${info.profiles}`, hint: '凭据归属人与独立认证单位', icon: Users },
+    { label: '用户 / 配置', value: `${info.users} / ${info.profiles}`, hint: '按用户和客户端配置统计', icon: Users },
   ]
 })
 
@@ -58,12 +58,10 @@ const facts = computed(() => {
     return []
   }
   return [
-    { label: '版本', value: info.version },
-    { label: '提交', value: info.commit === 'none' ? 'none' : info.commit.slice(0, 7), code: true },
-    { label: '构建时间', value: formatDate(info.buildTime) },
-    { label: 'Go 版本', value: info.goVersion },
-    { label: '数据库', value: `SQLite · schema v${info.schemaVersion}` },
-    { label: '直连 HTTPS', value: info.tlsEnabled ? '已启用' : '未启用' },
+    { label: '版本', value: info.version === 'dev' ? '开发版' : info.version },
+    { label: '构建时间', value: info.buildTime === 'unknown' ? '未知' : formatDate(info.buildTime) },
+    { label: '数据存储', value: info.dataStore === 'sqlite' ? '本地数据库' : info.dataStore },
+    { label: 'HTTPS', value: info.tlsEnabled ? '已启用' : '未启用' },
   ]
 })
 
@@ -135,9 +133,9 @@ onBeforeUnmount(() => {
       <div>
         <span class="eyebrow"><Activity :size="14" /> 概览</span>
         <div class="title-row">
-          <h1>运行概览</h1>
+          <h1>概览</h1>
           <span v-if="overview" class="chip" :class="overview.agentPresent ? 'chip--ok' : 'chip--warn'">
-            <i class="dot" />{{ overview.agentPresent ? '服务运行中' : '运行代理无状态' }}
+            <i class="dot" />{{ overview.agentPresent ? '服务运行中' : '实时数据暂不可用' }}
           </span>
         </div>
       </div>
@@ -203,7 +201,7 @@ onBeforeUnmount(() => {
         </ul>
         <div v-else class="surface-empty">
           <strong>当前没有在线连接</strong>
-          <span>连接详情与历史在「在线连接」页面。</span>
+          <span>打开“在线连接”查看连接详情和历史。</span>
         </div>
       </section>
     </div>
@@ -217,7 +215,7 @@ onBeforeUnmount(() => {
         <dl v-if="system" class="fact-list">
           <div v-for="fact in facts" :key="fact.label">
             <dt>{{ fact.label }}</dt>
-            <dd :class="{ 'is-code': fact.code }">{{ fact.value }}</dd>
+            <dd>{{ fact.value }}</dd>
           </div>
         </dl>
         <div v-else class="surface-empty">正在读取…</div>
@@ -225,7 +223,7 @@ onBeforeUnmount(() => {
 
       <section class="surface">
         <header class="surface-head">
-          <h2>最近任务</h2>
+          <h2>最近操作</h2>
           <span class="surface-meta">{{ operations.length }} 条</span>
         </header>
         <ul v-if="operations.length" class="operation-list">
@@ -241,8 +239,8 @@ onBeforeUnmount(() => {
           </li>
         </ul>
         <div v-else class="surface-empty">
-          <strong>暂无任务记录</strong>
-          <span>备份、升级和恢复任务会记录在这里。</span>
+          <strong>暂无操作记录</strong>
+          <span>备份、恢复和 OpenVPN 更新会显示在这里。</span>
         </div>
       </section>
     </div>

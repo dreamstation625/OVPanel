@@ -69,7 +69,7 @@ function handleLogout() {
 
 function handleExpired() {
   username.value = ''
-  loginNotice.value = '会话已过期，请重新登录'
+  loginNotice.value = '登录已过期，请重新登录'
   phase.value = 'login'
 }
 

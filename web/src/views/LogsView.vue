@@ -22,8 +22,8 @@ const reasonOptions = [
   { label: '全部原因', value: '' },
   { label: '客户端断开', value: 'client_disconnect' },
   { label: '额度用尽', value: 'quota_exhausted' },
-  { label: '权限收紧', value: 'policy_revoked' },
-  { label: '证书变更', value: 'certificate_changed' },
+  { label: '权限变更', value: 'policy_revoked' },
+  { label: '证书更换', value: 'certificate_changed' },
   { label: '管理员断开', value: 'admin_disconnect' },
   { label: '配置到期', value: 'profile_expired' },
 ]
@@ -67,9 +67,9 @@ function endReasonLabel(value: string) {
     case 'quota_exhausted':
       return '额度用尽'
     case 'policy_revoked':
-      return '权限收紧'
+      return '权限变更'
     case 'certificate_changed':
-      return '证书变更'
+      return '证书更换'
     case 'certificate_expired':
       return '证书过期'
     case 'profile_expired':
@@ -77,9 +77,9 @@ function endReasonLabel(value: string) {
     case 'admin_disconnect':
       return '管理员断开'
     case 'address_reused':
-      return '地址复用'
+      return '地址被重新分配'
     case 'runtime_stop':
-      return '代理停止'
+      return 'VPN 服务停止'
     default:
       return value || '未记录'
   }
@@ -103,8 +103,8 @@ onMounted(load)
     <header class="page-header">
       <div>
         <span class="eyebrow"><ScrollText :size="14" /> 日志</span>
-        <h1>连接与任务记录</h1>
-        <p class="page-meta">连接历史保留结束原因；系统任务记录备份、恢复与维护操作。</p>
+        <h1>日志</h1>
+        <p class="page-meta">查看连接历史，以及备份、恢复和 OpenVPN 更新等操作记录。</p>
       </div>
       <div class="header-tools">
         <span v-if="updatedAt" class="muted">更新于 {{ updatedAt }}</span>
@@ -124,7 +124,7 @@ onMounted(load)
         <History :size="15" /> 连接历史
       </button>
       <button class="tab" role="tab" :aria-selected="tab === 'tasks'" :class="{ active: tab === 'tasks' }" @click="tab = 'tasks'">
-        <ScrollText :size="15" /> 系统任务
+        <ScrollText :size="15" /> 操作记录
       </button>
     </div>
 
@@ -173,14 +173,14 @@ onMounted(load)
         </div>
         <div v-else class="surface-empty">
           <strong>没有匹配的连接记录</strong>
-          <span>清除筛选条件或等待新的连接事件。</span>
+          <span>清除筛选条件，或等待新的连接记录。</span>
         </div>
       </section>
     </template>
 
     <section v-else class="surface">
       <header class="surface-head">
-        <h2>系统任务</h2>
+        <h2>操作记录</h2>
         <span class="surface-meta">{{ operations.length }} 条</span>
       </header>
       <ul v-if="operations.length" class="task-list">
@@ -198,8 +198,8 @@ onMounted(load)
         </li>
       </ul>
       <div v-else class="surface-empty">
-        <strong>暂无任务记录</strong>
-        <span>备份、恢复与维护任务会显示在这里。</span>
+        <strong>暂无操作记录</strong>
+        <span>备份、恢复和 OpenVPN 更新会显示在这里。</span>
       </div>
     </section>
   </div>

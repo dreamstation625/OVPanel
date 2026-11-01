@@ -270,7 +270,7 @@ func (r *Runtime) handleCommand(ctx context.Context) error {
 		r.log.Warn("OpenVPN stopped by panel command")
 	case "checkpoint":
 		if err := r.usage.Save(); err != nil {
-			return fmt.Errorf("导出用量检查点: %w", err)
+			return fmt.Errorf("导出用量记录: %w", err)
 		}
 		now := r.now()
 		r.mu.Lock()
@@ -280,7 +280,7 @@ func (r *Runtime) handleCommand(ctx context.Context) error {
 	case "restore-usage":
 		data, err := os.ReadFile(filepath.Join(r.controlDir, telemetry.RestoreFile))
 		if err != nil {
-			return fmt.Errorf("读取恢复账本: %w", err)
+			return fmt.Errorf("读取备份的用量记录: %w", err)
 		}
 		// 恢复期间不应有任何在线会话；停止进程后导入备份账本并清理旧事件。
 		r.stopProcess()
@@ -343,7 +343,7 @@ func (r *Runtime) applyOnce(ctx context.Context) error {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("读取控制包: %w", err)
+		return fmt.Errorf("读取配置: %w", err)
 	}
 	bundle, err := decodeBundle(data)
 	if err != nil {
@@ -379,17 +379,17 @@ func (r *Runtime) applyOnce(ctx context.Context) error {
 func decodeBundle(data []byte) (agentproto.Bundle, error) {
 	var bundle agentproto.Bundle
 	if err := json.Unmarshal(data, &bundle); err != nil {
-		return bundle, fmt.Errorf("解析控制包: %w", err)
+		return bundle, fmt.Errorf("解析配置: %w", err)
 	}
 	if bundle.Version != agentproto.Version {
-		return bundle, fmt.Errorf("控制包版本不支持：%d", bundle.Version)
+		return bundle, fmt.Errorf("配置版本不支持：%d", bundle.Version)
 	}
 	sum := sha256.Sum256([]byte(bundle.Config))
 	if hex.EncodeToString(sum[:]) != bundle.ConfigHash {
-		return bundle, fmt.Errorf("控制包配置哈希不匹配")
+		return bundle, fmt.Errorf("配置内容不匹配")
 	}
 	if bundle.CAPEM == "" || bundle.ServerCertPEM == "" || bundle.ServerKeyPEM == "" || bundle.TLSCryptKey == "" || bundle.CRLPEM == "" {
-		return bundle, fmt.Errorf("控制包材料不完整")
+		return bundle, fmt.Errorf("配置文件不完整")
 	}
 	if err := bundle.Snapshot.Validate(); err != nil {
 		return bundle, fmt.Errorf("认证快照非法: %w", err)
@@ -531,7 +531,7 @@ func (r *Runtime) loadPersistedState() {
 		r.mu.Lock()
 		r.usageHealthy = false
 		r.usageError = err.Error()
-		r.lastError = "用量账本不可用：" + err.Error()
+		r.lastError = "用量记录不可用：" + err.Error()
 		r.mu.Unlock()
 		r.log.Error("usage ledger unavailable; new admissions will be denied", "error", err)
 	} else {
@@ -591,7 +591,7 @@ func (r *Runtime) rollback(ctx context.Context, failedHash string, cause error) 
 	}
 	bundle, err := decodeBundle(raw)
 	if err != nil {
-		return fmt.Errorf("应用新配置失败（%v），上一版本控制包无效：%w", cause, err)
+		return fmt.Errorf("应用新配置失败（%v），上一版本配置无效：%w", cause, err)
 	}
 	if err := r.applyBundle(ctx, bundle, goodHash); err != nil {
 		return fmt.Errorf("应用新配置失败（%v），回退上一版本也失败：%w", cause, err)
@@ -1067,7 +1067,7 @@ func (r *Runtime) evaluate(pending *pendingAuth) {
 		return
 	}
 	if !usageHealthy {
-		r.denyAuth(pending, "usage_ledger_unavailable", "用量账本不可用，暂不接收新连接")
+		r.denyAuth(pending, "usage_ledger_unavailable", "用量统计暂不可用，请稍后重试")
 		return
 	}
 

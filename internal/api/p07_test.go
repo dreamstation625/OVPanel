@@ -54,7 +54,7 @@ func TestP07MaintenanceUnavailableState(t *testing.T) {
 	srv := newTestServer(t)
 	h, cookies := setupAndLogin(t, srv)
 	state := doJSON(t, h, http.MethodGet, "/api/maintenance/openvpn", "127.0.0.1:5000", nil, cookies...)
-	if state.Code != http.StatusOK || !strings.Contains(state.Body.String(), "维护进程未配置") {
+	if state.Code != http.StatusOK || !strings.Contains(state.Body.String(), "更新服务未配置") {
 		t.Fatalf("维护状态异常：%d %s", state.Code, state.Body.String())
 	}
 	update := doJSON(t, h, http.MethodPost, "/api/maintenance/openvpn/update", "127.0.0.1:5000", map[string]any{

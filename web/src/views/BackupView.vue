@@ -133,7 +133,7 @@ function saveSettings() {
     return
   }
 
-  openPrompt('确认备份设置', '修改备份计划或恢复密码需要复核管理员密码。', '保存设置', async (password) => {
+  openPrompt('确认备份设置', '修改备份计划或恢复密码时，需要再次输入管理员密码。', '保存设置', async (password) => {
     settingsBusy.value = true
     error.value = ''
     success.value = ''
@@ -163,7 +163,7 @@ function manualBackup() {
   }
   openPrompt(
     '立即创建备份',
-    '备份包含数据库一致性快照、证书材料、用量检查点和主密钥；请妥善保管恢复密码。',
+    '备份包含用户、证书、用量记录和加密密钥。请妥善保存恢复密码。',
     '开始备份',
     async (password) => {
       await api.createBackup(password, '手动备份')
@@ -174,7 +174,7 @@ function manualBackup() {
 }
 
 function download(item: BackupItem) {
-  openPrompt('下载备份包', '备份包使用恢复密码加密。下载需要复核管理员密码。', '下载', async (password) => {
+  openPrompt('下载备份包', '备份包使用恢复密码加密，下载时需要再次输入管理员密码。', '下载', async (password) => {
     const result = await api.downloadBackup(item.id, password)
     downloadBlob(result.blob, result.filename)
     success.value = '备份包已开始下载。'
@@ -206,16 +206,16 @@ function startPreview() {
     return
   }
   openPrompt(
-    '校验恢复包',
-    '面板会解密并校验备份包，随后展示将回退的数据范围。此时尚未修改任何数据。',
-    '校验',
+    '检查备份包',
+    '面板会解密并检查备份包，然后显示将要恢复的数据。此时不会修改任何数据。',
+    '检查',
     async (password) => {
       previewBusy.value = true
       error.value = ''
       success.value = ''
       try {
         preview.value = await api.previewRestore(restoreFile.value!, password, restorePassword.value)
-        success.value = '备份包校验通过，请确认恢复影响。'
+        success.value = '备份包检查通过，请确认恢复影响。'
       } finally {
         previewBusy.value = false
       }
@@ -229,9 +229,9 @@ function executeRestore() {
   }
   const token = preview.value.token
   openPrompt(
-    '执行恢复',
-    '恢复会断开全部 VPN 连接、回退到备份时间点，并要求重新登录。确认继续？',
-    '执行恢复',
+    '恢复数据',
+    '恢复会断开所有 VPN 连接，并将数据恢复到备份时间点，完成后需要重新登录。确认继续？',
+    '开始恢复',
     async (password) => {
       restoreBusy.value = true
       try {
@@ -297,15 +297,15 @@ onMounted(load)
     </NAlert>
 
     <NAlert v-if="restoreResult" type="warning" :bordered="false" class="stack-gap">
-      恢复完成，恢复前备份 ID：<code>{{ restoreResult.preRestoreBackupId }}</code>。
+      恢复完成，已自动创建恢复前的备份 <code>{{ restoreResult.preRestoreBackupId }}</code>。
       请使用备份时间点的管理员密码重新登录。
       <RouterLink to="/login" class="text-link">前往登录</RouterLink>
     </NAlert>
 
     <section class="surface">
       <header class="surface-head">
-        <h2>加密与计划</h2>
-        <span class="surface-meta">自动备份保存在本机数据目录，不是异地备份</span>
+        <h2>备份设置</h2>
+        <span class="surface-meta">自动备份保存在本机，不会同步到其他服务器</span>
       </header>
       <NForm>
         <div class="settings-grid">
@@ -337,7 +337,7 @@ onMounted(load)
         <div class="schedule-line">
           <NSwitch v-model:value="settingsForm.enabled" aria-label="启用每日自动备份" />
           <span>启用每日自动备份</span>
-          <span class="muted">失败不会删除最后可用备份</span>
+          <span class="muted">备份失败时会保留最近一次可用备份</span>
         </div>
         <div class="actions-line">
           <NButton type="primary" :loading="settingsBusy" @click="saveSettings">保存备份设置</NButton>
@@ -363,9 +363,8 @@ onMounted(load)
             </div>
             <span class="backup-meta">
               {{ formatDate(item.createdAt) }} · {{ formatBytes(item.sizeBytes) }} ·
-              配置修订 {{ item.configRevision || '默认' }}
+              配置版本 {{ item.configRevision || '默认' }}
             </span>
-            <code class="backup-hash">{{ item.sha256.slice(0, 16) }}…</code>
           </div>
           <div class="backup-actions">
             <NButton size="small" @click="download(item)">
@@ -388,7 +387,7 @@ onMounted(load)
     <section class="surface">
       <header class="surface-head">
         <h2>从备份恢复</h2>
-        <span class="surface-meta">会中断 VPN 并要求重新登录</span>
+        <span class="surface-meta">恢复时 VPN 会中断，完成后需要重新登录</span>
       </header>
       <div class="restore-grid">
         <label class="file-picker">
@@ -403,10 +402,10 @@ onMounted(load)
           placeholder="备份恢复密码"
           autocomplete="off"
         />
-        <NButton type="warning" :loading="previewBusy" @click="startPreview">校验备份包</NButton>
+        <NButton type="warning" :loading="previewBusy" @click="startPreview">检查备份包</NButton>
       </div>
       <p class="restore-hint">
-        恢复前会自动创建当前状态备份，并停止 VPN；校验失败、密码错误或空间不足不会修改现有数据。
+        恢复前会自动备份当前数据并停止 VPN。检查失败、密码错误或空间不足时不会修改数据。
       </p>
     </section>
 
@@ -421,11 +420,11 @@ onMounted(load)
       <template v-if="preview">
         <dl class="preview-facts">
           <div><dt>备份时间</dt><dd>{{ formatDate(preview.manifest.createdAt) }}</dd></div>
-          <div><dt>版本 / schema</dt><dd>{{ preview.manifest.appVersion }} / v{{ preview.manifest.panelSchema }}</dd></div>
+          <div><dt>面板版本</dt><dd>{{ preview.manifest.appVersion }}</dd></div>
           <div><dt>用户 / 配置</dt><dd>{{ preview.manifest.users }} / {{ preview.manifest.profiles }}</dd></div>
-          <div><dt>证书</dt><dd>有效 {{ preview.manifest.validCertificates }} · 吊销 {{ preview.manifest.revokedCertificates }}</dd></div>
-          <div><dt>额度重置记录</dt><dd>{{ preview.manifest.quotaResets }}</dd></div>
-          <div><dt>用量检查点</dt><dd>{{ preview.manifest.agentPresent ? '包含' : '缺失' }}</dd></div>
+          <div><dt>证书</dt><dd>有效 {{ preview.manifest.validCertificates }} · 已作废 {{ preview.manifest.revokedCertificates }}</dd></div>
+          <div><dt>额度重置次数</dt><dd>{{ preview.manifest.quotaResets }}</dd></div>
+          <div><dt>用量记录</dt><dd>{{ preview.manifest.agentPresent ? '包含' : '缺失' }}</dd></div>
         </dl>
         <ul class="warning-list">
           <li v-for="warning in preview.warnings" :key="warning">{{ warning }}</li>
@@ -583,12 +582,6 @@ onMounted(load)
 .backup-meta {
   color: var(--text-3);
   font-size: 11.5px;
-}
-
-.backup-hash {
-  color: var(--text-3);
-  font-family: var(--font-code);
-  font-size: 10.5px;
 }
 
 .backup-actions {

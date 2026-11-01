@@ -26,21 +26,21 @@ func (s *Server) handleOpenVPNMaintenance(w http.ResponseWriter, r *http.Request
 	response := openVPNMaintenanceDTO{
 		PanelVersion: s.build.Version,
 		PanelManualSteps: []string{
-			"备份当前数据并确认恢复密码可用。",
-			"拉取目标面板镜像并固定版本。",
-			"仅重建 panel 容器：./deploy/compose.sh up -d --no-deps panel。",
-			"检查面板健康、登录和数据；OpenVPN 容器不应被联动重启。",
+			"备份当前数据，并确认恢复密码可用。",
+			"拉取新的面板版本。",
+			"只重建面板容器：./deploy/compose.sh up -d --no-deps panel。",
+			"检查面板能否登录、数据是否正常；OpenVPN 应保持运行。",
 		},
-		ImageSwapWarning: "OpenVPN 更新会短暂中断全部 VPN 连接；任何时刻只保留两个项目容器。",
+		ImageSwapWarning: "更新期间所有 VPN 连接会短暂中断。",
 	}
 	if s.maintenance == nil {
-		response.Reason = "维护进程未配置"
+		response.Reason = "更新服务未配置"
 		writeJSON(w, http.StatusOK, response)
 		return
 	}
 	state, err := s.maintenance.State(r.Context())
 	if err != nil {
-		response.Reason = "维护进程不可用：" + err.Error()
+		response.Reason = "更新服务不可用：" + err.Error()
 		writeJSON(w, http.StatusOK, response)
 		return
 	}
@@ -65,7 +65,7 @@ func (s *Server) handleOpenVPNUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.maintenance == nil {
-		writeError(w, r, http.StatusServiceUnavailable, CodeInternal, "维护进程未配置")
+		writeError(w, r, http.StatusServiceUnavailable, CodeInternal, "更新服务未配置")
 		return
 	}
 	if s.backups == nil {
@@ -78,7 +78,7 @@ func (s *Server) handleOpenVPNUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	state, err := s.maintenance.State(r.Context())
 	if err != nil || !state.Available {
-		reason := "维护进程不可用"
+		reason := "更新服务不可用"
 		if err != nil {
 			reason += "：" + err.Error()
 		} else if state.Reason != "" {

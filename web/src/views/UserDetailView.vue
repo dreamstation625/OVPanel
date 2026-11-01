@@ -143,7 +143,7 @@ watch(() => route.params.id, load, { immediate: true })
       </header>
 
       <NAlert v-if="detail.user.status === 'disabled'" type="warning" :bordered="false" class="stack-gap">
-        该用户已停用，其全部客户端配置当前不可连接，运行代理会断开现有连接。
+        该用户已停用，其所有客户端配置当前都不能连接，已有连接会被断开。
       </NAlert>
 
       <section class="surface">
@@ -173,10 +173,6 @@ watch(() => route.params.id, load, { immediate: true })
           <div>
             <dt>配置数量</dt>
             <dd>{{ detail.profiles.length }} 份</dd>
-          </div>
-          <div>
-            <dt>用户 ID</dt>
-            <dd class="is-code">{{ detail.user.id }}</dd>
           </div>
         </dl>
       </section>

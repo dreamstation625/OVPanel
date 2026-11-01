@@ -11,18 +11,17 @@ const form = reactive<ServerConfig>({
   vpnNetwork: '10.8.0.0/16',
   protocol: 'udp',
   port: 1194,
-  dns: [],
+  dns: ['119.29.29.29'],
   routeMode: 'split',
   allowedInternal: [],
   allowInterClient: false,
   blockIpv6: true,
   extraDirectives: [],
 })
-const dnsText = ref('')
+const dnsText = ref('119.29.29.29')
 const internalText = ref('')
 const extrasText = ref('')
 const rendered = ref('')
-const renderedHash = ref('')
 const loading = ref(false)
 const busy = ref(false)
 const error = ref('')
@@ -30,19 +29,29 @@ const success = ref('')
 type PromptMode = 'apply' | 'start' | 'stop' | 'restart'
 const prompt = ref({ show: false, loading: false, error: '', mode: 'apply' as PromptMode })
 
+const configState = computed(() => {
+  if (!meta.value) {
+    return '正在读取配置'
+  }
+  if (meta.value.draft) {
+    return '已保存，待应用'
+  }
+  return meta.value.active ? '配置已应用' : '尚未保存'
+})
+
 const promptMeta = computed(() => {
   switch (prompt.value.mode) {
     case 'start':
-      return { title: '启动 OpenVPN', description: '使用当前生效配置启动 OpenVPN。', actionLabel: '启动' }
+      return { title: '启动 OpenVPN', description: '使用当前配置启动 OpenVPN。', actionLabel: '启动' }
     case 'stop':
-      return { title: '停止 OpenVPN', description: '停止后全部客户端立即断开，直到再次启动。', actionLabel: '停止' }
+      return { title: '停止 OpenVPN', description: '停止后所有客户端会断开，直到再次启动。', actionLabel: '停止' }
     case 'restart':
-      return { title: '重启 OpenVPN', description: '重启会断开全部现有连接，配置不变。', actionLabel: '重启' }
+      return { title: '重启 OpenVPN', description: '重启会断开所有连接，配置不变。', actionLabel: '重启' }
     default:
       return {
-        title: '应用服务端配置',
-        description: '应用会下发新配置并可能重启 OpenVPN，现有连接会中断；失败时自动回退上一版本。',
-        actionLabel: '应用配置',
+        title: '应用配置',
+        description: '应用后可能重启 OpenVPN，现有连接会短暂中断；失败时自动恢复上一版本。',
+        actionLabel: '应用',
       }
   }
 })
@@ -52,7 +61,7 @@ const protocolOptions = [
   { label: 'TCP', value: 'tcp' },
 ]
 const routeOptions = [
-  { label: '内网分流', value: 'split' },
+  { label: '仅内网流量经过 VPN', value: 'split' },
   { label: '全部 IPv4 流量经过 VPN', value: 'global' },
 ]
 
@@ -80,7 +89,6 @@ async function load() {
     meta.value = data
     applyToForm(data.draft?.config ?? data.active?.config ?? data.defaults)
     rendered.value = data.draft?.rendered ?? data.active?.rendered ?? ''
-    renderedHash.value = data.draft?.hash ?? data.active?.hash ?? ''
   } catch (err) {
     if (!(err instanceof ApiError && err.status === 401)) error.value = errorMessage(err)
   } finally {
@@ -96,8 +104,7 @@ async function preview() {
   try {
     const result = await api.previewServerConfig(collectConfig())
     rendered.value = result.rendered
-    renderedHash.value = result.hash
-    success.value = '配置校验通过。'
+    success.value = '配置检查通过，预览已更新。'
   } catch (err) {
     error.value = errorMessage(err)
   } finally {
@@ -112,7 +119,7 @@ async function saveDraft() {
   success.value = ''
   try {
     await api.saveServerDraft(collectConfig())
-    success.value = '草稿已保存。'
+    success.value = '配置已保存，尚未应用。'
     await load()
   } catch (err) {
     error.value = errorMessage(err)
@@ -136,11 +143,11 @@ async function confirmPrompt(password: string) {
   try {
     if (mode === 'apply') {
       await api.applyServerConfig(password)
-      success.value = '配置已下发，等待运行代理确认。'
+      success.value = '配置已应用，正在等待 VPN 服务确认。'
     } else {
       await api.serverCommand(mode, password)
       success.value =
-        mode === 'stop' ? '已发送停止命令。' : mode === 'start' ? '已发送启动命令。' : '已发送重启命令。'
+        mode === 'stop' ? '已发送停止。' : mode === 'start' ? '已发送启动。' : '已发送重启。'
     }
     prompt.value.show = false
     window.setTimeout(load, 1500)
@@ -186,10 +193,7 @@ onMounted(load)
             }}
           </span>
         </div>
-        <p class="page-meta">
-          生效修订 r{{ meta?.active?.revision ?? '—' }}
-          · 草稿 r{{ meta?.draft?.revision ?? '—' }}
-        </p>
+        <p class="page-meta">{{ configState }}</p>
       </div>
       <NButton quaternary circle :loading="loading" aria-label="刷新" title="刷新" @click="load">
         <template #icon><RefreshCw :size="17" /></template>
@@ -207,7 +211,6 @@ onMounted(load)
       <section class="surface">
         <header class="surface-head">
           <h2>网络与路由</h2>
-          <span class="surface-meta">{{ renderedHash ? renderedHash.slice(0, 12) : '未渲染' }}</span>
         </header>
         <NForm>
           <NFormItem label="VPN 网段" required>
@@ -222,12 +225,12 @@ onMounted(load)
             </NFormItem>
           </div>
           <NFormItem label="DNS">
-            <NInput v-model:value="dnsText" placeholder="用逗号分隔，可留空" />
+            <NInput v-model:value="dnsText" placeholder="例如 119.29.29.29，多个用逗号分隔" />
           </NFormItem>
           <NFormItem label="路由方式" required>
             <NSelect v-model:value="form.routeMode" :options="routeOptions" />
           </NFormItem>
-          <NFormItem label="授权内网网段">
+          <NFormItem label="可访问内网网段">
             <NInput
               v-model:value="internalText"
               type="textarea"
@@ -237,15 +240,15 @@ onMounted(load)
           </NFormItem>
           <div class="switch-row">
             <div>
-              <strong>允许客户端互访</strong>
-              <span>默认关闭；内网权限与互访分别控制。</span>
+              <strong>允许客户端互相访问</strong>
+              <span>开启后，连接到 VPN 的设备可以互相访问。</span>
             </div>
-            <NSwitch v-model:value="form.allowInterClient" aria-label="允许客户端互访" />
+            <NSwitch v-model:value="form.allowInterClient" aria-label="允许客户端互相访问" />
           </div>
           <div class="switch-row">
             <div>
               <strong>阻断 IPv6</strong>
-              <span>第一版不转发 IPv6，按兼容客户端执行阻断。</span>
+              <span>防止 IPv6 流量绕过 VPN，建议保持开启。</span>
             </div>
             <NSwitch v-model:value="form.blockIpv6" aria-label="阻断 IPv6" />
           </div>
@@ -254,40 +257,32 @@ onMounted(load)
               v-model:value="extrasText"
               type="textarea"
               :autosize="{ minRows: 3, maxRows: 6 }"
-              placeholder="每行一条；只允许兼容清单中的整数参数指令"
+              placeholder="每行一条；只能填写下方列出的指令"
             />
           </NFormItem>
         </NForm>
 
         <div class="action-row">
-          <NButton :loading="busy" @click="preview">校验并预览</NButton>
-          <NButton :loading="busy" @click="saveDraft">保存草稿</NButton>
+          <NButton :loading="busy" @click="preview">检查配置</NButton>
+          <NButton :loading="busy" @click="saveDraft">保存</NButton>
           <NButton type="primary" :disabled="!meta?.draft" :loading="busy" @click="askApply">
-            应用草稿
+            应用
           </NButton>
         </div>
       </section>
 
       <section class="surface">
         <header class="surface-head">
-          <h2>生效与代理状态</h2>
-          <span class="surface-meta">{{ meta?.agentStatusPresent ? '代理已回传' : '等待代理' }}</span>
+          <h2>运行状态</h2>
+          <span class="surface-meta">{{ meta?.agentStatusPresent ? '数据已更新' : '等待数据' }}</span>
         </header>
         <dl class="fact-list">
-          <div>
-            <dt>生效修订</dt>
-            <dd>r{{ meta?.active?.revision ?? '—' }} · {{ meta?.active?.hash?.slice(0, 12) || '—' }}</dd>
-          </div>
-          <div>
-            <dt>草稿修订</dt>
-            <dd>r{{ meta?.draft?.revision ?? '—' }} · {{ meta?.draft?.hash?.slice(0, 12) || '—' }}</dd>
-          </div>
           <div>
             <dt>OpenVPN</dt>
             <dd>
               {{
                 meta?.agentStatus?.stopped
-                  ? '已停止（管理员）'
+                  ? '已停止'
                   : meta?.agentStatus?.openvpnRunning
                     ? '运行中'
                     : '未运行'
@@ -295,18 +290,14 @@ onMounted(load)
             </dd>
           </div>
           <div>
-            <dt>管理接口</dt>
-            <dd>{{ meta?.agentStatus?.managementConnected ? '已连接' : '未连接' }}</dd>
-          </div>
-          <div>
-            <dt>在线会话</dt>
+            <dt>在线连接</dt>
             <dd>{{ meta?.agentStatus?.sessions ?? 0 }}</dd>
           </div>
           <div>
-            <dt>实际版本一致</dt>
+            <dt>配置状态</dt>
             <dd>
               <span class="chip" :class="agentHashMatches() ? 'chip--ok' : 'chip--warn'">
-                {{ agentHashMatches() ? '一致' : '未确认' }}
+                {{ agentHashMatches() ? '已生效' : '等待生效' }}
               </span>
             </dd>
           </div>
@@ -326,7 +317,7 @@ onMounted(load)
           </NButton>
         </div>
         <NAlert v-if="meta?.agentStatus?.rolledBack" type="warning" :bordered="false" class="stack-gap">
-          新配置应用失败，已回退到上一版本：{{ meta.agentStatus.rollbackReason }}
+          新配置应用失败，已恢复到上一版本：{{ meta.agentStatus.rollbackReason }}
         </NAlert>
         <NAlert
           v-else-if="meta?.agentStatus?.lastError"
@@ -337,17 +328,17 @@ onMounted(load)
           {{ meta.agentStatus.lastError }}
         </NAlert>
         <p class="hint">
-          兼容指令：{{ meta?.supportedDirectives.join('、') || '—' }}
+          可用的额外指令：{{ meta?.supportedDirectives.join('、') || '—' }}
         </p>
       </section>
     </div>
 
     <section class="surface">
       <header class="surface-head">
-        <h2><ShieldCheck :size="16" /> 配置预览</h2>
-        <span class="surface-meta">{{ formatDate(meta?.draft?.createdAt || meta?.active?.createdAt) }}</span>
+        <h2><ShieldCheck :size="16" /> 配置内容</h2>
+        <span class="surface-meta">最近修改 {{ formatDate(meta?.draft?.createdAt || meta?.active?.createdAt) }}</span>
       </header>
-      <pre class="config-preview" tabindex="0">{{ rendered || '保存或预览草稿后显示渲染结果' }}</pre>
+      <pre class="config-preview" tabindex="0">{{ rendered || '保存后或点击“检查配置”可在这里查看配置内容。' }}</pre>
     </section>
 
     <PasswordPromptModal
