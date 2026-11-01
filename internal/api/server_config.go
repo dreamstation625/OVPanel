@@ -197,6 +197,12 @@ func (s *Server) handleServerCommand(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.verifyAdminPassword(w, r, req.AdminPassword); !ok {
 		return
 	}
+	// 代理没有控制包时不会启动 OpenVPN，却仍按“已启动”记录日志；
+	// 这里先拦住，避免页面下发一条不会生效的命令。
+	if (req.Action == "start" || req.Action == "restart") && !s.runtime.BundlePresent() {
+		writeError(w, r, http.StatusConflict, CodeConflict, "控制包尚未下发，请先保存并应用服务端配置")
+		return
+	}
 	if err := s.runtime.Command(req.Action); err != nil {
 		writeError(w, r, http.StatusBadRequest, CodeInvalidRequest, err.Error())
 		return

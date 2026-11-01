@@ -314,6 +314,15 @@ func (r *Runtime) handleCommand(ctx context.Context) error {
 		if err := r.applyOnce(ctx); err != nil {
 			return err
 		}
+		r.mu.Lock()
+		running := r.openvpnRunning
+		r.mu.Unlock()
+		if !running {
+			// 控制包缺失或已标记失败时 applyOnce 会直接返回，命令实际没有生效。
+			r.log.Warn("OpenVPN start command had no effect", "action", command.Action,
+				"reason", "control bundle missing or previously failed")
+			return nil
+		}
 		r.log.Warn("OpenVPN started by panel command", "action", command.Action)
 	default:
 		return fmt.Errorf("未知控制命令：%q", command.Action)

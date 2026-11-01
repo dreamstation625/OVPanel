@@ -3,9 +3,41 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/dreamstation625/ovpanel/internal/vpnruntime"
 )
+
+func TestServerCommandRequiresControlBundle(t *testing.T) {
+	srv := newTestServer(t)
+	h, cookies := setupAndLogin(t, srv)
+
+	command := func(action string) map[string]string {
+		return map[string]string{"adminPassword": "a-long-enough-password", "action": action}
+	}
+
+	start := doJSON(t, h, http.MethodPost, "/api/server/command", "127.0.0.1:5000", command("start"), cookies...)
+	if start.Code != http.StatusConflict || !strings.Contains(start.Body.String(), "控制包尚未下发") {
+		t.Fatalf("缺少控制包时应拒绝启动：%d %s", start.Code, start.Body.String())
+	}
+
+	stop := doJSON(t, h, http.MethodPost, "/api/server/command", "127.0.0.1:5000", command("stop"), cookies...)
+	if stop.Code != http.StatusOK {
+		t.Fatalf("停止命令不应受控制包限制：%d %s", stop.Code, stop.Body.String())
+	}
+
+	bundle := filepath.Join(srv.cfg.ControlDir, vpnruntime.BundleFileName)
+	if err := os.WriteFile(bundle, []byte("{}"), 0o600); err != nil {
+		t.Fatalf("写入控制包失败：%v", err)
+	}
+	start = doJSON(t, h, http.MethodPost, "/api/server/command", "127.0.0.1:5000", command("start"), cookies...)
+	if start.Code != http.StatusOK {
+		t.Fatalf("存在控制包时应允许启动：%d %s", start.Code, start.Body.String())
+	}
+}
 
 func TestAdminPasswordMinimumEight(t *testing.T) {
 	srv := newTestServer(t)

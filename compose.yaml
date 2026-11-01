@@ -108,6 +108,10 @@ services:
       OVPANEL_AGENT_STATE_DIR: /var/lib/ovpanel
       OVPANEL_CONTROL_DIR: /control
       OVPANEL_LOG_LEVEL: ${OVPANEL_LOG_LEVEL:-info}
+    ports:
+      # 数据面端口，必须与「服务端」页保存的协议/端口一致。
+      # 管理端口 9443 只在项目网络内可达，不发布。
+      - "${OVPANEL_VPN_BIND:-0.0.0.0}:${OVPANEL_VPN_PORT:-1194}:${OVPANEL_VPN_PORT:-1194}/${OVPANEL_VPN_PROTO:-udp}"
     volumes:
       - "${OVPANEL_DATA_ROOT:-./data}/openvpn:/var/lib/ovpanel"
       - "${OVPANEL_DATA_ROOT:-./data}/openvpn-config:/etc/openvpn/ovpanel"

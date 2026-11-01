@@ -57,6 +57,15 @@ type Result struct {
 	AgentPending bool
 }
 
+// BundlePresent 报告控制目录里是否已有可用的控制包。
+//
+// 启停命令只写 command.json，代理没有控制包时会静默跳过；面板据此在
+// 下发命令前给出明确提示。
+func (s *Service) BundlePresent() bool {
+	info, err := os.Stat(filepath.Join(s.controlDir, BundleFileName))
+	return err == nil && info.Mode().IsRegular()
+}
+
 // AgentStatus 读取运行代理写入控制目录的状态；尚未写入时返回 ok=false。
 func (s *Service) AgentStatus() (map[string]any, bool) {
 	data, err := os.ReadFile(filepath.Join(s.controlDir, "status.json"))

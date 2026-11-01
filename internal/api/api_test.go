@@ -82,6 +82,7 @@ func newTestServer(t *testing.T) *Server {
 			Listen:     ":0",
 			LogLevel:   "error",
 			SessionTTL: time.Hour,
+			ControlDir: controlDir,
 		},
 		Store:          st,
 		Accounts:       accountsService,

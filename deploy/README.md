@@ -106,6 +106,26 @@ OVPANEL_DEV_SELF_SIGNED=false
 标记不会自动开启。当前版本尚未实现代理头信任配置；这种部署方式需要在后续阶段
 补齐后再用于公网。
 
+## OpenVPN 数据端口
+
+openvpn 容器把 `OVPANEL_VPN_BIND:OVPANEL_VPN_PORT` 映射到容器内同号端口，协议由
+`OVPANEL_VPN_PROTO` 决定；三者必须与面板「服务端」页保存的协议/端口一致，否则
+客户端连不上。默认 `0.0.0.0:1194/udp`，与面板默认配置相同。
+
+```dotenv
+OVPANEL_VPN_BIND=0.0.0.0
+OVPANEL_VPN_PORT=21194
+OVPANEL_VPN_PROTO=tcp
+```
+
+修改后重建 openvpn 容器：
+
+```bash
+./deploy/compose.sh up -d --no-deps --force-recreate openvpn
+```
+
+管理端口 9443 只在项目网络内可达，不发布。
+
 ## 数据与持久化
 
 宿主持久目录由 `OVPANEL_DATA_ROOT` 控制，默认项目根目录下的 `data`：
@@ -183,7 +203,8 @@ data/
   `docker ps --filter label=com.ovpanel.managed` 核对。网页更新先删除旧 OpenVPN
   容器再创建新容器，任何时刻都不会保留第三个项目容器。
 - panel 容器挂载 Docker Socket，仅供 root 维护进程使用；Web 进程不直接打开 Socket。
-- openvpn 不发布 9443，不挂载 Docker Socket。
+- openvpn 只发布数据面端口（`OVPANEL_VPN_PORT`/`OVPANEL_VPN_PROTO`，须与面板
+  配置一致）；管理端口 9443 不发布，也不挂载 Docker Socket。
 - panel 根文件系统只读，仅 `/data`、`/tmp` 与维护 Socket 的 tmpfs 可写。
 - openvpn 需要 `NET_ADMIN`、`NET_RAW`、`/dev/net/tun` 与 `net.ipv4.ip_forward=1`。
 
