@@ -16,23 +16,12 @@ Docker 命令完成。面板容器内的受限维护进程可以通过本机 Uni
 OpenVPN 容器；它单独持有 Docker Socket，面板 Web 进程不直接访问 Docker。
 初始化为一次性口令，无默认管理员密码。
 
-## 普通终端运行
+## 部署方式
 
-需要 Go 1.26+ 与 Node.js 22（仅构建前端时需要）：
+只通过 Docker 部署。交付物是 panel 与 openvpn 两个 Docker 镜像，不单独构建、
+发布或提供 Go 二进制包；部署、升级和回退都使用仓库的 Compose 文件与部署脚本。
 
-```bash
-cd web
-npm ci
-npm run build
-cd ..
-
-go run ./cmd/panel
-```
-
-浏览器打开 `http://127.0.0.1:8080`。本机回环直连可直接初始化；Docker 端口映射下
-需要读取数据目录中的 `bootstrap-token`。
-
-常用环境变量：
+运行参数通过 Compose 环境变量传入：
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
@@ -57,7 +46,8 @@ cp .env.example .env
 ```
 
 默认只绑定 `127.0.0.1:8080`，不会直接暴露到局域网。部署细节、HTTPS、容器边界、
-数据目录和升级方式见 [deploy/README.md](deploy/README.md)。
+数据目录和升级方式见 [deploy/README.md](deploy/README.md)。不提供独立二进制启动
+或发布方式。
 
 ## 版本与发布
 

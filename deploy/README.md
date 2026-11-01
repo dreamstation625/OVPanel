@@ -61,11 +61,8 @@ OVPANEL_OPENVPN_IMAGE=dreamstation625/ovpanel-openvpn:0.0.1
 `latest` 跟随 `main` 的最新正式版本，`dev` 是 `dev` 分支的预发布镜像。
 版本规则见仓库 README 的「版本与发布」。
 
-浏览器打开 `http://127.0.0.1:8080`：
-
-- 本机直接运行 Go 二进制时，回环直连可以在没有口令的情况下初始化。
-- Docker 端口映射下，请求源地址是 Docker 网关而不是回环地址，因此必须输入
-  一次性初始化口令。读取方式：
+浏览器打开 `http://127.0.0.1:8080`。容器通过 Docker 端口映射访问，请求源地址是
+Docker 网关而不是回环地址，因此必须输入一次性初始化口令。读取方式：
 
   ```bash
   ./deploy/compose.sh exec panel cat /data/bootstrap-token
@@ -208,28 +205,16 @@ data/
 - panel 根文件系统只读，仅 `/data`、`/tmp` 与维护 Socket 的 tmpfs 可写。
 - openvpn 需要 `NET_ADMIN`、`NET_RAW`、`/dev/net/tun` 与 `net.ipv4.ip_forward=1`。
 
-## 本地开发
+## 开发与测试
 
-前端与后端可以在普通终端分别运行：
-
-```bash
-cd web
-npm ci
-npm run dev          # Vite，代理 /api 到 127.0.0.1:8080
-```
+本项目只发布 Docker 镜像，不单独发布二进制，也不把直接运行二进制作为部署方式。
+开发、联调和验收统一使用 Docker Compose 构建镜像：
 
 ```bash
-go run ./cmd/panel
+./deploy/compose.sh up -d --build
 ```
 
-运行前构建前端产物，或使用 Vite 开发服务器：
+Go 二进制与前端产物只作为镜像构建的中间层，不对外交付。代码检查可使用
+`go test ./...` 与 `npm run build`，它们不产生发布包。
 
-```bash
-cd web
-npm ci && npm run build
-cd ..
-go run ./cmd/panel
-```
-
-面板默认数据目录为相对路径 `data/`；可用 `OVPANEL_DATA_DIR` 指定其他位置。
 完整环境变量见 `internal/config/config.go` 与根目录的 `.env.example`。
