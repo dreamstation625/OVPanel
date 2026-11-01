@@ -49,11 +49,11 @@ func TestBuildAndLookupEffectivePolicies(t *testing.T) {
 	}
 	b, ok := Lookup(file, "DD:EE:FF", "bob")
 	if !ok || !b.GlobalExit || len(b.AllowedInternal) != 0 {
-		t.Fatalf("B 应继承全局出口并禁止内网：%+v", b)
+		t.Fatalf("B 应继承全局出口并禁止私有网段：%+v", b)
 	}
 	c, ok := Lookup(file, "", "carol")
 	if !ok || c.GlobalExit || len(c.AllowedInternal) != 1 || c.AllowedInternal[0] != "10.0.0.0/8" {
-		t.Fatalf("C 应仅访问继承的内网：%+v", c)
+		t.Fatalf("C 应仅访问继承的目标网段：%+v", c)
 	}
 	if _, ok := Lookup(file, "00:00", "unknown"); ok {
 		t.Fatal("未知身份不应匹配策略")
@@ -87,10 +87,20 @@ func TestPushLines(t *testing.T) {
 	}
 	if len(lines) != 2 || lines[0] != `push "route 10.0.16.0 255.255.252.0"` ||
 		lines[1] != `push "route 192.168.99.0 255.255.255.0"` {
-		t.Fatalf("内网路由推送异常：%v", lines)
+		t.Fatalf("目标网段路由推送异常：%v", lines)
 	}
-	if _, err := PushLines(Policy{AllowedInternal: []string{"bad"}}); err == nil {
-		t.Fatal("非法网段应被拒绝")
+	lines, err = PushLines(Policy{AllowedInternal: []string{"1.1.1.1", "203.0.113.5/24"}})
+	if err != nil {
+		t.Fatalf("生成公网路由失败：%v", err)
+	}
+	if len(lines) != 2 || lines[0] != `push "route 1.1.1.1 255.255.255.255"` ||
+		lines[1] != `push "route 203.0.113.0 255.255.255.0"` {
+		t.Fatalf("公网目标路由推送异常：%v", lines)
+	}
+	for _, bad := range []string{"bad", "127.0.0.1", "2001:db8::/32"} {
+		if _, err := PushLines(Policy{AllowedInternal: []string{bad}}); err == nil {
+			t.Fatalf("非法目标网段应被拒绝：%s", bad)
+		}
 	}
 }
 

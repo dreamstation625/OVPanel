@@ -1,4 +1,4 @@
-// Package connectpolicy 把认证快照中的配置级路由与内网权限转换成
+// Package connectpolicy 把认证快照中的配置级路由与目标网段权限转换成
 // OpenVPN client-connect 助手可读取的身份映射。
 //
 // 路由推送决定客户端拿到哪些路由；真正的访问权限仍由运行代理的
@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/dreamstation625/ovpanel/internal/admission"
+	"github.com/dreamstation625/ovpanel/internal/netpolicy"
 )
 
 // Policy 是一份配置的有效网络策略。
@@ -30,7 +31,7 @@ type File struct {
 }
 
 // Effective 计算配置在服务端默认值之上的有效策略。
-// 路由方式与内网权限分别继承或覆盖。
+// 路由方式与目标网段权限分别继承或覆盖。
 func Effective(profile admission.Profile, server Policy) Policy {
 	global := server.GlobalExit
 	switch profile.RouteMode {
@@ -120,11 +121,15 @@ func PushLines(policy Policy) ([]string, error) {
 	if policy.GlobalExit {
 		return []string{`push "redirect-gateway def1 bypass-dhcp"`}, nil
 	}
-	lines := make([]string, 0, len(policy.AllowedInternal))
-	for _, raw := range policy.AllowedInternal {
-		_, network, err := net.ParseCIDR(strings.TrimSpace(raw))
+	targets, err := netpolicy.NormalizeTargets(policy.AllowedInternal)
+	if err != nil {
+		return nil, err
+	}
+	lines := make([]string, 0, len(targets))
+	for _, raw := range targets {
+		_, network, err := net.ParseCIDR(raw)
 		if err != nil || network.IP.To4() == nil {
-			return nil, fmt.Errorf("授权内网网段非法：%q", raw)
+			return nil, fmt.Errorf("目标网段非法：%q", raw)
 		}
 		lines = append(lines, fmt.Sprintf(`push "route %s %s"`, network.IP.String(), net.IP(network.Mask).String()))
 	}

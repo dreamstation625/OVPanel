@@ -17,8 +17,21 @@ const TableName = "ovpanel"
 
 // defaultProtect 是即使“统一开放”也不放行的目标。
 var defaultProtect = []string{
+	"0.0.0.0/8",
+	"127.0.0.0/8",
 	"169.254.169.254/32",
 	"169.254.0.0/16",
+	"224.0.0.0/4",
+	"240.0.0.0/4",
+}
+
+// defaultPrivateTargets 是未显式放行时拒绝的私有/特殊网段。
+// 显式目标放行规则在它们之前，因此列表中的私有目标仍然可达。
+var defaultPrivateTargets = []string{
+	"10.0.0.0/8",
+	"172.16.0.0/12",
+	"192.168.0.0/16",
+	"100.64.0.0/10",
 }
 
 // Session 是一个已取得 VPN 地址的在线连接及其有效策略。
@@ -82,13 +95,9 @@ func Render(p Policy) (string, error) {
 			return "", fmt.Errorf("会话地址重复：%q", raw)
 		}
 		seenIPs[ip.String()] = struct{}{}
-		allowed := make([]string, 0, len(session.AllowedInternal))
-		for _, rawCIDR := range session.AllowedInternal {
-			cidr, err := parseCIDR("授权内网网段", rawCIDR)
-			if err != nil {
-				return "", err
-			}
-			allowed = append(allowed, cidr)
+		allowed, err := NormalizeTargets(session.AllowedInternal)
+		if err != nil {
+			return "", fmt.Errorf("会话 %s 的目标网段非法：%w", ip, err)
 		}
 		sessions = append(sessions, renderedSession{ip: ip.String(), allowed: allowed, global: session.GlobalExit})
 	}
@@ -119,23 +128,23 @@ func Render(p Policy) (string, error) {
 		fmt.Fprintf(&b, "\t\tip saddr %s ip daddr %s counter drop\n", poolText, poolText)
 	}
 
-	b.WriteString("\n\t\t# 4) 内网权限：只放行每份配置的授权网段\n")
+	b.WriteString("\n\t\t# 4) 目标网段权限：只放行每份配置的授权目标\n")
 	for _, session := range sessions {
 		for _, cidr := range session.allowed {
 			fmt.Fprintf(&b, "\t\tip saddr %s ip daddr %s counter accept\n", session.ip, cidr)
 		}
 	}
-	for _, cidr := range []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"} {
+	for _, cidr := range defaultPrivateTargets {
 		fmt.Fprintf(&b, "\t\tip saddr %s ip daddr %s counter drop\n", poolText, cidr)
 	}
 
-	b.WriteString("\n\t\t# 5) 出口策略：逐连接决定是否允许公网\n")
+	b.WriteString("\n\t\t# 5) 出口策略：逐连接决定是否允许其余公网\n")
 	for _, session := range sessions {
 		if session.global {
 			fmt.Fprintf(&b, "\t\tip saddr %s counter accept\n", session.ip)
 		}
 	}
-	b.WriteString("\n\t\t# 6) 未迁移到公网出口或未登记的会话默认拒绝\n")
+	b.WriteString("\n\t\t# 6) 未开启全局出口或未登记的会话默认拒绝\n")
 	fmt.Fprintf(&b, "\t\tip saddr %s counter drop\n", poolText)
 	b.WriteString("\n\t\t# 7) 回程流量：放在所有收紧规则之后\n")
 	b.WriteString("\t\tct state established,related counter accept\n")

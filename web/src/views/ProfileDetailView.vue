@@ -83,13 +83,13 @@ const limits = reactive({
 const limitsBusy = ref(false)
 const routeOptions = [
   { label: '继承服务端', value: 'inherit' },
-  { label: '仅内网流量经过 VPN', value: 'split' },
+  { label: '仅指定网段经过 VPN', value: 'split' },
   { label: '全部 IPv4 流量经过 VPN', value: 'global' },
 ]
 const accessOptions = [
   { label: '继承服务端', value: 'inherit' },
   { label: '仅允许指定网段', value: 'allow' },
-  { label: '禁止访问内网', value: 'deny' },
+  { label: '禁止访问私有网段', value: 'deny' },
 ]
 
 const backTarget = computed(() => (profile.value ? `/users/${profile.value.userId}` : '/users'))
@@ -468,23 +468,23 @@ watch(() => route.params.id, load, { immediate: true })
       <section class="surface">
         <header class="surface-head">
           <h2>网络策略</h2>
-          <span class="surface-meta">分别设置路由和内网访问权限</span>
+          <span class="surface-meta">分别设置路由和目标网段权限</span>
         </header>
         <NForm>
           <div class="policy-grid">
             <NFormItem label="路由方式">
               <NSelect v-model:value="policy.routeMode" :options="routeOptions" />
             </NFormItem>
-            <NFormItem label="内网权限">
+            <NFormItem label="目标网段权限">
               <NSelect v-model:value="policy.accessMode" :options="accessOptions" />
             </NFormItem>
           </div>
-          <NFormItem v-if="policy.accessMode === 'allow'" label="可访问内网网段">
+          <NFormItem v-if="policy.accessMode === 'allow'" label="允许访问的目标网段">
             <NInput
               v-model:value="policy.allowedText"
               type="textarea"
               :autosize="{ minRows: 2, maxRows: 4 }"
-              placeholder="例如 10.0.16.0/22，用逗号或换行分隔"
+              placeholder="例如 10.0.16.0/22、192.168.99.0/24、1.1.1.1，用逗号或换行分隔"
             />
           </NFormItem>
           <NFormItem label="固定 VPN 地址">
@@ -494,7 +494,10 @@ watch(() => route.params.id, load, { immediate: true })
             />
           </NFormItem>
           <p class="policy-hint">
-            路由方式决定哪些流量经过 VPN；内网权限决定能访问哪些内网地址。固定 IP 使用网段末尾的保留段<template v-if="profile.fixedIpRangeStart">（{{ profile.fixedIpRangeStart }} 至 {{ profile.fixedIpRangeEnd }}）</template>，保存后并发上限固定为 1，客户端重新连接后生效；首次使用或修改 VPN 网段后，请到“服务端”应用一次配置。
+            路由方式决定哪些流量经过 VPN；目标网段权限决定能访问哪些目标。分流时可填内网或公网网段，客户端只把这些目标路由到 VPN；全局时公网默认放行，目标网段只用于放行私有网络。不要填写 VPN 服务器自身的公网地址，否则可能导致连接回环。
+          </p>
+          <p class="policy-hint">
+            固定 IP 使用网段末尾的保留段<template v-if="profile.fixedIpRangeStart">（{{ profile.fixedIpRangeStart }} 至 {{ profile.fixedIpRangeEnd }}）</template>，保存后并发上限固定为 1，客户端重新连接后生效；首次使用或修改 VPN 网段后，请到“服务端”应用一次配置。
           </p>
           <div class="policy-actions">
             <NButton type="primary" :loading="policyBusy" @click="savePolicy">保存网络策略</NButton>

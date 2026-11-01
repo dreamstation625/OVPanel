@@ -9,6 +9,8 @@ import (
 	"net"
 	"sort"
 	"strings"
+
+	"github.com/dreamstation625/ovpanel/internal/netpolicy"
 )
 
 // RouteMode 是客户端默认路由方式。
@@ -26,13 +28,13 @@ type Config struct {
 	Port             int       `json:"port"`
 	DNS              []string  `json:"dns"`
 	RouteMode        RouteMode `json:"routeMode"`
-	AllowedInternal  []string  `json:"allowedInternal"`
+	AllowedInternal  []string  `json:"allowedInternal"` // 字段名保留兼容；值为任意 IPv4 目标网段
 	AllowInterClient bool      `json:"allowInterClient"`
 	BlockIPv6        bool      `json:"blockIpv6"`
 	ExtraDirectives  []string  `json:"extraDirectives"`
 }
 
-// Defaults 返回默认配置：UDP/1194、10.8.0.0/16、DNS 119.29.29.29、内网分流、互访关闭、阻断 IPv6。
+// Defaults 返回默认配置：UDP/1194、10.8.0.0/16、DNS 119.29.29.29、指定网段分流、互访关闭、阻断 IPv6。
 func Defaults() Config {
 	return Config{
 		VPNNetwork:       "10.8.0.0/16",
@@ -90,9 +92,11 @@ func Prepare(input Config) (Config, error) {
 		}
 	}
 
-	if err := ValidateInternalCIDRs(cfg.VPNNetwork, cfg.AllowedInternal); err != nil {
+	normalizedAllowed, err := netpolicy.PrepareTargets(cfg.VPNNetwork, cfg.AllowedInternal)
+	if err != nil {
 		return Config{}, err
 	}
+	cfg.AllowedInternal = normalizedAllowed
 
 	extras, err := normalizeExtraDirectives(cfg.ExtraDirectives)
 	if err != nil {
@@ -110,34 +114,6 @@ func SupportedDirectives() []string {
 	}
 	sort.Strings(names)
 	return names
-}
-
-// ValidateInternalCIDRs 校验授权内网网段：IPv4、网络地址、非 0.0.0.0/0，
-// 且不与 VPN 地址池重叠。服务端默认值与配置级覆盖共用同一规则。
-func ValidateInternalCIDRs(vpnNetwork string, values []string) error {
-	_, network, err := net.ParseCIDR(strings.TrimSpace(vpnNetwork))
-	if err != nil || network.IP.To4() == nil {
-		return fmt.Errorf("VPN 网段必须是合法 IPv4 CIDR")
-	}
-	if len(values) > 20 {
-		return fmt.Errorf("授权内网网段最多 20 个")
-	}
-	for _, raw := range values {
-		ip, cidr, err := net.ParseCIDR(raw)
-		if err != nil || ip.To4() == nil {
-			return fmt.Errorf("授权内网网段必须是合法 IPv4 CIDR：%q", raw)
-		}
-		if ones, bits := cidr.Mask.Size(); bits != 32 || ones == 0 {
-			return fmt.Errorf("授权内网网段不能是 0.0.0.0/0：%q", raw)
-		}
-		if !ip.Equal(cidr.IP) {
-			return fmt.Errorf("授权内网网段必须使用网络地址：%q", raw)
-		}
-		if cidr.Contains(network.IP) || network.Contains(cidr.IP) {
-			return fmt.Errorf("授权内网网段不能与 VPN 地址池重叠：%q", raw)
-		}
-	}
-	return nil
 }
 
 func normalize(input Config) Config {

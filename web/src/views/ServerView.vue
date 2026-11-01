@@ -61,7 +61,7 @@ const protocolOptions = [
   { label: 'TCP', value: 'tcp' },
 ]
 const routeOptions = [
-  { label: '仅内网流量经过 VPN', value: 'split' },
+  { label: '仅指定网段经过 VPN', value: 'split' },
   { label: '全部 IPv4 流量经过 VPN', value: 'global' },
 ]
 
@@ -230,14 +230,17 @@ onMounted(load)
           <NFormItem label="路由方式" required>
             <NSelect v-model:value="form.routeMode" :options="routeOptions" />
           </NFormItem>
-          <NFormItem label="可访问内网网段">
+          <NFormItem label="默认目标网段">
             <NInput
               v-model:value="internalText"
               type="textarea"
               :autosize="{ minRows: 2, maxRows: 4 }"
-              placeholder="例如 192.168.99.0/24，用逗号或换行分隔"
+              placeholder="例如 192.168.99.0/24、10.0.16.0/22、1.1.1.1，用逗号或换行分隔"
             />
           </NFormItem>
+          <p class="hint">
+            分流时这些网段会推送给客户端；全局时公网默认放行，这里只用于放行私有网络。可填内网或公网 IPv4 网段，也可填单个 IP。不要填写 VPN 服务器自身的公网地址，否则可能导致连接回环。
+          </p>
           <div class="switch-row">
             <div>
               <strong>允许客户端互相访问</strong>

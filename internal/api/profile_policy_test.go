@@ -3,7 +3,6 @@ package api
 import (
 	"encoding/json"
 	"net/http"
-	"strings"
 	"testing"
 )
 
@@ -65,10 +64,46 @@ func TestProfilePolicyUpdate(t *testing.T) {
 		t.Fatalf("与 VPN 地址池重叠的网段应被拒绝：%d %s", overlap.Code, overlap.Body.String())
 	}
 
+	public := doJSON(t, h, http.MethodPatch, "/api/profiles/"+id, "127.0.0.1:5000", map[string]any{
+		"routeMode":       "split",
+		"accessMode":      "allow",
+		"allowedInternal": []string{"1.1.1.1", "203.0.113.5/24"},
+	}, cookies...)
+	if public.Code != http.StatusOK {
+		t.Fatalf("公网目标应被接受：%d %s", public.Code, public.Body.String())
+	}
+	var publicProfile profileDTO
+	if err := json.Unmarshal(public.Body.Bytes(), &publicProfile); err != nil {
+		t.Fatalf("解析公网目标结果失败：%v", err)
+	}
+	if len(publicProfile.AllowedInternal) != 2 ||
+		publicProfile.AllowedInternal[0] != "1.1.1.1/32" ||
+		publicProfile.AllowedInternal[1] != "203.0.113.0/24" {
+		t.Fatalf("目标网段未规范化：%+v", publicProfile.AllowedInternal)
+	}
+
+	for _, bad := range [][]string{{"127.0.0.1"}, {"0.0.0.0/0"}, {"2001:db8::/32"}} {
+		invalid := doJSON(t, h, http.MethodPatch, "/api/profiles/"+id, "127.0.0.1:5000", map[string]any{
+			"accessMode":      "allow",
+			"allowedInternal": bad,
+		}, cookies...)
+		if invalid.Code != http.StatusBadRequest {
+			t.Fatalf("非法目标网段应被拒绝：%v %d %s", bad, invalid.Code, invalid.Body.String())
+		}
+	}
+
 	detail := doJSON(t, h, http.MethodGet, "/api/profiles/"+id, "127.0.0.1:5000", nil, cookies...)
-	if detail.Code != http.StatusOK ||
-		!strings.Contains(detail.Body.String(), `"routeMode":"global"`) ||
-		!strings.Contains(detail.Body.String(), `"accessMode":"allow"`) {
-		t.Fatalf("详情未返回策略：%d %s", detail.Code, detail.Body.String())
+	if detail.Code != http.StatusOK {
+		t.Fatalf("读取详情失败：%d %s", detail.Code, detail.Body.String())
+	}
+	var detailProfile profileDTO
+	if err := json.Unmarshal(detail.Body.Bytes(), &detailProfile); err != nil {
+		t.Fatalf("解析详情失败：%v", err)
+	}
+	if detailProfile.RouteMode != "split" || detailProfile.AccessMode != "allow" ||
+		len(detailProfile.AllowedInternal) != 2 ||
+		detailProfile.AllowedInternal[0] != "1.1.1.1/32" ||
+		detailProfile.AllowedInternal[1] != "203.0.113.0/24" {
+		t.Fatalf("详情未返回目标网段策略：%+v", detailProfile)
 	}
 }

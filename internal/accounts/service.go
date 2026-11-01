@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/dreamstation625/ovpanel/internal/auth"
+	"github.com/dreamstation625/ovpanel/internal/netpolicy"
 	"github.com/dreamstation625/ovpanel/internal/openvpnprofile"
 	"github.com/dreamstation625/ovpanel/internal/pki"
 	"github.com/dreamstation625/ovpanel/internal/secretbox"
@@ -265,7 +266,7 @@ func (s *Service) UpdateProfileName(ctx context.Context, id, name string) (store
 	return s.profileDetail(ctx, id)
 }
 
-// UpdateProfilePolicy 更新配置级路由、内网权限与固定地址。
+// UpdateProfilePolicy 更新配置级路由、目标网段权限与固定地址。
 // 路由推送与访问权限分别生效：前者决定客户端拿到哪些路由，
 // 后者由运行代理的 nftables 规则执行。
 func (s *Service) UpdateProfilePolicy(ctx context.Context, id, routeMode, accessMode string, allowedInternal []string, fixedVPNIP string) (store.ProfileDetail, error) {
@@ -279,21 +280,22 @@ func (s *Service) UpdateProfilePolicy(ctx context.Context, id, routeMode, access
 	switch accessMode {
 	case store.AccessInherit, store.AccessAllow, store.AccessDeny:
 	default:
-		return store.ProfileDetail{}, validation("内网权限不合法")
+		return store.ProfileDetail{}, validation("目标网段权限不合法")
 	}
 	allowedInternal = normalizeStringList(allowedInternal)
 	if accessMode != store.AccessAllow {
 		allowedInternal = []string{}
 	}
-	if accessMode == store.AccessAllow && len(allowedInternal) == 0 {
-		return store.ProfileDetail{}, validation("仅允许指定网段时至少填写一个网段")
-	}
 	vpnNetwork, err := s.activeVPNNetwork(ctx)
 	if err != nil {
 		return store.ProfileDetail{}, err
 	}
-	if err := serverconfig.ValidateInternalCIDRs(vpnNetwork, allowedInternal); err != nil {
+	allowedInternal, err = netpolicy.PrepareTargets(vpnNetwork, allowedInternal)
+	if err != nil {
 		return store.ProfileDetail{}, validation(err.Error())
+	}
+	if accessMode == store.AccessAllow && len(allowedInternal) == 0 {
+		return store.ProfileDetail{}, validation("仅允许指定网段时至少填写一个网段")
 	}
 	fixedVPNIP = strings.TrimSpace(fixedVPNIP)
 	if fixedVPNIP != "" {

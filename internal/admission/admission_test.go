@@ -205,3 +205,18 @@ func TestSnapshotValidation(t *testing.T) {
 		t.Fatalf("重复证书序列号应被拒绝：%v", err)
 	}
 }
+
+func TestSnapshotAcceptsPublicTargets(t *testing.T) {
+	snapshot := testSnapshot(t)
+	snapshot.Profiles[0].RouteMode = "split"
+	snapshot.Profiles[0].AccessMode = "allow"
+	snapshot.Profiles[0].AllowedInternal = []string{"1.1.1.1", "203.0.113.5/24"}
+	if err := snapshot.Validate(); err != nil {
+		t.Fatalf("公网目标应被准入快照接受：%v", err)
+	}
+
+	snapshot.Profiles[0].AllowedInternal = []string{"127.0.0.1"}
+	if err := snapshot.Validate(); err == nil {
+		t.Fatal("回环目标应被准入快照拒绝")
+	}
+}

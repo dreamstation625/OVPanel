@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/dreamstation625/ovpanel/internal/auth"
+	"github.com/dreamstation625/ovpanel/internal/netpolicy"
 )
 
 // AuthType 与 store 中的认证类型一致。
@@ -63,7 +64,7 @@ type Profile struct {
 	Status       string     `json:"status"`
 	ExpiresAt    *time.Time `json:"expiresAt,omitempty"`
 
-	// 配置级路由与内网权限；空值等价于 inherit。
+	// 配置级路由与目标网段权限；空值等价于 inherit。
 	RouteMode       string   `json:"routeMode,omitempty"`
 	AccessMode      string   `json:"accessMode,omitempty"`
 	AllowedInternal []string `json:"allowedInternal,omitempty"`
@@ -194,19 +195,10 @@ func (s Snapshot) Validate() error {
 		switch profile.AccessMode {
 		case "", "inherit", "allow", "deny":
 		default:
-			return fmt.Errorf("配置 %s 的内网权限未知：%q", profile.ID, profile.AccessMode)
+			return fmt.Errorf("配置 %s 的目标网段权限未知：%q", profile.ID, profile.AccessMode)
 		}
-		for _, raw := range profile.AllowedInternal {
-			ip, network, err := net.ParseCIDR(strings.TrimSpace(raw))
-			if err != nil || ip.To4() == nil {
-				return fmt.Errorf("配置 %s 的授权内网网段非法：%q", profile.ID, raw)
-			}
-			if ones, bits := network.Mask.Size(); bits != 32 || ones == 0 {
-				return fmt.Errorf("配置 %s 的授权内网网段不能是 0.0.0.0/0：%q", profile.ID, raw)
-			}
-			if !ip.Equal(network.IP) {
-				return fmt.Errorf("配置 %s 的授权内网网段必须使用网络地址：%q", profile.ID, raw)
-			}
+		if _, err := netpolicy.NormalizeTargets(profile.AllowedInternal); err != nil {
+			return fmt.Errorf("配置 %s：%w", profile.ID, err)
 		}
 		if profile.ConcurrentLimit < 0 || profile.UploadBps < 0 || profile.DownloadBps < 0 || profile.QuotaEpoch < 0 {
 			return fmt.Errorf("配置 %s 的使用限制不能为负数", profile.ID)

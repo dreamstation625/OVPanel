@@ -48,7 +48,7 @@ type UserSummary struct {
 	ActiveProfileCount int
 }
 
-// 配置级路由与内网权限取值。
+// 配置级路由与目标网段权限取值。
 const (
 	RouteInherit = "inherit"
 	RouteSplit   = "split"
@@ -314,7 +314,7 @@ func (s *Store) UpdateProfileName(ctx context.Context, id, name string) error {
 	return nil
 }
 
-// UpdateProfileNetwork 更新配置级路由、内网权限与固定地址。
+// UpdateProfileNetwork 更新配置级路由、目标网段权限与固定地址。
 // 设置固定地址时并发上限同步锁定为 1，避免同一配置的多条连接争用同一地址。
 func (s *Store) UpdateProfileNetwork(ctx context.Context, id, routeMode, accessMode string, allowedInternal []string, fixedVPNIP string) error {
 	allowed, err := encodeStringList(allowedInternal)

@@ -13,7 +13,7 @@ func TestRenderPolicyOrderAndRules(t *testing.T) {
 		BlockIPv6:        true,
 		ProtectTargets:   []string{"172.18.0.0/16"},
 		Sessions: []Session{
-			{IP: "10.8.0.2", AllowedInternal: []string{"192.168.99.0/24"}},
+			{IP: "10.8.0.2", AllowedInternal: []string{"192.168.99.0/24", "203.0.113.0/24", "100.64.1.2"}},
 			{IP: "10.8.0.3", GlobalExit: true},
 		},
 	})
@@ -27,7 +27,12 @@ func TestRenderPolicyOrderAndRules(t *testing.T) {
 		"meta nfproto ipv6 counter drop",
 		"ip saddr 10.8.0.0/16 ip daddr 10.8.0.0/16 counter drop",
 		"ip saddr 10.8.0.2 ip daddr 192.168.99.0/24 counter accept",
+		"ip saddr 10.8.0.2 ip daddr 203.0.113.0/24 counter accept",
+		"ip saddr 10.8.0.2 ip daddr 100.64.1.2/32 counter accept",
 		"ip saddr 10.8.0.0/16 ip daddr 10.0.0.0/8 counter drop",
+		"ip saddr 10.8.0.0/16 ip daddr 100.64.0.0/10 counter drop",
+		"ip daddr 127.0.0.0/8 counter drop",
+		"ip daddr 224.0.0.0/4 counter drop",
 		"ip saddr 10.8.0.3 counter accept",
 		"ip saddr 10.8.0.0/16 counter drop",
 		"ct state established,related counter accept",
@@ -41,12 +46,17 @@ func TestRenderPolicyOrderAndRules(t *testing.T) {
 		t.Fatal("不应存在整个地址池的全局放行")
 	}
 	allowIndex := strings.Index(script, "ip saddr 10.8.0.2 ip daddr 192.168.99.0/24 counter accept")
+	publicAllowIndex := strings.Index(script, "ip saddr 10.8.0.2 ip daddr 203.0.113.0/24 counter accept")
 	privateIndex := strings.Index(script, "ip saddr 10.8.0.0/16 ip daddr 10.0.0.0/8 counter drop")
+	cgnatIndex := strings.Index(script, "ip saddr 10.8.0.0/16 ip daddr 100.64.0.0/10 counter drop")
 	globalIndex := strings.Index(script, "ip saddr 10.8.0.3 counter accept")
 	defaultIndex := strings.Index(script, "ip saddr 10.8.0.0/16 counter drop")
 	establishedIndex := strings.Index(script, "ct state established,related counter accept")
 	if allowIndex > privateIndex {
-		t.Fatal("授权内网必须排在私有网段拒绝之前")
+		t.Fatal("目标网段放行必须排在私有网段拒绝之前")
+	}
+	if publicAllowIndex > cgnatIndex {
+		t.Fatal("公网目标放行必须排在默认私有/特殊网段拒绝之前")
 	}
 	if globalIndex > defaultIndex {
 		t.Fatal("全局出口会话必须在默认拒绝之前放行")
@@ -99,7 +109,19 @@ func TestRejectsBadCIDRAndSession(t *testing.T) {
 		VPNPool:  "10.8.0.0/16",
 		Sessions: []Session{{IP: "10.8.0.2", AllowedInternal: []string{"0.0.0.0/0.0.0.0"}}},
 	}); err == nil {
-		t.Fatal("非法内网网段应被拒绝")
+		t.Fatal("非法目标网段应被拒绝")
+	}
+	if _, err := Render(Policy{
+		VPNPool:  "10.8.0.0/16",
+		Sessions: []Session{{IP: "10.8.0.2", AllowedInternal: []string{"127.0.0.1"}}},
+	}); err == nil {
+		t.Fatal("回环目标应被拒绝")
+	}
+	if _, err := Render(Policy{
+		VPNPool:  "10.8.0.0/16",
+		Sessions: []Session{{IP: "10.8.0.2", AllowedInternal: []string{"2001:db8::/32"}}},
+	}); err == nil {
+		t.Fatal("IPv6 目标应被拒绝")
 	}
 	if _, err := Render(Policy{
 		VPNPool:  "10.8.0.0/16",

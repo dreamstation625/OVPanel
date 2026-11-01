@@ -1,6 +1,7 @@
 package serverconfig
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -72,7 +73,7 @@ func TestGlobalAndDNSRender(t *testing.T) {
 		}
 	}
 	if strings.Contains(text, "redirect-gateway") || strings.Contains(text, "push \"route ") {
-		t.Fatal("全局出口与内网路由必须逐连接下发")
+		t.Fatal("全局出口与目标网段路由必须逐连接下发")
 	}
 	if strings.Contains(text, "client-to-client") {
 		t.Fatal("互访不应通过 OpenVPN client-to-client 实现")
@@ -87,10 +88,23 @@ func TestSplitRoutesNotPushedGlobally(t *testing.T) {
 		t.Fatalf("渲染失败：%v", err)
 	}
 	if strings.Contains(text, "push \"route 192.168.99.0 255.255.255.0\"") {
-		t.Fatalf("内网路由不能在服务端全局推送：\n%s", text)
+		t.Fatalf("目标网段路由不能在服务端全局推送：\n%s", text)
 	}
 	if !strings.Contains(text, "client-connect /usr/local/bin/vpn-connect") {
 		t.Fatal("缺少按连接下发路由的 client-connect")
+	}
+}
+
+func TestPrepareNormalizesTargets(t *testing.T) {
+	cfg := Defaults()
+	cfg.AllowedInternal = []string{"192.168.99.5/24", "1.1.1.1", "203.0.113.5/24"}
+	prepared, err := Prepare(cfg)
+	if err != nil {
+		t.Fatalf("目标网段规范化失败：%v", err)
+	}
+	want := []string{"192.168.99.0/24", "1.1.1.1/32", "203.0.113.0/24"}
+	if !reflect.DeepEqual(prepared.AllowedInternal, want) {
+		t.Fatalf("目标网段未规范化：got=%v want=%v", prepared.AllowedInternal, want)
 	}
 }
 
@@ -102,6 +116,10 @@ func TestValidateRejectsBadInput(t *testing.T) {
 		func() Config { c := Defaults(); c.Port = 0; return c }(),
 		func() Config { c := Defaults(); c.DNS = []string{"8.8.8.8:53"}; return c }(),
 		func() Config { c := Defaults(); c.AllowedInternal = []string{"0.0.0.0/0"}; return c }(),
+		func() Config { c := Defaults(); c.AllowedInternal = []string{"127.0.0.1"}; return c }(),
+		func() Config { c := Defaults(); c.AllowedInternal = []string{"169.254.1.1"}; return c }(),
+		func() Config { c := Defaults(); c.AllowedInternal = []string{"224.0.0.1"}; return c }(),
+		func() Config { c := Defaults(); c.AllowedInternal = []string{"2001:db8::/32"}; return c }(),
 		func() Config { c := Defaults(); c.AllowedInternal = []string{"10.8.0.0/24"}; return c }(),
 	}
 	for _, cfg := range cases {

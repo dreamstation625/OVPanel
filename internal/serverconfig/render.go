@@ -79,7 +79,7 @@ func Render(input Config) (string, string, error) {
 	b.WriteString("persist-key\n")
 	b.WriteString("persist-tun\n")
 
-	// 路由与内网权限按配置在 client-connect 中逐连接下发，
+	// 路由与目标网段权限按配置在 client-connect 中逐连接下发，
 	// 不能在服务端全局 push，否则配置级覆盖无法生效。
 	b.WriteString("script-security 2\n")
 	fmt.Fprintf(&b, "client-connect %s\n", PathConnectHelper)

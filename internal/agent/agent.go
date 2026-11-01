@@ -1541,7 +1541,7 @@ func (r *Runtime) startVPN(ctx context.Context, configHash string) error {
 }
 
 // localProtectCIDRs 保护容器自身的 Docker 网络与回环地址，
-// 不因管理员授权了某个内网网段而暴露控制面。
+// 不因管理员授权了某个目标网段而暴露控制面。
 func localProtectCIDRs(vpnPool string) []string {
 	interfaces, err := net.Interfaces()
 	if err != nil {
