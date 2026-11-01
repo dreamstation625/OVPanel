@@ -36,11 +36,6 @@ func Render(input Config) (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	_, network, err := net.ParseCIDR(cfg.VPNNetwork)
-	if err != nil {
-		return "", "", err
-	}
-	mask := ipv4MaskString(network.Mask)
 	plan, err := PlanAddresses(cfg.VPNNetwork)
 	if err != nil {
 		return "", "", err
@@ -52,10 +47,14 @@ func Render(input Config) (string, string, error) {
 	fmt.Fprintf(&b, "proto %s\n", cfg.Protocol)
 	b.WriteString("dev tun\n")
 	b.WriteString("topology subnet\n")
-	fmt.Fprintf(&b, "server %s %s\n", network.IP.String(), mask)
-	// 动态池避开网段末尾的保留段；该段由固定 IP 使用。
+	// 手动展开 server 指令，才能把动态池限制在固定 IP 保留段之前。
+	b.WriteString("mode server\n")
+	b.WriteString("tls-server\n")
+	fmt.Fprintf(&b, "ifconfig %s %s\n", plan.Server, plan.Mask)
 	fmt.Fprintf(&b, "ifconfig-pool %s %s %s\n", plan.PoolStart, plan.PoolEnd, plan.Mask)
 	fmt.Fprintf(&b, "ifconfig-pool-persist %s\n", PathPoolState)
+	b.WriteString("push \"topology subnet\"\n")
+	fmt.Fprintf(&b, "push \"route-gateway %s\"\n", plan.Server)
 	fmt.Fprintf(&b, "ca %s\n", PathCA)
 	fmt.Fprintf(&b, "cert %s\n", PathServerCert)
 	fmt.Fprintf(&b, "key %s\n", PathServerKey)

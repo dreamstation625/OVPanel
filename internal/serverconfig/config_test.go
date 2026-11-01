@@ -14,7 +14,10 @@ func TestDefaultsRender(t *testing.T) {
 		t.Fatalf("哈希长度异常：%d", len(hash))
 	}
 	for _, want := range []string{
-		"port 1194", "proto udp", "server 10.8.0.0 255.255.0.0",
+		"port 1194", "proto udp", "mode server", "tls-server",
+		"ifconfig 10.8.0.1 255.255.0.0",
+		"ifconfig-pool 10.8.0.2 10.8.255.191 255.255.0.0",
+		"push \"topology subnet\"", "push \"route-gateway 10.8.0.1\"",
 		"management /run/ovpanel/mgmt.sock unix", "management-client-auth",
 		"verify-client-cert optional", "auth-user-pass-optional", "duplicate-cn",
 		"crl-verify /etc/openvpn/ovpanel/crl.pem",
