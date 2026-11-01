@@ -54,7 +54,6 @@ func TestP06BackupAndRestoreFlow(t *testing.T) {
 
 	// 备份设置。
 	settings := doJSON(t, h, http.MethodPut, "/api/backups/settings", "127.0.0.1:5000", map[string]any{
-		"adminPassword":  adminPassword,
 		"backupPassword": backupPassword,
 		"enabled":        false,
 		"scheduleTime":   "03:00",
@@ -75,8 +74,7 @@ func TestP06BackupAndRestoreFlow(t *testing.T) {
 
 	// 手动备份。
 	backupResponse := doJSON(t, h, http.MethodPost, "/api/backups", "127.0.0.1:5000", map[string]any{
-		"adminPassword": adminPassword,
-		"note":          "P06 测试备份",
+		"note": "P06 测试备份",
 	}, cookies...)
 	if backupResponse.Code != http.StatusCreated {
 		t.Fatalf("创建备份失败：%d %s", backupResponse.Code, backupResponse.Body.String())
@@ -90,14 +88,9 @@ func TestP06BackupAndRestoreFlow(t *testing.T) {
 	if created.Backup.ID == "" || created.Backup.SizeBytes == 0 {
 		t.Fatalf("备份元数据异常：%+v", created.Backup)
 	}
-	// 下载需要管理员密码，返回 age 加密包。
-	wrong := doJSON(t, h, http.MethodPost, "/api/backups/"+created.Backup.ID+"/download", "127.0.0.1:5000",
-		map[string]string{"adminPassword": "wrong-password"}, cookies...)
-	if wrong.Code != http.StatusForbidden {
-		t.Fatalf("错误管理员密码应被拒绝：%d", wrong.Code)
-	}
+	// 下载返回 age 加密包。
 	download := doJSON(t, h, http.MethodPost, "/api/backups/"+created.Backup.ID+"/download", "127.0.0.1:5000",
-		map[string]string{"adminPassword": adminPassword}, cookies...)
+		map[string]string{}, cookies...)
 	if download.Code != http.StatusOK {
 		t.Fatalf("下载备份失败：%d %s", download.Code, download.Body.String())
 	}
@@ -116,7 +109,6 @@ func TestP06BackupAndRestoreFlow(t *testing.T) {
 
 	// 错误恢复密码不能预览。
 	badPreview := doMultipart(t, h, "/api/backups/restore/preview", cookies, map[string]string{
-		"adminPassword":  adminPassword,
 		"backupPassword": "not-the-right-password",
 	}, "file", created.Backup.Filename, packageBytes)
 	if badPreview.Code != http.StatusBadRequest {
@@ -124,7 +116,6 @@ func TestP06BackupAndRestoreFlow(t *testing.T) {
 	}
 
 	preview := doMultipart(t, h, "/api/backups/restore/preview", cookies, map[string]string{
-		"adminPassword":  adminPassword,
 		"backupPassword": backupPassword,
 	}, "file", created.Backup.Filename, packageBytes)
 	if preview.Code != http.StatusOK {
@@ -142,8 +133,7 @@ func TestP06BackupAndRestoreFlow(t *testing.T) {
 	}
 
 	execute := doJSON(t, h, http.MethodPost, "/api/backups/restore/execute", "127.0.0.1:5000", map[string]any{
-		"token":         previewBody.Token,
-		"adminPassword": adminPassword,
+		"token": previewBody.Token,
 	}, cookies...)
 	if execute.Code != http.StatusOK {
 		t.Fatalf("恢复失败：%d %s", execute.Code, execute.Body.String())

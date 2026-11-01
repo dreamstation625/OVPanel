@@ -112,6 +112,21 @@ export function themeOverrides(dark: boolean): GlobalThemeOverrides {
       Alert: {
         borderRadius: '8px',
       },
+      Message: {
+        borderRadius: '10px',
+        colorInfo: '#14332C',
+        colorSuccess: '#143023',
+        colorWarning: '#332912',
+        colorError: '#341B19',
+        textColorInfo: '#EDF4EE',
+        textColorSuccess: '#EDF4EE',
+        textColorWarning: '#EDF4EE',
+        textColorError: '#EDF4EE',
+        iconColorInfo: '#55D6BE',
+        iconColorSuccess: '#6FDC9F',
+        iconColorWarning: '#F3C969',
+        iconColorError: '#F08A85',
+      },
     }
   }
 
@@ -168,6 +183,21 @@ export function themeOverrides(dark: boolean): GlobalThemeOverrides {
     },
     Alert: {
       borderRadius: '8px',
+    },
+    Message: {
+      borderRadius: '10px',
+      colorInfo: '#E8F1EE',
+      colorSuccess: '#E7F5EC',
+      colorWarning: '#FCF1DC',
+      colorError: '#FAE7E5',
+      textColorInfo: '#14221C',
+      textColorSuccess: '#14221C',
+      textColorWarning: '#14221C',
+      textColorError: '#14221C',
+      iconColorInfo: '#006B5E',
+      iconColorSuccess: '#1F7A4C',
+      iconColorWarning: '#946200',
+      iconColorError: '#9B2A2A',
     },
   }
 }

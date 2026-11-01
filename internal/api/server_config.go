@@ -127,16 +127,6 @@ func (s *Server) handleSaveServerDraft(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleApplyServerConfig(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		AdminPassword string `json:"adminPassword"`
-	}
-	if !s.decodeJSON(w, r, &req) {
-		return
-	}
-	if _, ok := s.verifyAdminPassword(w, r, req.AdminPassword); !ok {
-		return
-	}
-
 	state, err := s.store.ServerConfigState(r.Context())
 	if err != nil {
 		s.internalError(w, r, err)
@@ -188,13 +178,9 @@ func (s *Server) handleApplyServerConfig(w http.ResponseWriter, r *http.Request)
 
 func (s *Server) handleServerCommand(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		AdminPassword string `json:"adminPassword"`
-		Action        string `json:"action"`
+		Action string `json:"action"`
 	}
 	if !s.decodeJSON(w, r, &req) {
-		return
-	}
-	if _, ok := s.verifyAdminPassword(w, r, req.AdminPassword); !ok {
 		return
 	}
 	// 代理没有控制包时不会启动 OpenVPN，却仍按“已启动”记录日志；

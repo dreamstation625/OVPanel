@@ -3,8 +3,10 @@ import { ref, watch } from 'vue'
 import { NAlert, NButton, NForm, NFormItem, NInput, NModal, NSwitch } from 'naive-ui'
 import ProfileFields from './ProfileFields.vue'
 import { api, type AuthType, type CreateUserResult } from '../api'
-import { errorMessage, profileValidationMessage, suggestUsername } from '../labels'
+import { profileValidationMessage, suggestUsername } from '../labels'
+import { useNotify } from '../notify'
 
+const notify = useNotify()
 const props = defineProps<{
   show: boolean
 }>()
@@ -82,7 +84,7 @@ async function submit() {
     emit('created', result)
     emit('update:show', false)
   } catch (err) {
-    error.value = errorMessage(err)
+    notify.error(err instanceof Error ? err.message : '创建用户失败')
   } finally {
     busy.value = false
   }

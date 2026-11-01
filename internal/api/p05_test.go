@@ -164,14 +164,9 @@ func TestP05LimitsQuotaAndStatistics(t *testing.T) {
 		t.Fatalf("控制命令异常：%s %v", commandData, err)
 	}
 
-	// 额度重置需要管理员密码并推进代次。
-	wrong := doJSON(t, h, http.MethodPost, "/api/profiles/"+profileID+"/quota/reset", "127.0.0.1:5000",
-		map[string]string{"adminPassword": "wrong-password"}, cookies...)
-	if wrong.Code != http.StatusForbidden {
-		t.Fatalf("错误管理员密码应被拒绝：%d", wrong.Code)
-	}
+	// 额度重置推进代次。
 	reset := doJSON(t, h, http.MethodPost, "/api/profiles/"+profileID+"/quota/reset", "127.0.0.1:5000",
-		map[string]string{"adminPassword": "a-long-enough-password"}, cookies...)
+		map[string]string{}, cookies...)
 	if reset.Code != http.StatusOK {
 		t.Fatalf("额度重置失败：%d %s", reset.Code, reset.Body.String())
 	}

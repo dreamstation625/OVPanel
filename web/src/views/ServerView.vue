@@ -2,10 +2,12 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { Play, RefreshCw, RotateCw, Server, ShieldCheck, Square } from '@lucide/vue'
 import { NAlert, NButton, NForm, NFormItem, NInput, NInputNumber, NSelect, NSwitch } from 'naive-ui'
-import PasswordPromptModal from '../components/PasswordPromptModal.vue'
+import ConfirmModal from '../components/ConfirmModal.vue'
 import { api, ApiError, type ServerConfig, type ServerConfigResponse } from '../api'
 import { errorMessage, formatDate } from '../labels'
+import { useNotify } from '../notify'
 
+const notify = useNotify()
 const meta = ref<ServerConfigResponse | null>(null)
 const form = reactive<ServerConfig>({
   vpnNetwork: '10.8.0.0/16',
@@ -25,9 +27,8 @@ const rendered = ref('')
 const loading = ref(false)
 const busy = ref(false)
 const error = ref('')
-const success = ref('')
 type PromptMode = 'apply' | 'start' | 'stop' | 'restart'
-const prompt = ref({ show: false, loading: false, error: '', mode: 'apply' as PromptMode })
+const prompt = ref({ show: false, loading: false, mode: 'apply' as PromptMode })
 
 const configState = computed(() => {
   if (!meta.value) {
@@ -42,16 +43,27 @@ const configState = computed(() => {
 const promptMeta = computed(() => {
   switch (prompt.value.mode) {
     case 'start':
-      return { title: '启动 OpenVPN', description: '使用当前配置启动 OpenVPN。', actionLabel: '启动' }
+      return { title: '启动 OpenVPN', description: '使用当前配置启动 OpenVPN。', actionLabel: '启动', danger: false }
     case 'stop':
-      return { title: '停止 OpenVPN', description: '停止后所有客户端会断开，直到再次启动。', actionLabel: '停止' }
+      return {
+        title: '停止 OpenVPN',
+        description: '停止后所有客户端会断开，直到再次启动。',
+        actionLabel: '停止',
+        danger: true,
+      }
     case 'restart':
-      return { title: '重启 OpenVPN', description: '重启会断开所有连接，配置不变。', actionLabel: '重启' }
+      return {
+        title: '重启 OpenVPN',
+        description: '重启会断开所有连接，配置不变。',
+        actionLabel: '重启',
+        danger: true,
+      }
     default:
       return {
         title: '应用配置',
         description: '应用后可能重启 OpenVPN，现有连接会短暂中断；失败时自动恢复上一版本。',
         actionLabel: '应用',
+        danger: false,
       }
   }
 })
@@ -99,14 +111,12 @@ async function load() {
 async function preview() {
   if (busy.value) return
   busy.value = true
-  error.value = ''
-  success.value = ''
   try {
     const result = await api.previewServerConfig(collectConfig())
     rendered.value = result.rendered
-    success.value = '配置检查通过，预览已更新。'
+    notify.success('配置检查通过，预览已更新。')
   } catch (err) {
-    error.value = errorMessage(err)
+    notify.error(errorMessage(err))
   } finally {
     busy.value = false
   }
@@ -115,49 +125,41 @@ async function preview() {
 async function saveDraft() {
   if (busy.value) return
   busy.value = true
-  error.value = ''
-  success.value = ''
   try {
     await api.saveServerDraft(collectConfig())
-    success.value = '配置已保存，尚未应用。'
+    notify.success('配置已保存，尚未应用。')
     await load()
   } catch (err) {
-    error.value = errorMessage(err)
+    notify.error(errorMessage(err))
   } finally {
     busy.value = false
   }
 }
 
 function askApply() {
-  prompt.value = { show: true, loading: false, error: '', mode: 'apply' }
+  prompt.value = { show: true, loading: false, mode: 'apply' }
 }
 
 function askCommand(action: 'start' | 'stop' | 'restart') {
-  prompt.value = { show: true, loading: false, error: '', mode: action }
+  prompt.value = { show: true, loading: false, mode: action }
 }
 
-async function confirmPrompt(password: string) {
+async function confirmPrompt() {
   const mode = prompt.value.mode
   prompt.value.loading = true
-  prompt.value.error = ''
   try {
     if (mode === 'apply') {
-      await api.applyServerConfig(password)
-      success.value = '配置已应用，正在等待 VPN 服务确认。'
+      await api.applyServerConfig()
+      notify.success('配置已应用，正在等待 VPN 服务确认。')
     } else {
-      await api.serverCommand(mode, password)
-      success.value =
-        mode === 'stop' ? '已发送停止。' : mode === 'start' ? '已发送启动。' : '已发送重启。'
+      await api.serverCommand(mode)
+      notify.success(mode === 'stop' ? '已发送停止。' : mode === 'start' ? '已发送启动。' : '已发送重启。')
     }
     prompt.value.show = false
     window.setTimeout(load, 1500)
   } catch (err) {
-    if (err instanceof ApiError && (err.code === 'reauth_failed' || err.code === 'rate_limited')) {
-      prompt.value.error = err.message
-      return
-    }
     prompt.value.show = false
-    error.value = errorMessage(err)
+    notify.error(errorMessage(err))
   } finally {
     prompt.value.loading = false
   }
@@ -202,9 +204,6 @@ onMounted(load)
 
     <NAlert v-if="error" type="error" :bordered="false" closable class="stack-gap" @close="error = ''">
       {{ error }}
-    </NAlert>
-    <NAlert v-if="success" type="success" :bordered="false" closable class="stack-gap" @close="success = ''">
-      {{ success }}
     </NAlert>
 
     <div class="server-grid">
@@ -344,13 +343,13 @@ onMounted(load)
       <pre class="config-preview" tabindex="0">{{ rendered || '保存后或点击“检查配置”可在这里查看配置内容。' }}</pre>
     </section>
 
-    <PasswordPromptModal
+    <ConfirmModal
       v-model:show="prompt.show"
       :title="promptMeta.title"
       :description="promptMeta.description"
       :action-label="promptMeta.actionLabel"
       :loading="prompt.loading"
-      :error="prompt.error"
+      :danger="promptMeta.danger"
       @confirm="confirmPrompt"
     />
   </div>

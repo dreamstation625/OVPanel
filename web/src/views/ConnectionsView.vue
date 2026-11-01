@@ -18,7 +18,9 @@ import {
   formatDuration,
   formatRate,
 } from '../labels'
+import { useNotify } from '../notify'
 
+const notify = useNotify()
 const tab = ref<'online' | 'history'>('online')
 const online = ref<ConnectionsResponse | null>(null)
 const history = ref<ConnectionHistoryItem[]>([])
@@ -85,12 +87,12 @@ async function refresh() {
 }
 
 async function disconnect(item: Connection) {
-  error.value = ''
   try {
     await api.disconnectConnection(item.id)
+    notify.success('连接已断开。')
     await loadOnline()
   } catch (err) {
-    error.value = errorMessage(err)
+    notify.error(errorMessage(err))
   }
 }
 

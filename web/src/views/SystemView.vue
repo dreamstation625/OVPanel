@@ -12,7 +12,9 @@ import {
 } from '../api'
 import { errorMessage, formatDate, operationKindLabel } from '../labels'
 import { copyText } from '../utils'
+import { useNotify } from '../notify'
 
+const notify = useNotify()
 const system = ref<SystemInfo | null>(null)
 const pki = ref<PKIStatus | null>(null)
 const operations = ref<Operation[]>([])
@@ -22,17 +24,14 @@ const error = ref('')
 
 const currentPassword = ref('')
 const newPassword = ref('')
-const confirmPassword = ref('')
+const confirmPasswordInput = ref('')
 const passwordBusy = ref(false)
 const passwordError = ref('')
-const passwordSuccess = ref('')
 
 const exportHost = ref('')
 const exportPort = ref<number | null>(1194)
 const exportProto = ref<'udp' | 'tcp'>('udp')
 const exportBusy = ref(false)
-const exportError = ref('')
-const exportSuccess = ref('')
 const copied = ref(false)
 
 const protoOptions = [
@@ -91,25 +90,24 @@ async function changePassword() {
     return
   }
   passwordError.value = ''
-  passwordSuccess.value = ''
   if (newPassword.value.length < 8) {
     passwordError.value = '新密码至少需要 8 个字符'
     return
   }
-  if (newPassword.value !== confirmPassword.value) {
+  if (newPassword.value !== confirmPasswordInput.value) {
     passwordError.value = '两次输入的新密码不一致'
     return
   }
   passwordBusy.value = true
   try {
     await api.changeAdminPassword(currentPassword.value, newPassword.value)
-    passwordSuccess.value = '密码已更新，需要重新登录，即将返回登录页。'
+    notify.success('密码已更新，需要重新登录，即将返回登录页。')
     currentPassword.value = ''
     newPassword.value = ''
-    confirmPassword.value = ''
-    window.setTimeout(() => window.location.assign('/'), 1200)
+    confirmPasswordInput.value = ''
+    window.setTimeout(() => window.location.assign('/'), 1500)
   } catch (err) {
-    passwordError.value = errorMessage(err)
+    notify.error(errorMessage(err))
   } finally {
     passwordBusy.value = false
   }
@@ -119,10 +117,8 @@ async function saveExportSettings() {
   if (exportBusy.value) {
     return
   }
-  exportError.value = ''
-  exportSuccess.value = ''
   if (!exportHost.value.trim() || !exportPort.value) {
-    exportError.value = '请填写 VPN 地址和端口'
+    notify.warning('请填写 VPN 地址和端口')
     return
   }
   exportBusy.value = true
@@ -132,9 +128,9 @@ async function saveExportSettings() {
       port: exportPort.value,
       proto: exportProto.value,
     })
-    exportSuccess.value = 'VPN 连接地址已保存。'
+    notify.success('VPN 连接地址已保存。')
   } catch (err) {
-    exportError.value = errorMessage(err)
+    notify.error(errorMessage(err))
   } finally {
     exportBusy.value = false
   }
@@ -197,8 +193,6 @@ onMounted(load)
         <NAlert v-if="exportSettings && !exportSettings.configured" type="info" :bordered="false" class="stack-gap">
           下载客户端配置前需要先填写 VPN 地址与端口。
         </NAlert>
-        <NAlert v-if="exportError" type="error" :bordered="false" class="stack-gap">{{ exportError }}</NAlert>
-        <NAlert v-if="exportSuccess" type="success" :bordered="false" class="stack-gap">{{ exportSuccess }}</NAlert>
         <NForm>
           <NFormItem label="VPN 地址" required>
             <NInput v-model:value="exportHost" placeholder="vpn.example.com 或 IP 地址" maxlength="255" />
@@ -263,7 +257,6 @@ onMounted(load)
         </header>
         <p class="section-description">修改后需要重新登录，其他设备上的登录也会失效。</p>
         <NAlert v-if="passwordError" type="error" :bordered="false" class="stack-gap">{{ passwordError }}</NAlert>
-        <NAlert v-if="passwordSuccess" type="success" :bordered="false" class="stack-gap">{{ passwordSuccess }}</NAlert>
         <NForm>
           <NFormItem label="当前密码" required>
             <NInput
@@ -285,7 +278,7 @@ onMounted(load)
           </NFormItem>
           <NFormItem label="确认新密码" required>
             <NInput
-              v-model:value="confirmPassword"
+              v-model:value="confirmPasswordInput"
               type="password"
               show-password-on="click"
               placeholder="再次输入新密码"

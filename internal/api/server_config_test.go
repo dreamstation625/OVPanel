@@ -16,7 +16,7 @@ func TestServerCommandRequiresControlBundle(t *testing.T) {
 	h, cookies := setupAndLogin(t, srv)
 
 	command := func(action string) map[string]string {
-		return map[string]string{"adminPassword": "a-long-enough-password", "action": action}
+		return map[string]string{"action": action}
 	}
 
 	start := doJSON(t, h, http.MethodPost, "/api/server/command", "127.0.0.1:5000", command("start"), cookies...)
@@ -106,7 +106,7 @@ func TestServerConfigDraftAndApply(t *testing.T) {
 	}
 
 	apply := doJSON(t, h, http.MethodPost, "/api/server/config/apply", "127.0.0.1:5000",
-		map[string]string{"adminPassword": "a-long-enough-password"}, cookies...)
+		map[string]string{}, cookies...)
 	if apply.Code != http.StatusOK {
 		t.Fatalf("应用配置失败：%d %s", apply.Code, apply.Body.String())
 	}

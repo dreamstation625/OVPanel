@@ -14,7 +14,7 @@ import {
   NSelect,
   NSwitch,
 } from 'naive-ui'
-import PasswordPromptModal from '../components/PasswordPromptModal.vue'
+import ConfirmModal from '../components/ConfirmModal.vue'
 import OneTimePasswordModal from '../components/OneTimePasswordModal.vue'
 import { api, ApiError, type AccessMode, type Profile, type RouteMode } from '../api'
 import {
@@ -33,6 +33,7 @@ import {
   statusTone,
 } from '../labels'
 import { copyText, downloadBlob } from '../utils'
+import { useNotify } from '../notify'
 
 interface PromptState {
   show: boolean
@@ -40,16 +41,16 @@ interface PromptState {
   description: string
   actionLabel: string
   loading: boolean
-  error: string
-  action: ((password: string) => Promise<void>) | null
+  danger: boolean
+  action: (() => Promise<void>) | null
 }
 
+const notify = useNotify()
 const route = useRoute()
 const router = useRouter()
 const profile = ref<Profile | null>(null)
 const loading = ref(true)
 const error = ref('')
-const success = ref('')
 const copied = ref(false)
 const oneTime = ref({ show: false, password: '', username: '' })
 const prompt = ref<PromptState>({
@@ -58,7 +59,7 @@ const prompt = ref<PromptState>({
   description: '',
   actionLabel: '确认',
   loading: false,
-  error: '',
+  danger: false,
   action: null,
 })
 
@@ -109,7 +110,6 @@ async function load() {
   }
   loading.value = true
   error.value = ''
-  success.value = ''
   profile.value = null
   try {
     profile.value = await api.getProfile(id)
@@ -123,34 +123,36 @@ async function load() {
   }
 }
 
-function openPrompt(title: string, description: string, actionLabel: string, action: (password: string) => Promise<void>) {
+function openPrompt(
+  title: string,
+  description: string,
+  actionLabel: string,
+  action: () => Promise<void>,
+  danger = false,
+) {
   prompt.value = {
     show: true,
     title,
     description,
     actionLabel,
     loading: false,
-    error: '',
+    danger,
     action,
   }
 }
 
-async function confirmPassword(password: string) {
-  if (!prompt.value.action) {
+async function confirmPrompt() {
+  const action = prompt.value.action
+  if (!action) {
     return
   }
   prompt.value.loading = true
-  prompt.value.error = ''
   try {
-    await prompt.value.action(password)
+    await action()
     prompt.value.show = false
   } catch (err) {
-    if (err instanceof ApiError && (err.code === 'reauth_failed' || err.code === 'rate_limited')) {
-      prompt.value.error = err.message
-      return
-    }
     prompt.value.show = false
-    error.value = errorMessage(err)
+    notify.error(errorMessage(err))
   } finally {
     prompt.value.loading = false
   }
@@ -165,10 +167,10 @@ function exportProfile() {
     '下载客户端配置',
     '文件包含客户端私钥和加密密钥，请通过安全方式交给使用者，不要公开转发。',
     '下载',
-    async (password) => {
-      const result = await api.exportProfile(id, password)
+    async () => {
+      const result = await api.exportProfile(id)
       downloadBlob(result.blob, result.filename)
-      success.value = '客户端配置已开始下载。'
+      notify.success('客户端配置已开始下载。')
     },
   )
 }
@@ -178,15 +180,15 @@ function resetPassword() {
     return
   }
   const id = profile.value.id
-  openPrompt('重置 VPN 密码', '旧密码立即失效；新密码只会显示一次。', '重置密码', async (password) => {
-    const result = await api.resetProfilePassword(id, password)
+  openPrompt('重置 VPN 密码', '旧密码立即失效；新密码只会显示一次。', '重置密码', async () => {
+    const result = await api.resetProfilePassword(id)
     profile.value = result.profile
     oneTime.value = {
       show: true,
       password: result.password,
       username: result.profile.username ?? '',
     }
-    success.value = '密码已重置。'
+    notify.success('VPN 密码已重置。')
   })
 }
 
@@ -199,10 +201,10 @@ function rotateCertificate() {
     '更换客户端证书',
     '旧证书会立即失效，所有使用旧配置的设备都需要重新下载 .ovpn。',
     '更换证书',
-    async (password) => {
-      const result = await api.rotateCertificate(id, password)
+    async () => {
+      const result = await api.rotateCertificate(id)
       profile.value = result.profile
-      success.value = '证书已更换。'
+      notify.success('证书已更换。')
     },
   )
 }
@@ -216,11 +218,12 @@ function revokeCertificate() {
     '作废客户端证书',
     '作废后无法恢复。该配置将无法连接，需要重新签发证书。',
     '作废证书',
-    async (password) => {
-      const result = await api.revokeCertificate(id, password)
+    async () => {
+      const result = await api.revokeCertificate(id)
       profile.value = result.profile
-      success.value = '证书已作废。'
+      notify.success('证书已作废。')
     },
+    true,
   )
 }
 
@@ -231,9 +234,9 @@ async function toggleStatus() {
   const next = profile.value.status === 'active' ? 'disabled' : 'active'
   try {
     profile.value = await api.updateProfile(profile.value.id, { status: next })
-    success.value = next === 'active' ? '配置已启用。' : '配置已停用。'
+    notify.success(next === 'active' ? '配置已启用。' : '配置已停用。')
   } catch (err) {
-    error.value = errorMessage(err)
+    notify.error(errorMessage(err))
   }
 }
 
@@ -250,8 +253,6 @@ async function savePolicy() {
     return
   }
   policyBusy.value = true
-  error.value = ''
-  success.value = ''
   try {
     profile.value = await api.updateProfile(current.id, {
       routeMode: policy.routeMode,
@@ -265,9 +266,9 @@ async function savePolicy() {
           : [],
       fixedVpnIp: policy.fixedVpnIp.trim(),
     })
-    success.value = '网络策略已保存；路由和固定 IP 在客户端重新连接后生效。'
+    notify.success('网络策略已保存；路由和固定 IP 在客户端重新连接后生效。')
   } catch (err) {
-    error.value = errorMessage(err)
+    notify.error(errorMessage(err))
   } finally {
     policyBusy.value = false
   }
@@ -279,25 +280,23 @@ async function saveLimits() {
     return
   }
   if (limits.concurrentEnabled && (limits.concurrentLimit < 1 || limits.concurrentLimit > 1000)) {
-    error.value = '并发上限需在 1 到 1000 之间'
+    notify.warning('并发上限需在 1 到 1000 之间')
     return
   }
   if (limits.quotaEnabled && limits.quotaGb < 0.001) {
-    error.value = '流量额度至少为 0.001 GB'
+    notify.warning('流量额度至少为 0.001 GB')
     return
   }
   if (limits.uploadEnabled && (limits.uploadMbps < 0.008 || limits.uploadMbps > 10000)) {
-    error.value = '上传限速需在 0.008 到 10000 Mbps 之间'
+    notify.warning('上传限速需在 0.008 到 10000 Mbps 之间')
     return
   }
   if (limits.downloadEnabled && (limits.downloadMbps < 0.008 || limits.downloadMbps > 10000)) {
-    error.value = '下载限速需在 0.008 到 10000 Mbps 之间'
+    notify.warning('下载限速需在 0.008 到 10000 Mbps 之间')
     return
   }
 
   limitsBusy.value = true
-  error.value = ''
-  success.value = ''
   try {
     const result = await api.updateProfileLimits(current.id, {
       expiresAt: limits.expiresAt ? new Date(limits.expiresAt).toISOString() : '',
@@ -307,9 +306,9 @@ async function saveLimits() {
       downloadBps: limits.downloadEnabled ? mbpsToBps(limits.downloadMbps) : 0,
     })
     profile.value = result.profile
-    success.value = '使用限制已保存并生效。'
+    notify.success('使用限制已保存并生效。')
   } catch (err) {
-    error.value = errorMessage(err)
+    notify.error(errorMessage(err))
   } finally {
     limitsBusy.value = false
   }
@@ -324,10 +323,10 @@ function resetQuota() {
     '重置流量额度',
     '重置后从当前用量重新计算；历史连接和统计不会删除，在线连接不会断开。',
     '重置额度',
-    async (password) => {
-      const result = await api.resetQuota(current.id, password)
+    async () => {
+      const result = await api.resetQuota(current.id)
       profile.value = result.profile
-      success.value = '流量额度已重置，并从当前用量重新计算。'
+      notify.success('流量额度已重置，并从当前用量重新计算。')
       // VPN 服务按秒读取新配置；短暂延迟后静默刷新，显示新的用量基线。
       window.setTimeout(async () => {
         try {
@@ -381,9 +380,6 @@ watch(() => route.params.id, load, { immediate: true })
         前往系统设置
       </NButton>
       <NButton v-else text type="primary" @click="load">重试</NButton>
-    </NAlert>
-    <NAlert v-if="success" type="success" :bordered="false" closable class="stack-gap" @close="success = ''">
-      {{ success }}
     </NAlert>
 
     <template v-if="profile">
@@ -665,14 +661,14 @@ watch(() => route.params.id, load, { immediate: true })
     </template>
     <div v-else-if="loading" class="surface loading-surface">正在读取配置…</div>
 
-    <PasswordPromptModal
+    <ConfirmModal
       v-model:show="prompt.show"
       :title="prompt.title"
       :description="prompt.description"
       :action-label="prompt.actionLabel"
       :loading="prompt.loading"
-      :error="prompt.error"
-      @confirm="confirmPassword"
+      :danger="prompt.danger"
+      @confirm="confirmPrompt"
     />
     <OneTimePasswordModal
       :show="oneTime.show"

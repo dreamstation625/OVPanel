@@ -80,7 +80,6 @@ func TestP07UpdateRequiresBackupThenStartsTask(t *testing.T) {
 	}
 
 	settings := doJSON(t, h, http.MethodPut, "/api/backups/settings", "127.0.0.1:5000", map[string]any{
-		"adminPassword":  "a-long-enough-password",
 		"backupPassword": "correct-horse-backup-password",
 		"enabled":        false,
 		"scheduleTime":   "03:00",

@@ -400,13 +400,9 @@ func (s *Server) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleResetProfilePassword(w http.ResponseWriter, r *http.Request) {
 	profileID := r.PathValue("id")
 	var req struct {
-		AdminPassword string `json:"adminPassword"`
-		Password      string `json:"password"`
+		Password string `json:"password"`
 	}
 	if !s.decodeJSON(w, r, &req) {
-		return
-	}
-	if _, ok := s.verifyAdminPassword(w, r, req.AdminPassword); !ok {
 		return
 	}
 	result, err := s.accounts.ResetPassword(r.Context(), profileID, req.Password)
@@ -426,15 +422,6 @@ func (s *Server) handleResetProfilePassword(w http.ResponseWriter, r *http.Reque
 
 func (s *Server) handleRotateCertificate(w http.ResponseWriter, r *http.Request) {
 	profileID := r.PathValue("id")
-	var req struct {
-		AdminPassword string `json:"adminPassword"`
-	}
-	if !s.decodeJSON(w, r, &req) {
-		return
-	}
-	if _, ok := s.verifyAdminPassword(w, r, req.AdminPassword); !ok {
-		return
-	}
 	detail, err := s.accounts.RotateCertificate(r.Context(), profileID)
 	if err != nil {
 		s.writeAccountError(w, r, err)
@@ -450,13 +437,9 @@ func (s *Server) handleRotateCertificate(w http.ResponseWriter, r *http.Request)
 func (s *Server) handleRevokeCertificate(w http.ResponseWriter, r *http.Request) {
 	profileID := r.PathValue("id")
 	var req struct {
-		AdminPassword string `json:"adminPassword"`
-		Reason        string `json:"reason"`
+		Reason string `json:"reason"`
 	}
 	if !s.decodeJSON(w, r, &req) {
-		return
-	}
-	if _, ok := s.verifyAdminPassword(w, r, req.AdminPassword); !ok {
 		return
 	}
 	detail, err := s.accounts.RevokeCertificate(r.Context(), profileID, req.Reason)
@@ -473,15 +456,6 @@ func (s *Server) handleRevokeCertificate(w http.ResponseWriter, r *http.Request)
 
 func (s *Server) handleExportProfile(w http.ResponseWriter, r *http.Request) {
 	profileID := r.PathValue("id")
-	var req struct {
-		AdminPassword string `json:"adminPassword"`
-	}
-	if !s.decodeJSON(w, r, &req) {
-		return
-	}
-	if _, ok := s.verifyAdminPassword(w, r, req.AdminPassword); !ok {
-		return
-	}
 	result, err := s.accounts.Export(r.Context(), profileID)
 	if err != nil {
 		s.writeAccountError(w, r, err)

@@ -322,15 +322,6 @@ func (s *Server) handleUpdateProfileLimits(w http.ResponseWriter, r *http.Reques
 
 func (s *Server) handleResetQuota(w http.ResponseWriter, r *http.Request) {
 	profileID := r.PathValue("id")
-	var req struct {
-		AdminPassword string `json:"adminPassword"`
-	}
-	if !s.decodeJSON(w, r, &req) {
-		return
-	}
-	if _, ok := s.verifyAdminPassword(w, r, req.AdminPassword); !ok {
-		return
-	}
 	epoch, err := s.store.IncrementQuotaEpoch(r.Context(), profileID, s.now())
 	if err != nil {
 		s.writeAccountError(w, r, err)

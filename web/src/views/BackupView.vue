@@ -2,7 +2,7 @@
 import { onMounted, reactive, ref, watch } from 'vue'
 import { Archive, Download, RefreshCw, ShieldCheck, Trash2, Upload } from '@lucide/vue'
 import { NAlert, NButton, NForm, NFormItem, NInput, NInputNumber, NModal, NSwitch } from 'naive-ui'
-import PasswordPromptModal from '../components/PasswordPromptModal.vue'
+import ConfirmModal from '../components/ConfirmModal.vue'
 import {
   api,
   ApiError,
@@ -14,6 +14,7 @@ import {
 } from '../api'
 import { errorMessage, formatBytes, formatDate } from '../labels'
 import { downloadBlob } from '../utils'
+import { useNotify } from '../notify'
 
 interface PromptState {
   show: boolean
@@ -21,14 +22,14 @@ interface PromptState {
   description: string
   actionLabel: string
   loading: boolean
-  error: string
-  action: ((password: string) => Promise<void>) | null
+  danger: boolean
+  action: (() => Promise<void>) | null
 }
 
+const notify = useNotify()
 const data = ref<BackupListResponse | null>(null)
 const loading = ref(false)
 const error = ref('')
-const success = ref('')
 const settingsForm = reactive({
   enabled: false,
   scheduleTime: '03:00',
@@ -50,7 +51,7 @@ const prompt = ref<PromptState>({
   description: '',
   actionLabel: '确认',
   loading: false,
-  error: '',
+  danger: false,
   action: null,
 })
 
@@ -58,27 +59,24 @@ function openPrompt(
   title: string,
   description: string,
   actionLabel: string,
-  action: (password: string) => Promise<void>,
+  action: () => Promise<void>,
+  danger = false,
 ) {
-  prompt.value = { show: true, title, description, actionLabel, loading: false, error: '', action }
+  prompt.value = { show: true, title, description, actionLabel, loading: false, danger, action }
 }
 
-async function confirmPassword(password: string) {
-  if (!prompt.value.action) {
+async function confirmPrompt() {
+  const action = prompt.value.action
+  if (!action) {
     return
   }
   prompt.value.loading = true
-  prompt.value.error = ''
   try {
-    await prompt.value.action(password)
+    await action()
     prompt.value.show = false
   } catch (err) {
-    if (err instanceof ApiError && (err.code === 'reauth_failed' || err.code === 'rate_limited')) {
-      prompt.value.error = err.message
-      return
-    }
     prompt.value.show = false
-    error.value = errorMessage(err)
+    notify.error(errorMessage(err))
   } finally {
     prompt.value.loading = false
   }
@@ -112,34 +110,31 @@ function syncSettings(settings: BackupSettings) {
 function saveSettings() {
   const time = settingsForm.scheduleTime.trim()
   if (!/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(time)) {
-    error.value = '备份时间必须为 HH:MM'
+    notify.warning('备份时间必须为 HH:MM')
     return
   }
   if (settingsForm.retentionCount < 1 || settingsForm.retentionCount > 90) {
-    error.value = '保留数量需在 1 到 90 之间'
+    notify.warning('保留数量需在 1 到 90 之间')
     return
   }
   const configured = data.value?.settings.configured ?? false
   if (!configured && !settingsForm.backupPassword) {
-    error.value = '首次设置必须填写备份恢复密码'
+    notify.warning('首次设置必须填写备份恢复密码')
     return
   }
   if (settingsForm.backupPassword && settingsForm.backupPassword !== settingsForm.backupConfirm) {
-    error.value = '两次输入的恢复密码不一致'
+    notify.warning('两次输入的恢复密码不一致')
     return
   }
   if (settingsForm.backupPassword && settingsForm.backupPassword.length < 12) {
-    error.value = '恢复密码至少需要 12 个字符'
+    notify.warning('恢复密码至少需要 12 个字符')
     return
   }
 
-  openPrompt('确认备份设置', '修改备份计划或恢复密码时，需要再次输入管理员密码。', '保存设置', async (password) => {
+  openPrompt('确认备份设置', '修改备份计划或恢复密码会影响后续备份，确认继续？', '保存设置', async () => {
     settingsBusy.value = true
-    error.value = ''
-    success.value = ''
     try {
       const result = await api.saveBackupSettings({
-        adminPassword: password,
         backupPassword: settingsForm.backupPassword || undefined,
         enabled: settingsForm.enabled,
         scheduleTime: time,
@@ -148,7 +143,7 @@ function saveSettings() {
       settingsForm.backupPassword = ''
       settingsForm.backupConfirm = ''
       data.value = data.value ? { ...data.value, settings: result.settings } : data.value
-      success.value = '备份设置已保存。'
+      notify.success('备份设置已保存。')
       await load()
     } finally {
       settingsBusy.value = false
@@ -158,35 +153,41 @@ function saveSettings() {
 
 function manualBackup() {
   if (!data.value?.settings.configured) {
-    error.value = '请先设置备份恢复密码'
+    notify.warning('请先设置备份恢复密码')
     return
   }
   openPrompt(
     '立即创建备份',
     '备份包含用户、证书、用量记录和加密密钥。请妥善保存恢复密码。',
     '开始备份',
-    async (password) => {
-      await api.createBackup(password, '手动备份')
-      success.value = '备份已创建。'
+    async () => {
+      await api.createBackup('手动备份')
+      notify.success('备份已创建。')
       await load()
     },
   )
 }
 
 function download(item: BackupItem) {
-  openPrompt('下载备份包', '备份包使用恢复密码加密，下载时需要再次输入管理员密码。', '下载', async (password) => {
-    const result = await api.downloadBackup(item.id, password)
+  openPrompt('下载备份包', '备份包使用恢复密码加密，确认下载？', '下载', async () => {
+    const result = await api.downloadBackup(item.id)
     downloadBlob(result.blob, result.filename)
-    success.value = '备份包已开始下载。'
+    notify.success('备份包已开始下载。')
   })
 }
 
 function remove(item: BackupItem) {
-  openPrompt('删除备份', `删除 ${item.filename}？此操作不可恢复。`, '删除', async (password) => {
-    await api.deleteBackup(item.id, password)
-    success.value = '备份已删除。'
-    await load()
-  })
+  openPrompt(
+    '删除备份',
+    `删除 ${item.filename}？此操作不可恢复。`,
+    '删除',
+    async () => {
+      await api.deleteBackup(item.id)
+      notify.success('备份已删除。')
+      await load()
+    },
+    true,
+  )
 }
 
 function pickFile(event: Event) {
@@ -198,24 +199,22 @@ function pickFile(event: Event) {
 
 function startPreview() {
   if (!restoreFile.value) {
-    error.value = '请选择备份包文件'
+    notify.warning('请选择备份包文件')
     return
   }
   if (!restorePassword.value) {
-    error.value = '请输入备份恢复密码'
+    notify.warning('请输入备份恢复密码')
     return
   }
   openPrompt(
     '检查备份包',
     '面板会解密并检查备份包，然后显示将要恢复的数据。此时不会修改任何数据。',
     '检查',
-    async (password) => {
+    async () => {
       previewBusy.value = true
-      error.value = ''
-      success.value = ''
       try {
-        preview.value = await api.previewRestore(restoreFile.value!, password, restorePassword.value)
-        success.value = '备份包检查通过，请确认恢复影响。'
+        preview.value = await api.previewRestore(restoreFile.value!, restorePassword.value)
+        notify.success('备份包检查通过，请确认恢复影响。')
       } finally {
         previewBusy.value = false
       }
@@ -232,16 +231,22 @@ function executeRestore() {
     '恢复数据',
     '恢复会断开所有 VPN 连接，并将数据恢复到备份时间点，完成后需要重新登录。确认继续？',
     '开始恢复',
-    async (password) => {
+    async () => {
       restoreBusy.value = true
       try {
-        restoreResult.value = await api.executeRestore(token, password)
+        const result = await api.executeRestore(token)
+        restoreResult.value = result
         preview.value = null
-        success.value = '恢复已完成，请使用备份时间点的管理员密码重新登录。'
+        if (result.warnings.length > 0) {
+          notify.warning('恢复已完成，请查看结果中的提醒。')
+        } else {
+          notify.success('恢复已完成，请使用备份时间点的管理员密码重新登录。')
+        }
       } finally {
         restoreBusy.value = false
       }
     },
+    true,
   )
 }
 
@@ -291,9 +296,6 @@ onMounted(load)
 
     <NAlert v-if="error" type="error" :bordered="false" closable class="stack-gap" @close="error = ''">
       {{ error }}
-    </NAlert>
-    <NAlert v-if="success" type="success" :bordered="false" closable class="stack-gap" @close="success = ''">
-      {{ success }}
     </NAlert>
 
     <NAlert v-if="restoreResult" type="warning" :bordered="false" class="stack-gap">
@@ -439,14 +441,14 @@ onMounted(load)
       </template>
     </NModal>
 
-    <PasswordPromptModal
+    <ConfirmModal
       v-model:show="prompt.show"
       :title="prompt.title"
       :description="prompt.description"
       :action-label="prompt.actionLabel"
       :loading="prompt.loading"
-      :error="prompt.error"
-      @confirm="confirmPassword"
+      :danger="prompt.danger"
+      @confirm="confirmPrompt"
     />
   </div>
 </template>

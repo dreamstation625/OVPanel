@@ -7,7 +7,9 @@ import AddProfileModal from '../components/AddProfileModal.vue'
 import OneTimePasswordModal from '../components/OneTimePasswordModal.vue'
 import { api, ApiError, type AddProfileResult, type UserDetail } from '../api'
 import { authLabel, errorMessage, formatBytes, formatDate, shortFingerprint, statusLabel, statusTone } from '../labels'
+import { useNotify } from '../notify'
 
+const notify = useNotify()
 const route = useRoute()
 const detail = ref<UserDetail | null>(null)
 const loading = ref(false)
@@ -72,8 +74,9 @@ async function saveEdit() {
         .filter(Boolean),
     })
     editShow.value = false
+    notify.success('用户信息已更新。')
   } catch (err) {
-    editError.value = errorMessage(err)
+    notify.error(errorMessage(err))
   } finally {
     editBusy.value = false
   }
@@ -86,12 +89,14 @@ async function toggleStatus() {
   const next = detail.value.user.status === 'active' ? 'disabled' : 'active'
   try {
     detail.value = await api.updateUser(detail.value.user.id, { status: next })
+    notify.success(next === 'active' ? '用户已启用。' : '用户已停用。')
   } catch (err) {
-    error.value = errorMessage(err)
+    notify.error(errorMessage(err))
   }
 }
 
 function handleProfileCreated(result: AddProfileResult) {
+  notify.success('客户端配置已创建。')
   load()
   if (result.password) {
     oneTime.value = {

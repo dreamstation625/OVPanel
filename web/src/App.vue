@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterView } from 'vue-router'
-import { NButton, NConfigProvider, darkTheme } from 'naive-ui'
+import { NButton, NConfigProvider, NMessageProvider, darkTheme } from 'naive-ui'
 import BrandMark from './components/BrandMark.vue'
 import ThemeToggle from './components/ThemeToggle.vue'
 import AppShell from './components/AppShell.vue'
@@ -112,36 +112,44 @@ onBeforeUnmount(() => observer?.disconnect())
 
 <template>
   <NConfigProvider :theme="naiveTheme" :theme-overrides="overrides">
-    <div class="app-root">
-      <ThemeToggle v-if="phase !== 'app'" class="corner-theme" />
+    <NMessageProvider
+      placement="top-right"
+      :max="5"
+      :duration="4000"
+      closable
+      keep-alive-on-hover
+    >
+      <div class="app-root">
+        <ThemeToggle v-if="phase !== 'app'" class="corner-theme" />
 
-      <main v-if="phase === 'boot'" class="auth-shell">
-        <section class="boot-card" aria-live="polite">
-          <BrandMark :size="44" />
-          <div v-if="!bootError" class="boot-loading">
-            <strong>正在连接面板</strong>
-            <span class="boot-bar" aria-hidden="true" />
-          </div>
-          <div v-else class="boot-error">
-            <h1>无法连接面板</h1>
-            <p>{{ bootError }}</p>
-            <NButton type="primary" @click="bootstrap">重试</NButton>
-          </div>
-        </section>
-      </main>
+        <main v-if="phase === 'boot'" class="auth-shell">
+          <section class="boot-card" aria-live="polite">
+            <BrandMark :size="44" />
+            <div v-if="!bootError" class="boot-loading">
+              <strong>正在连接面板</strong>
+              <span class="boot-bar" aria-hidden="true" />
+            </div>
+            <div v-else class="boot-error">
+              <h1>无法连接面板</h1>
+              <p>{{ bootError }}</p>
+              <NButton type="primary" @click="bootstrap">重试</NButton>
+            </div>
+          </section>
+        </main>
 
-      <SetupView
-        v-else-if="phase === 'setup' && setupStatus"
-        :status="setupStatus"
-        @done="handleSetupDone"
-      />
+        <SetupView
+          v-else-if="phase === 'setup' && setupStatus"
+          :status="setupStatus"
+          @done="handleSetupDone"
+        />
 
-      <LoginView v-else-if="phase === 'login'" :notice="loginNotice" @done="handleLoginDone" />
+        <LoginView v-else-if="phase === 'login'" :notice="loginNotice" @done="handleLoginDone" />
 
-      <AppShell v-else-if="phase === 'app'" :username="username" @logout="handleLogout">
-        <RouterView />
-      </AppShell>
-    </div>
+        <AppShell v-else-if="phase === 'app'" :username="username" @logout="handleLogout">
+          <RouterView />
+        </AppShell>
+      </div>
+    </NMessageProvider>
   </NConfigProvider>
 </template>
 

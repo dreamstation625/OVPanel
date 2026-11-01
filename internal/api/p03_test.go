@@ -94,7 +94,7 @@ func TestP03UserProfileCertificateFlow(t *testing.T) {
 
 	// 未配置连接地址时导出应失败。
 	export := doJSON(t, h, http.MethodPost, "/api/profiles/"+certProfileID+"/export", "127.0.0.1:5000",
-		map[string]string{"adminPassword": "a-long-enough-password"}, cookies...)
+		map[string]string{}, cookies...)
 	if export.Code != http.StatusConflict || decodeError(t, export).Code != CodeExportNotConfigured {
 		t.Fatalf("未配置地址应拒绝导出：%d %s", export.Code, export.Body.String())
 	}
@@ -109,7 +109,7 @@ func TestP03UserProfileCertificateFlow(t *testing.T) {
 
 	// 导出 .ovpn，必须包含证书材料且禁止缓存。
 	export = doJSON(t, h, http.MethodPost, "/api/profiles/"+certProfileID+"/export", "127.0.0.1:5000",
-		map[string]string{"adminPassword": "a-long-enough-password"}, cookies...)
+		map[string]string{}, cookies...)
 	if export.Code != http.StatusOK {
 		t.Fatalf("导出失败：%d %s", export.Code, export.Body.String())
 	}
@@ -133,16 +133,9 @@ func TestP03UserProfileCertificateFlow(t *testing.T) {
 		t.Fatalf("下发响应缺少 agentPending：%s", apply.Body.String())
 	}
 
-	// 错误管理员密码应被拒绝。
-	wrong := doJSON(t, h, http.MethodPost, "/api/profiles/"+certProfileID+"/certificate/rotate", "127.0.0.1:5000",
-		map[string]string{"adminPassword": "wrong-password"}, cookies...)
-	if wrong.Code != http.StatusForbidden || decodeError(t, wrong).Code != CodeReauthFailed {
-		t.Fatalf("错误密码应被拒绝：%d %s", wrong.Code, wrong.Body.String())
-	}
-
 	// 轮换证书后指纹变化。
 	rotate := doJSON(t, h, http.MethodPost, "/api/profiles/"+certProfileID+"/certificate/rotate", "127.0.0.1:5000",
-		map[string]string{"adminPassword": "a-long-enough-password"}, cookies...)
+		map[string]string{}, cookies...)
 	if rotate.Code != http.StatusOK {
 		t.Fatalf("轮换失败：%d %s", rotate.Code, rotate.Body.String())
 	}
@@ -158,7 +151,7 @@ func TestP03UserProfileCertificateFlow(t *testing.T) {
 
 	// 吊销后配置无生效证书。
 	revoke := doJSON(t, h, http.MethodPost, "/api/profiles/"+certProfileID+"/certificate/revoke", "127.0.0.1:5000",
-		map[string]string{"adminPassword": "a-long-enough-password"}, cookies...)
+		map[string]string{}, cookies...)
 	if revoke.Code != http.StatusOK {
 		t.Fatalf("吊销失败：%d %s", revoke.Code, revoke.Body.String())
 	}
@@ -174,7 +167,7 @@ func TestP03UserProfileCertificateFlow(t *testing.T) {
 
 	// 重置密码并校验新密码。
 	reset := doJSON(t, h, http.MethodPost, "/api/profiles/"+added.Profile.ID+"/password", "127.0.0.1:5000",
-		map[string]string{"adminPassword": "a-long-enough-password"}, cookies...)
+		map[string]string{}, cookies...)
 	if reset.Code != http.StatusOK {
 		t.Fatalf("重置密码失败：%d %s", reset.Code, reset.Body.String())
 	}

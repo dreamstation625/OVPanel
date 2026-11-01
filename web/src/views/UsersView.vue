@@ -7,7 +7,9 @@ import CreateUserModal from '../components/CreateUserModal.vue'
 import OneTimePasswordModal from '../components/OneTimePasswordModal.vue'
 import { api, ApiError, type CreateUserResult, type User } from '../api'
 import { errorMessage, formatBytes, formatDate } from '../labels'
+import { useNotify } from '../notify'
 
+const notify = useNotify()
 const route = useRoute()
 const router = useRouter()
 const users = ref<User[]>([])
@@ -50,6 +52,7 @@ function openCreate() {
 }
 
 function handleCreated(result: CreateUserResult) {
+  notify.success('用户已创建。')
   load()
   if (result.password) {
     pendingUserId.value = result.user.id

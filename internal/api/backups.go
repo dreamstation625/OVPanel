@@ -77,16 +77,12 @@ func (s *Server) handleSaveBackupSettings(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var req struct {
-		AdminPassword  string `json:"adminPassword"`
 		BackupPassword string `json:"backupPassword"`
 		Enabled        bool   `json:"enabled"`
 		ScheduleTime   string `json:"scheduleTime"`
 		RetentionCount int    `json:"retentionCount"`
 	}
 	if !s.decodeJSON(w, r, &req) {
-		return
-	}
-	if _, ok := s.verifyAdminPassword(w, r, req.AdminPassword); !ok {
 		return
 	}
 	settings, err := s.backups.SaveSettings(r.Context(), backup.SettingsInput{
@@ -113,13 +109,9 @@ func (s *Server) handleCreateBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		AdminPassword string `json:"adminPassword"`
-		Note          string `json:"note"`
+		Note string `json:"note"`
 	}
 	if !s.decodeJSON(w, r, &req) {
-		return
-	}
-	if _, ok := s.verifyAdminPassword(w, r, req.AdminPassword); !ok {
 		return
 	}
 	record, err := s.backups.Create(r.Context(), store.BackupManual, req.Note, "")
@@ -142,15 +134,6 @@ func (s *Server) handleCreateBackup(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDownloadBackup(w http.ResponseWriter, r *http.Request) {
 	if s.backups == nil {
 		writeError(w, r, http.StatusServiceUnavailable, CodeInternal, "备份服务未配置")
-		return
-	}
-	var req struct {
-		AdminPassword string `json:"adminPassword"`
-	}
-	if !s.decodeJSON(w, r, &req) {
-		return
-	}
-	if _, ok := s.verifyAdminPassword(w, r, req.AdminPassword); !ok {
 		return
 	}
 	record, ok, err := s.store.BackupRecord(r.Context(), r.PathValue("id"))
@@ -195,15 +178,6 @@ func (s *Server) handleDeleteBackup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusServiceUnavailable, CodeInternal, "备份服务未配置")
 		return
 	}
-	var req struct {
-		AdminPassword string `json:"adminPassword"`
-	}
-	if !s.decodeJSON(w, r, &req) {
-		return
-	}
-	if _, ok := s.verifyAdminPassword(w, r, req.AdminPassword); !ok {
-		return
-	}
 	id := r.PathValue("id")
 	if err := s.backups.Delete(r.Context(), id); err != nil {
 		s.writeAccountError(w, r, err)
@@ -243,7 +217,6 @@ func (s *Server) handleRestorePreview(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var (
-		adminPassword  string
 		backupPassword string
 		fileReceived   bool
 	)
@@ -270,8 +243,6 @@ func (s *Server) handleRestorePreview(w http.ResponseWriter, r *http.Request) {
 				writeError(w, r, http.StatusBadRequest, CodeInvalidRequest, "读取备份包失败")
 				return
 			}
-		case "adminPassword":
-			adminPassword = readSmallPart(part)
 		case "backupPassword":
 			backupPassword = readSmallPart(part)
 		default:
@@ -285,9 +256,6 @@ func (s *Server) handleRestorePreview(w http.ResponseWriter, r *http.Request) {
 	}
 	if !fileReceived {
 		writeError(w, r, http.StatusBadRequest, CodeInvalidRequest, "缺少备份包文件")
-		return
-	}
-	if _, ok := s.verifyAdminPassword(w, r, adminPassword); !ok {
 		return
 	}
 	if info, err := os.Stat(uploadPath); err == nil && info.Size() > backup.MaxPackageBytes {
@@ -319,13 +287,9 @@ func (s *Server) handleRestoreExecute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Token         string `json:"token"`
-		AdminPassword string `json:"adminPassword"`
+		Token string `json:"token"`
 	}
 	if !s.decodeJSON(w, r, &req) {
-		return
-	}
-	if _, ok := s.verifyAdminPassword(w, r, req.AdminPassword); !ok {
 		return
 	}
 	result, err := s.backups.ExecuteRestore(r.Context(), strings.TrimSpace(req.Token))

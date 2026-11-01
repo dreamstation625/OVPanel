@@ -498,22 +498,19 @@ export const api = {
   system: () => request<SystemInfo>('/api/system'),
   listBackups: () => request<BackupListResponse>('/api/backups'),
   saveBackupSettings: (input: {
-    adminPassword: string
     backupPassword?: string
     enabled: boolean
     scheduleTime: string
     retentionCount: number
   }) => put<{ settings: BackupSettings }>('/api/backups/settings', input),
-  createBackup: (adminPassword: string, note: string) =>
-    post<{ backup: BackupItem }>('/api/backups', { adminPassword, note }),
-  deleteBackup: (id: string, adminPassword: string) =>
-    post<{ ok: boolean }>(`/api/backups/${encodeURIComponent(id)}/delete`, { adminPassword }),
-  downloadBackup: async (id: string, adminPassword: string) => {
+  createBackup: (note: string) => post<{ backup: BackupItem }>('/api/backups', { note }),
+  deleteBackup: (id: string) =>
+    post<{ ok: boolean }>(`/api/backups/${encodeURIComponent(id)}/delete`, {}),
+  downloadBackup: async (id: string) => {
     const response = await fetch(`/api/backups/${encodeURIComponent(id)}/download`, {
       method: 'POST',
-      headers: new Headers({ 'Content-Type': 'application/json', ...csrfHeader() }),
+      headers: new Headers({ ...csrfHeader() }),
       credentials: 'same-origin',
-      body: JSON.stringify({ adminPassword }),
     })
     if (response.status === 401) {
       notifyUnauthorized()
@@ -526,9 +523,8 @@ export const api = {
     const match = /filename="([^"]+)"/.exec(disposition)
     return { blob, filename: match?.[1] ?? 'ovpanel-backup.ovpbak' }
   },
-  previewRestore: async (file: File, adminPassword: string, backupPassword: string) => {
+  previewRestore: async (file: File, backupPassword: string) => {
     const form = new FormData()
-    form.append('adminPassword', adminPassword)
     form.append('backupPassword', backupPassword)
     form.append('file', file, file.name)
     const response = await fetch('/api/backups/restore/preview', {
@@ -545,8 +541,8 @@ export const api = {
     }
     return (await response.json()) as RestorePreview
   },
-  executeRestore: (token: string, adminPassword: string) =>
-    post<RestoreResult>('/api/backups/restore/execute', { token, adminPassword }),
+  executeRestore: (token: string) =>
+    post<RestoreResult>('/api/backups/restore/execute', { token }),
   updateCheck: () => request<UpdateCheck>('/api/update'),
   overview: () => request<Overview>('/api/overview'),
   operations: () => request<{ operations: Operation[] }>('/api/operations'),
@@ -579,33 +575,26 @@ export const api = {
     patch<Profile>(`/api/profiles/${encodeURIComponent(id)}`, patchBody),
   updateProfileLimits: (id: string, input: ProfileLimitsInput) =>
     put<{ profile: Profile }>(`/api/profiles/${encodeURIComponent(id)}/limits`, input),
-  resetQuota: (id: string, adminPassword: string) =>
-    post<{ profile: Profile; epoch: number }>(`/api/profiles/${encodeURIComponent(id)}/quota/reset`, {
-      adminPassword,
-    }),
-  resetProfilePassword: (id: string, adminPassword: string, password = '') =>
+  resetQuota: (id: string) =>
+    post<{ profile: Profile; epoch: number }>(`/api/profiles/${encodeURIComponent(id)}/quota/reset`, {}),
+  resetProfilePassword: (id: string, password = '') =>
     post<{ profile: Profile; password: string }>(`/api/profiles/${encodeURIComponent(id)}/password`, {
-      adminPassword,
       password,
     }),
-  rotateCertificate: (id: string, adminPassword: string) =>
-    post<{ profile: Profile }>(`/api/profiles/${encodeURIComponent(id)}/certificate/rotate`, {
-      adminPassword,
-    }),
-  revokeCertificate: (id: string, adminPassword: string, reason = 'manual') =>
+  rotateCertificate: (id: string) =>
+    post<{ profile: Profile }>(`/api/profiles/${encodeURIComponent(id)}/certificate/rotate`, {}),
+  revokeCertificate: (id: string, reason = 'manual') =>
     post<{ profile: Profile }>(`/api/profiles/${encodeURIComponent(id)}/certificate/revoke`, {
-      adminPassword,
       reason,
     }),
-  exportProfile: async (id: string, adminPassword: string) => {
-    const headers = new Headers({ 'Content-Type': 'application/json', ...csrfHeader() })
+  exportProfile: async (id: string) => {
+    const headers = new Headers({ ...csrfHeader() })
     let response: Response
     try {
       response = await fetch(`/api/profiles/${encodeURIComponent(id)}/export`, {
         method: 'POST',
         headers,
         credentials: 'same-origin',
-        body: JSON.stringify({ adminPassword }),
       })
     } catch {
       throw new ApiError('无法连接面板服务', 'network_error', 0)
@@ -630,12 +619,10 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(config),
     }),
-  applyServerConfig: (adminPassword: string) =>
-    post<{ result: unknown; agentStatus?: AgentRuntimeStatus }>('/api/server/config/apply', {
-      adminPassword,
-    }),
-  serverCommand: (action: 'start' | 'stop' | 'restart', adminPassword: string) =>
-    post<{ ok: boolean; action: string }>('/api/server/command', { action, adminPassword }),
+  applyServerConfig: () =>
+    post<{ result: unknown; agentStatus?: AgentRuntimeStatus }>('/api/server/config/apply', {}),
+  serverCommand: (action: 'start' | 'stop' | 'restart') =>
+    post<{ ok: boolean; action: string }>('/api/server/command', { action }),
 
   pkiStatus: () => request<PKIStatus>('/api/pki'),
   getExportSettings: () => request<ExportSettings>('/api/settings/export'),
