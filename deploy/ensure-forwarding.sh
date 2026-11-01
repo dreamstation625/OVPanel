@@ -11,16 +11,12 @@ set -eu
 
 NETWORK="${OVPANEL_NETWORK:-ovpanel}"
 AUTO="${OVPANEL_AUTO_FORWARD:-1}"
-OPTIONAL="${OVPANEL_FORWARD_OPTIONAL:-0}"
-QUIET="${OVPANEL_FORWARD_QUIET:-0}"
-VERIFY="${OVPANEL_FORWARD_VERIFY:-1}"
 
 log() { printf '[forward] %s\n' "$*"; }
-info() { [ "$QUIET" = "1" ] || printf '[forward] %s\n' "$*"; }
 warn() { printf '[forward][warn] %s\n' "$*" >&2; }
 fail() { printf '[forward][fail] %s\n' "$*" >&2; exit 1; }
 
-[ "$AUTO" = "0" ] && { info "OVPANEL_AUTO_FORWARD=0，跳过"; exit 0; }
+[ "$AUTO" = "0" ] && { log "OVPANEL_AUTO_FORWARD=0，跳过"; exit 0; }
 
 if [ "$(id -u)" -ne 0 ]; then
   if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
@@ -30,13 +26,7 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 command -v docker >/dev/null 2>&1 || fail "缺少 docker 命令"
-if ! docker network inspect "$NETWORK" >/dev/null 2>&1; then
-  if [ "$OPTIONAL" = "1" ]; then
-    info "Docker 网络 $NETWORK 还不存在，等待下次检查"
-    exit 0
-  fi
-  fail "找不到 Docker 网络 $NETWORK；请先启动 Compose"
-fi
+docker network inspect "$NETWORK" >/dev/null 2>&1 || fail "找不到 Docker 网络 $NETWORK；请先启动 Compose"
 
 raw_subnets="$(docker network inspect "$NETWORK" --format '{{range .IPAM.Config}}{{.Subnet}} {{end}}' 2>/dev/null || true)"
 ipv4=""
@@ -48,7 +38,7 @@ for subnet in $raw_subnets; do
 done
 ipv4="$(printf '%s' "$ipv4" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
 [ -n "$ipv4" ] || fail "网络 $NETWORK 没有 IPv4 子网"
-info "网络 $NETWORK 的 IPv4 子网：$ipv4"
+log "网络 $NETWORK 的 IPv4 子网：$ipv4"
 
 command -v iptables >/dev/null 2>&1 || fail "缺少 iptables，无法检查和配置转发"
 
@@ -69,7 +59,7 @@ fi
 
 if [ "$ufw_active" -eq 0 ]; then
   if [ -z "$need_nat" ]; then
-    info "UFW 未启用，检测到现有 NAT；跳过"
+    log "UFW 未启用，检测到现有 NAT；跳过"
     exit 0
   fi
   fail "UFW 未启用且缺少 NAT：$need_nat；请启用 Docker iptables 或手动配置防火墙"
@@ -77,7 +67,7 @@ fi
 
 for subnet in $ipv4; do
   case "$forward_rules" in
-    *"-s $subnet -j ACCEPT"*) info "UFW 转发已存在：$subnet" ;;
+    *"-s $subnet -j ACCEPT"*) log "UFW 转发已存在：$subnet" ;;
     *)
       log "添加 UFW 转发：$subnet"
       ufw route allow from "$subnet" >/dev/null || fail "ufw route allow 失败：$subnet"
@@ -113,7 +103,7 @@ awk '
 ' "$before" > "$current"
 
 if cmp -s "$block" "$current" && ! grep -q '^# OVPanel Docker NAT' "$before"; then
-  info "UFW 持久化 NAT 已是最新"
+  log "UFW 持久化 NAT 已是最新"
 else
   backup="/etc/ufw/before.rules.ovpanel-bak-$(date +%Y%m%d%H%M%S)"
   cp -a "$before" "$backup"
@@ -147,12 +137,12 @@ for subnet in $need_nat; do
   fi
 done
 
-if [ "$VERIFY" = "1" ] && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx 'ovpanel-openvpn'; then
+if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx 'ovpanel-openvpn'; then
   if docker exec ovpanel-openvpn wget -qO- -T 5 http://www.baidu.com >/dev/null 2>&1; then
-    info "OpenVPN 容器公网出口正常"
+    log "OpenVPN 容器公网出口正常"
   else
     warn "OpenVPN 容器公网出口测试失败；检查上游网络或 DNS"
   fi
 fi
 
-info "完成"
+log "完成"

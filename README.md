@@ -47,9 +47,26 @@ cp .env.example .env
 
 `compose.sh up -d` 会在启动后自动检查并补齐 `ovpanel` 网络的宿主转发和 NAT；
 需要 root 或免密 sudo，可用 `OVPANEL_AUTO_FORWARD=0` 关闭。若使用裸
-`docker compose` 或 1Panel Compose，可在宿主机安装一次
-`deploy/install-forwarding-hook.sh` 的 systemd 钩子覆盖这些入口。详见
+`docker compose` 或 1Panel Compose，首次启动后手动执行一次
+`sudo ./deploy/ensure-forwarding.sh`；规则持久化后不需要每次执行。详见
 [deploy/README.md](deploy/README.md)。
+
+### host-network 模式
+
+如果希望 OpenVPN 不经过 Docker bridge、由容器自身自动配置宿主转发，可以使用
+host-network 覆盖文件：
+
+```bash
+docker compose -f compose.yaml -f compose.hostnet.yaml up -d --build
+```
+
+该模式仍只有 panel 与 openvpn 两个容器，但 OpenVPN 直接使用宿主网络，管理端口
+只监听 `127.0.0.1:9443`；entrypoint 会为 VPN 地址池维护宿主转发规则和 UFW 数据
+端口放行。需要 Compose v2.24+（用于 `!reset`）和宿主
+`net.ipv4.ip_forward=1`。OpenVPN 的 nft 规则会作用在宿主网络命名空间，适合希望
+像 ovpn-admin 一样开箱自动转发、且能接受该网络边界的部署。
+
+两种模式详细介绍见 [deploy/README.md](deploy/README.md)。
 
 默认只绑定 `127.0.0.1:8080`，不会直接暴露到局域网。部署细节、HTTPS、容器边界、
 数据目录和升级方式见 [deploy/README.md](deploy/README.md)。不提供独立二进制启动
@@ -83,7 +100,8 @@ cp .env.example .env
 ## 目录
 
 ```text
-compose.yaml       严格双容器部署入口
+compose.yaml       严格双容器部署入口（默认 bridge 模式）
+compose.hostnet.yaml host-network 模式覆盖文件
 .env.example       环境变量示例
 cmd/panel/         面板进程入口（Web + 内嵌前端）
 cmd/ovpanel-maintain/ 面板容器内的受限 OpenVPN 维护进程

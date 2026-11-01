@@ -104,7 +104,10 @@ RUN apk add --no-cache \
 COPY --from=openvpn-build /out/usr/sbin/openvpn /usr/sbin/openvpn
 COPY --from=build /out/vpn-agent /usr/local/bin/vpn-agent
 COPY --from=build /out/vpn-connect /usr/local/bin/vpn-connect
-RUN chmod 0755 /usr/local/bin/vpn-agent /usr/local/bin/vpn-connect
+COPY deploy/entrypoint-openvpn.sh /usr/local/bin/entrypoint-openvpn
+COPY deploy/ensure-host-forwarding.sh /usr/local/bin/ensure-host-forwarding
+RUN chmod 0755 /usr/local/bin/vpn-agent /usr/local/bin/vpn-connect \
+      /usr/local/bin/entrypoint-openvpn /usr/local/bin/ensure-host-forwarding
 
 RUN test "$(openvpn --version | awk 'NR==1 {print $2}')" = "${OPENVPN_VERSION}"
 
@@ -122,4 +125,4 @@ ENV OVPANEL_AGENT_LISTEN=:9443 \
 
 EXPOSE 9443/tcp 1194/udp
 
-ENTRYPOINT ["/usr/local/bin/vpn-agent"]
+ENTRYPOINT ["/usr/local/bin/entrypoint-openvpn"]

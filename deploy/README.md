@@ -61,6 +61,24 @@ OVPANEL_OPENVPN_IMAGE=dreamstation625/ovpanel-openvpn:0.0.1
 `latest` 跟随 `main` 的最新正式版本，`dev` 是 `dev` 分支的预发布镜像。
 版本规则见仓库 README 的「版本与发布」。
 
+### host-network 模式（可选）
+
+默认部署是双容器 bridge 模式。如果希望像 ovpn-admin 一样由 OpenVPN 容器入口
+自动维护宿主转发，使用 host-network 覆盖文件；仍然是两个容器，但 OpenVPN
+直接使用宿主网络：
+
+```bash
+docker compose -f compose.yaml -f compose.hostnet.yaml up -d --build
+```
+
+- 需要 Compose v2.24+（使用 `!reset` 清除 bridge 网络和端口映射）。
+- OpenVPN 管理端口只监听 `127.0.0.1:9443`，数据端口直接监听宿主。
+- entrypoint 会为 VPN 地址池添加 UFW 转发规则，并放行
+  `OVPANEL_VPN_PORT`/`OVPANEL_VPN_PROTO`；UFW reload 后由容器内循环重新补上。
+- OpenVPN 的 nft 规则位于宿主网络命名空间，需要宿主已开启
+  `net.ipv4.ip_forward=1`；不接受该网络边界时使用默认 bridge 模式。
+- `.env` 中的 `OVPANEL_VPN_PORT`/`OVPANEL_VPN_PROTO` 必须与面板服务端配置一致。
+
 浏览器打开 `http://127.0.0.1:8080`。容器通过 Docker 端口映射访问，请求源地址是
 Docker 网关而不是回环地址，因此必须输入一次性初始化口令。读取方式：
 
@@ -169,35 +187,27 @@ data/
 
 ## 宿主转发与 NAT
 
-`./deploy/compose.sh up -d` 在容器启动后会自动检查当前 `ovpanel` 网络，并为该 IPv4
-子网确保 UFW 转发和 NAT。自动配置需要 root 或免密 sudo，只处理本项目网络，规则
-持久化到 UFW；可用 `OVPANEL_AUTO_FORWARD=0 ./deploy/compose.sh up -d` 关闭。
+默认 bridge 模式下，`./deploy/compose.sh up -d` 在容器启动后会自动检查当前
+`ovpanel` 网络，并为该 IPv4 子网确保 UFW 转发和 NAT。自动配置需要 root 或免密
+sudo，只处理本项目网络，规则持久化到 UFW；可用
+`OVPANEL_AUTO_FORWARD=0 ./deploy/compose.sh up -d` 关闭。
 
 自动配置目前覆盖 UFW。若宿主使用其他防火墙，或 Docker 已关闭 iptables 且没有
 UFW，脚本会明确报错，需要手动配置；Docker 自身已提供 NAT 且 UFW 未启用时会跳过。
 容器公网出口会顺带做一次短测试，失败时只警告，不阻断容器启动。
 
-### 覆盖裸 Compose 和 1Panel 的 systemd 钩子
-
-`compose.sh` 之外的入口（裸 `docker compose up -d`、1Panel Compose）不会触发
-上述脚本。需要覆盖这些入口时，在宿主机安装一次 systemd 钩子：
-
-```bash
-sudo ./deploy/install-forwarding-hook.sh
-```
-
-钩子会把脚本复制到 `/usr/local/lib/ovpanel/`，并启用
-`ovpanel-forwarding.timer`：开机 30 秒后检查，之后每 60 秒检查一次；只处理
-`ovpanel` 网络，规则不变时保持安静。移除钩子使用：
+`compose.sh` 之外的入口（裸 `docker compose up -d`、1Panel Compose）不会自动执行
+上述检查。首次启动后手动运行一次；规则持久化后，只要 `ovpanel` 子网不变，不需要
+每次部署都执行：
 
 ```bash
-sudo ./deploy/install-forwarding-hook.sh --remove
+sudo ./deploy/ensure-forwarding.sh
 ```
 
-移除钩子不会删除已有防火墙/NAT 规则。1Panel 宿主机没有仓库目录时，把
-`deploy/ensure-forwarding.sh` 和 `deploy/install-forwarding-hook.sh` 复制到同一
-目录后执行安装即可。更新 `ensure-forwarding.sh` 后重新运行安装器，覆盖
-`/usr/local/lib/ovpanel/` 下的副本。
+1Panel 宿主机没有仓库目录时，把 `deploy/ensure-forwarding.sh` 复制上去执行即可。
+
+host-network 模式不需要执行这个脚本；OpenVPN 容器 entrypoint 会维护自己的
+VPN 地址池转发和 UFW 数据端口规则。两种模式不要同时启用转发配置。
 
 ## 版本检查与升级
 
@@ -228,10 +238,12 @@ sudo ./deploy/install-forwarding-hook.sh --remove
   `docker ps --filter label=com.ovpanel.managed` 核对。
 - panel 容器内的维护进程持有 Docker Socket；Web 进程不直接打开 Socket，网页也
   不提供 OpenVPN 或面板的更新操作。
-- openvpn 只发布数据面端口（`OVPANEL_VPN_PORT`/`OVPANEL_VPN_PROTO`，须与面板
-  配置一致）；管理端口 9443 不发布，也不挂载 Docker Socket。
+- openvpn 默认 bridge 模式只发布数据面端口（`OVPANEL_VPN_PORT`/`OVPANEL_VPN_PROTO`，
+  须与面板配置一致）；host-network 覆盖模式下直接监听宿主端口，管理端口仅
+  `127.0.0.1:9443`，也不挂载 Docker Socket。
 - panel 根文件系统只读，仅 `/data`、`/tmp` 与维护 Socket 的 tmpfs 可写。
-- openvpn 需要 `NET_ADMIN`、`NET_RAW`、`/dev/net/tun` 与 `net.ipv4.ip_forward=1`。
+- openvpn 需要 `NET_ADMIN`、`NET_RAW`、`/dev/net/tun` 与 `net.ipv4.ip_forward=1`；
+  host-network 模式的 nft 规则会作用于宿主网络命名空间。
 
 ## 开发与测试
 

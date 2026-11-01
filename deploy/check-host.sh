@@ -142,14 +142,6 @@ else
   ok "Docker 未显式关闭 iptables"
 fi
 
-if have systemctl; then
-  if systemctl is-enabled ovpanel-forwarding.timer >/dev/null 2>&1; then
-    ok "OVPanel 转发 systemd 钩子已启用"
-  else
-    warn "未启用 OVPanel 转发 systemd 钩子；裸 compose/1Panel 部署需手动执行 ensure-forwarding.sh，或运行 sudo deploy/install-forwarding-hook.sh"
-  fi
-fi
-
 # 磁盘空间
 if have df; then
   parent="$DATA_DIR"
