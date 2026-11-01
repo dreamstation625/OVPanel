@@ -7,9 +7,9 @@ func TestPlanAddresses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("规划地址失败：%v", err)
 	}
-	if plan.Server != "10.8.0.1" || plan.PoolStart != "10.8.0.2" ||
-		plan.PoolEnd != "10.8.255.191" || plan.StaticStart != "10.8.255.192" ||
-		plan.StaticEnd != "10.8.255.254" || plan.Mask != "255.255.0.0" {
+	if plan.Server != "10.8.0.1" || plan.PoolStart != "10.8.64.0" ||
+		plan.PoolEnd != "10.8.191.255" || plan.FixedStart != "10.8.0.2" ||
+		plan.FixedEnd != "10.8.255.254" || plan.Mask != "255.255.0.0" {
 		t.Fatalf("地址规划异常：%+v", plan)
 	}
 
@@ -17,36 +17,39 @@ func TestPlanAddresses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("规划 /24 失败：%v", err)
 	}
-	if plan.PoolStart != "10.20.0.2" || plan.PoolEnd != "10.20.0.191" ||
-		plan.StaticStart != "10.20.0.192" || plan.StaticEnd != "10.20.0.254" {
+	if plan.PoolStart != "10.20.0.64" || plan.PoolEnd != "10.20.0.191" ||
+		plan.FixedStart != "10.20.0.2" || plan.FixedEnd != "10.20.0.254" {
 		t.Fatalf("/24 地址规划异常：%+v", plan)
 	}
 }
 
 func TestValidateFixedIP(t *testing.T) {
-	for _, value := range []string{"10.8.255.192", "10.8.255.200", "10.8.255.254"} {
+	for _, value := range []string{
+		"10.8.0.50", "10.8.1.2", "10.8.63.255",
+		"10.8.192.0", "10.8.255.200", "10.8.255.254",
+	} {
 		if got, err := ValidateFixedIP("10.8.0.0/16", value); err != nil || got != value {
 			t.Fatalf("固定 IP %s 应通过：%q %v", value, got, err)
 		}
 	}
-	for _, value := range []string{"", "bad", "10.8.0.1", "10.8.0.50", "10.8.255.255", "11.0.0.1"} {
+	for _, value := range []string{
+		"", "bad", "10.8.0.0", "10.8.0.1", "10.8.64.0", "10.8.100.10",
+		"10.8.191.255", "10.8.255.255", "11.0.0.1",
+	} {
 		if _, err := ValidateFixedIP("10.8.0.0/16", value); err == nil {
 			t.Fatalf("固定 IP %q 应被拒绝", value)
 		}
 	}
-	if _, err := ValidateFixedIP("10.8.0.0/16", "10.8.255.200"); err != nil {
-		t.Fatalf("边界地址应通过：%v", err)
-	}
 }
 
-func TestRenderReservesStaticRange(t *testing.T) {
+func TestRenderReservesDynamicPool(t *testing.T) {
 	text, _, err := Render(Defaults())
 	if err != nil {
 		t.Fatalf("渲染失败：%v", err)
 	}
-	want := "ifconfig-pool 10.8.0.2 10.8.255.191 255.255.0.0"
+	want := "ifconfig-pool 10.8.64.0 10.8.191.255 255.255.0.0"
 	if !containsLine(text, want) {
-		t.Fatalf("渲染缺少固定 IP 保留段：%s", text)
+		t.Fatalf("渲染缺少动态池：%s", text)
 	}
 }
 

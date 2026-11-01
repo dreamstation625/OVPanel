@@ -52,7 +52,7 @@ func Render(input Config) (string, string, error) {
 	fmt.Fprintf(&b, "proto %s\n", proto)
 	b.WriteString("dev tun\n")
 	b.WriteString("topology subnet\n")
-	// 手动展开 server 指令，才能把动态池限制在固定 IP 保留段之前。
+	// 手动展开 server 指令，才能把动态池限制在网段末尾，其余地址开放给固定 IP。
 	b.WriteString("mode server\n")
 	b.WriteString("tls-server\n")
 	fmt.Fprintf(&b, "ifconfig %s %s\n", plan.Server, plan.Mask)

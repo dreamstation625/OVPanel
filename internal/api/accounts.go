@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -60,6 +61,8 @@ type profileDTO struct {
 	FixedVPNIP        string          `json:"fixedVpnIp"`
 	FixedIPRangeStart string          `json:"fixedIpRangeStart,omitempty"`
 	FixedIPRangeEnd   string          `json:"fixedIpRangeEnd,omitempty"`
+	FixedIPPoolStart  string          `json:"fixedIpPoolStart,omitempty"`
+	FixedIPPoolEnd    string          `json:"fixedIpPoolEnd,omitempty"`
 	ConcurrentLimit   int64           `json:"concurrentLimit"`
 	QuotaBytes        int64           `json:"quotaBytes"`
 	UploadBps         int64           `json:"uploadBps"`
@@ -324,8 +327,10 @@ func (s *Server) enrichFixedIPRange(ctx context.Context, dto *profileDTO) {
 	if err != nil {
 		return
 	}
-	dto.FixedIPRangeStart = plan.StaticStart
-	dto.FixedIPRangeEnd = plan.StaticEnd
+	dto.FixedIPRangeStart = plan.FixedStart
+	dto.FixedIPRangeEnd = plan.FixedEnd
+	dto.FixedIPPoolStart = plan.PoolStart
+	dto.FixedIPPoolEnd = plan.PoolEnd
 }
 
 func (s *Server) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
@@ -462,7 +467,7 @@ func (s *Server) handleExportProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/x-openvpn-profile")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, result.Filename))
+	w.Header().Set("Content-Disposition", exportContentDisposition(result.Filename))
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
@@ -470,6 +475,12 @@ func (s *Server) handleExportProfile(w http.ResponseWriter, r *http.Request) {
 		s.log.Warn("write export failed", "profile_id", profileID, "error", err)
 	}
 	s.log.Info("profile exported", "profile_id", profileID)
+}
+
+// exportContentDisposition 同时给出 ASCII 回退名和 UTF-8 文件名。
+func exportContentDisposition(filename string) string {
+	encoded := strings.ReplaceAll(url.QueryEscape(filename), "+", "%20")
+	return fmt.Sprintf(`attachment; filename="ovpanel.ovpn"; filename*=UTF-8''%s`, encoded)
 }
 
 // ---------- PKI 与导出设置 ----------

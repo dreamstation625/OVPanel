@@ -8,18 +8,19 @@ import (
 )
 
 // AddressPlan 是 VPN 网段内的地址规划。
-// 动态池从网段第二个地址开始，网段末尾的保留段留给固定 IP。
+// 动态池占网段中间约一半，固定 IP 使用首尾两段。
+// 固定 IP 不能落在动态池、服务器地址、网络地址或广播地址上。
 type AddressPlan struct {
-	Network     string
-	Mask        string
-	Server      string
-	PoolStart   string
-	PoolEnd     string
-	StaticStart string
-	StaticEnd   string
+	Network    string
+	Mask       string
+	Server     string
+	PoolStart  string
+	PoolEnd    string
+	FixedStart string
+	FixedEnd   string
 }
 
-// PlanAddresses 计算 VPN 网段的服务器地址、动态池和固定 IP 保留段。
+// PlanAddresses 计算 VPN 网段的服务器地址、中间动态池和固定 IP 可用范围。
 func PlanAddresses(vpnNetwork string) (AddressPlan, error) {
 	ip, network, err := net.ParseCIDR(strings.TrimSpace(vpnNetwork))
 	if err != nil || network.IP.To4() == nil {
@@ -37,25 +38,28 @@ func PlanAddresses(vpnNetwork string) (AddressPlan, error) {
 	base := binary.BigEndian.Uint32(network.IP.To4())
 	broadcast := base | ^mask
 	last := broadcast - 1
-	staticStart := last - 62
-	poolStart := base + 2
-	poolEnd := staticStart - 1
-	if poolStart > poolEnd {
+	size := uint64(1) << (32 - ones)
+	// 动态池占中间一半，首尾各约四分之一留给固定 IP。
+	// 这样低地址和原有末尾固定段都可用，动态池也有足够容量。
+	poolStart := base + uint32(size/4)
+	poolEnd := base + uint32(size*3/4-1)
+	fixedStart := base + 2
+	if poolStart <= base+1 || poolEnd >= broadcast {
 		return AddressPlan{}, fmt.Errorf("VPN 网段太小，无法同时容纳动态池和固定 IP")
 	}
 
 	return AddressPlan{
-		Network:     uint32IP(base).String(),
-		Mask:        uint32IP(mask).String(),
-		Server:      uint32IP(base + 1).String(),
-		PoolStart:   uint32IP(poolStart).String(),
-		PoolEnd:     uint32IP(poolEnd).String(),
-		StaticStart: uint32IP(staticStart).String(),
-		StaticEnd:   uint32IP(last).String(),
+		Network:    uint32IP(base).String(),
+		Mask:       uint32IP(mask).String(),
+		Server:     uint32IP(base + 1).String(),
+		PoolStart:  uint32IP(poolStart).String(),
+		PoolEnd:    uint32IP(poolEnd).String(),
+		FixedStart: uint32IP(fixedStart).String(),
+		FixedEnd:   uint32IP(last).String(),
 	}, nil
 }
 
-// ValidateFixedIP 校验固定地址是否位于保留段，并返回规范化地址。
+// ValidateFixedIP 校验固定地址是否位于 VPN 网段内且避开动态池，并返回规范化地址。
 func ValidateFixedIP(vpnNetwork, value string) (string, error) {
 	ip := net.ParseIP(strings.TrimSpace(value))
 	if ip == nil || ip.To4() == nil {
@@ -65,11 +69,16 @@ func ValidateFixedIP(vpnNetwork, value string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	start := ipToUint32(net.ParseIP(plan.StaticStart).To4())
-	end := ipToUint32(net.ParseIP(plan.StaticEnd).To4())
 	current := ipToUint32(ip.To4())
-	if current < start || current > end {
-		return "", fmt.Errorf("固定 IP 必须使用保留地址段 %s 至 %s", plan.StaticStart, plan.StaticEnd)
+	fixedStart := ipToUint32(net.ParseIP(plan.FixedStart).To4())
+	fixedEnd := ipToUint32(net.ParseIP(plan.FixedEnd).To4())
+	if current < fixedStart || current > fixedEnd {
+		return "", fmt.Errorf("固定 IP 必须在 VPN 网段 %s 至 %s 内", plan.FixedStart, plan.FixedEnd)
+	}
+	poolStart := ipToUint32(net.ParseIP(plan.PoolStart).To4())
+	poolEnd := ipToUint32(net.ParseIP(plan.PoolEnd).To4())
+	if current >= poolStart && current <= poolEnd {
+		return "", fmt.Errorf("固定 IP 不能使用动态池 %s 至 %s", plan.PoolStart, plan.PoolEnd)
 	}
 	return ip.To4().String(), nil
 }

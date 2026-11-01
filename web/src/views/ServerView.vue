@@ -68,6 +68,20 @@ const promptMeta = computed(() => {
   }
 })
 
+const openVPNStatus = computed(() => {
+  const agent = meta.value?.agentStatus
+  if (!agent) {
+    return { label: '等待数据', tone: 'chip--neutral' }
+  }
+  if (agent.stopped) {
+    return { label: '已停止', tone: 'chip--warn' }
+  }
+  if (agent.openvpnRunning) {
+    return { label: '运行中', tone: 'chip--ok' }
+  }
+  return { label: '未运行', tone: 'chip--danger' }
+})
+
 const protocolOptions = [
   { label: 'UDP', value: 'udp' },
   { label: 'TCP', value: 'tcp' },
@@ -282,13 +296,7 @@ onMounted(load)
           <div>
             <dt>OpenVPN</dt>
             <dd>
-              {{
-                meta?.agentStatus?.stopped
-                  ? '已停止'
-                  : meta?.agentStatus?.openvpnRunning
-                    ? '运行中'
-                    : '未运行'
-              }}
+              <span class="chip" :class="openVPNStatus.tone">{{ openVPNStatus.label }}</span>
             </dd>
           </div>
           <div>
@@ -305,15 +313,15 @@ onMounted(load)
           </div>
         </dl>
         <div class="action-row command-row">
-          <NButton :disabled="!meta?.agentStatus" @click="askCommand('start')">
+          <NButton type="success" :disabled="!meta?.agentStatus" @click="askCommand('start')">
             <template #icon><Play :size="15" /></template>
             启动
           </NButton>
-          <NButton :disabled="!meta?.agentStatus?.openvpnRunning" @click="askCommand('stop')">
+          <NButton type="error" :disabled="!meta?.agentStatus?.openvpnRunning" @click="askCommand('stop')">
             <template #icon><Square :size="15" /></template>
             停止
           </NButton>
-          <NButton :disabled="!meta?.agentStatus?.openvpnRunning" @click="askCommand('restart')">
+          <NButton type="warning" :disabled="!meta?.agentStatus?.openvpnRunning" @click="askCommand('restart')">
             <template #icon><RotateCw :size="15" /></template>
             重启
           </NButton>

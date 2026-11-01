@@ -247,7 +247,7 @@ func TestExportProfiles(t *testing.T) {
 	if strings.Contains(content, "auth-user-pass") {
 		t.Fatal("仅证书配置不应要求账号密码")
 	}
-	if !strings.HasPrefix(certExport.Filename, "ovpanel-") || !strings.HasSuffix(certExport.Filename, ".ovpn") {
+	if certExport.Filename != "证书用户-证书配置.ovpn" {
 		t.Fatalf("文件名异常：%q", certExport.Filename)
 	}
 

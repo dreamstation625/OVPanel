@@ -17,7 +17,7 @@ func TestDefaultsRender(t *testing.T) {
 	for _, want := range []string{
 		"port 1194", "proto udp", "mode server", "tls-server",
 		"ifconfig 10.8.0.1 255.255.0.0",
-		"ifconfig-pool 10.8.0.2 10.8.255.191 255.255.0.0",
+		"ifconfig-pool 10.8.64.0 10.8.191.255 255.255.0.0",
 		"push \"topology subnet\"", "push \"route-gateway 10.8.0.1\"",
 		"management /run/ovpanel/mgmt.sock unix", "management-client-auth",
 		"verify-client-cert optional", "auth-user-pass-optional", "duplicate-cn",

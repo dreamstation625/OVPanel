@@ -486,14 +486,14 @@ watch(() => route.params.id, load, { immediate: true })
           <NFormItem label="固定 VPN 地址">
             <NInput
               v-model:value="policy.fixedVpnIp"
-              placeholder="留空自动分配；填写 VPN 网段末尾保留段内的地址"
+              placeholder="留空自动分配；填写 VPN 网段内、动态池外的地址"
             />
           </NFormItem>
           <p class="policy-hint">
             路由方式决定哪些流量经过 VPN；目标网段权限决定能访问哪些目标。分流时可填内网或公网网段，客户端只把这些目标路由到 VPN；全局时公网默认放行，目标网段只用于放行私有网络。不要填写 VPN 服务器自身的公网地址，否则可能导致连接回环。
           </p>
           <p class="policy-hint">
-            固定 IP 使用网段末尾的保留段<template v-if="profile.fixedIpRangeStart">（{{ profile.fixedIpRangeStart }} 至 {{ profile.fixedIpRangeEnd }}）</template>，保存后并发上限固定为 1，客户端重新连接后生效；首次使用或修改 VPN 网段后，请到“服务端”应用一次配置。
+            固定 IP 可使用 VPN 网段内<template v-if="profile.fixedIpRangeStart">（{{ profile.fixedIpRangeStart }} 至 {{ profile.fixedIpRangeEnd }}）</template>除动态池<template v-if="profile.fixedIpPoolStart">（{{ profile.fixedIpPoolStart }} 至 {{ profile.fixedIpPoolEnd }}）</template>以外的地址，保存后并发上限固定为 1，客户端重新连接后生效；首次配置固定 IP 或修改 VPN 网段后，请到“服务端”应用一次配置，使动态池避让固定地址。
           </p>
           <div class="policy-actions">
             <NButton type="primary" :loading="policyBusy" @click="savePolicy">保存网络策略</NButton>

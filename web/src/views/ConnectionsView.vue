@@ -168,6 +168,9 @@ function endReasonLabel(reason: string) {
             <i class="dot" />{{ online.agentPresent ? '实时数据正常' : '实时数据暂不可用' }}
           </span>
         </div>
+        <p class="page-meta">
+          来源 IP 是 OpenVPN 看到的连接地址；bridge 模式经 Docker 端口代理时可能显示容器网关，host-network 模式会保留真实来源。
+        </p>
       </div>
       <div class="header-tools">
         <span v-if="updatedAt" class="muted">更新于 {{ updatedAt }}</span>

@@ -103,6 +103,8 @@ export interface Profile {
   fixedVpnIp: string
   fixedIpRangeStart?: string
   fixedIpRangeEnd?: string
+  fixedIpPoolStart?: string
+  fixedIpPoolEnd?: string
   concurrentLimit: number
   quotaBytes: number
   uploadBps: number
@@ -437,6 +439,19 @@ async function parseError(response: Response): Promise<ApiError> {
   )
 }
 
+function filenameFromDisposition(disposition: string, fallback: string): string {
+  const encoded = /filename\*=UTF-8''([^;]+)/i.exec(disposition)
+  if (encoded?.[1]) {
+    try {
+      return decodeURIComponent(encoded[1])
+    } catch {
+      // 忽略编码异常，继续使用 ASCII 回退名。
+    }
+  }
+  const plain = /filename="([^"]+)"/i.exec(disposition)
+  return plain?.[1] ?? fallback
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers)
   if (init.body !== undefined && !headers.has('Content-Type')) {
@@ -520,8 +535,7 @@ export const api = {
     }
     const blob = await response.blob()
     const disposition = response.headers.get('Content-Disposition') ?? ''
-    const match = /filename="([^"]+)"/.exec(disposition)
-    return { blob, filename: match?.[1] ?? 'ovpanel-backup.ovpbak' }
+    return { blob, filename: filenameFromDisposition(disposition, 'ovpanel-backup.ovpbak') }
   },
   previewRestore: async (file: File, backupPassword: string) => {
     const form = new FormData()
@@ -607,8 +621,7 @@ export const api = {
     }
     const blob = await response.blob()
     const disposition = response.headers.get('Content-Disposition') ?? ''
-    const match = /filename="([^"]+)"/.exec(disposition)
-    return { blob, filename: match?.[1] ?? 'ovpanel.ovpn' }
+    return { blob, filename: filenameFromDisposition(disposition, 'ovpanel.ovpn') }
   },
 
   getServerConfig: () => request<ServerConfigResponse>('/api/server/config'),

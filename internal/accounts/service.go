@@ -310,7 +310,7 @@ func (s *Service) UpdateProfilePolicy(ctx context.Context, id, routeMode, access
 	return s.profileDetail(ctx, id)
 }
 
-// FixedIPRange 返回当前 VPN 网段为固定地址保留的范围。
+// FixedIPRange 返回当前 VPN 网段的固定地址可用范围和动态池。
 func (s *Service) FixedIPRange(ctx context.Context) (serverconfig.AddressPlan, error) {
 	network, err := s.activeVPNNetwork(ctx)
 	if err != nil {
@@ -422,7 +422,7 @@ func (s *Service) RevokeCertificate(ctx context.Context, profileID, reason strin
 	return s.profileDetail(ctx, profileID)
 }
 
-// Export 生成自包含 .ovpn。调用方必须先复核管理员密码。
+// Export 生成自包含 .ovpn。
 func (s *Service) Export(ctx context.Context, profileID string) (ExportResult, error) {
 	profile, ok, err := s.store.Profile(ctx, profileID)
 	if err != nil {
@@ -468,7 +468,7 @@ func (s *Service) Export(ctx context.Context, profileID string) (ExportResult, e
 	}
 
 	return ExportResult{
-		Filename: "ovpanel-" + profileID + ".ovpn",
+		Filename: exportFilename(profile.UserDisplayName, profile.Name),
 		Content:  openvpnprofile.Render(config),
 	}, nil
 }

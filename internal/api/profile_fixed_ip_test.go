@@ -46,16 +46,19 @@ func TestProfileFixedVPNIP(t *testing.T) {
 	if updated.FixedVPNIP != "10.8.255.200" || updated.ConcurrentLimit != 1 {
 		t.Fatalf("固定 IP 或并发上限异常：%+v", updated)
 	}
-	if updated.FixedIPRangeStart != "10.8.255.192" || updated.FixedIPRangeEnd != "10.8.255.254" {
+	if updated.FixedIPRangeStart != "10.8.0.2" || updated.FixedIPRangeEnd != "10.8.255.254" {
 		t.Fatalf("固定 IP 可用范围异常：%+v", updated)
 	}
+	if updated.FixedIPPoolStart != "10.8.64.0" || updated.FixedIPPoolEnd != "10.8.191.255" {
+		t.Fatalf("固定 IP 动态池范围异常：%+v", updated)
+	}
 
-	// 固定地址必须位于 VPN 网段末尾的保留段。
+	// 动态池地址不能作为固定地址。
 	invalid := doJSON(t, h, http.MethodPatch, "/api/profiles/"+profile.ID, "127.0.0.1:5000", map[string]any{
-		"fixedVpnIp": "10.8.0.50",
+		"fixedVpnIp": "10.8.100.10",
 	}, cookies...)
-	if invalid.Code != http.StatusBadRequest || !strings.Contains(invalid.Body.String(), "保留地址段") {
-		t.Fatalf("保留段外地址应被拒绝：%d %s", invalid.Code, invalid.Body.String())
+	if invalid.Code != http.StatusBadRequest || !strings.Contains(invalid.Body.String(), "动态池") {
+		t.Fatalf("动态池地址应被拒绝：%d %s", invalid.Code, invalid.Body.String())
 	}
 
 	// 同一固定地址不能分配给第二份配置。

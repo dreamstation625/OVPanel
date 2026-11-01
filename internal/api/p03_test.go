@@ -122,6 +122,9 @@ func TestP03UserProfileCertificateFlow(t *testing.T) {
 	if got := export.Header().Get("Cache-Control"); got != "no-store" {
 		t.Fatalf("导出 Cache-Control = %q", got)
 	}
+	if disposition := export.Header().Get("Content-Disposition"); !strings.Contains(disposition, "filename*=UTF-8''") {
+		t.Fatalf("导出文件名缺少 UTF-8 编码：%q", disposition)
+	}
 
 	// 下发运行控制包（面板侧；代理是否确认由运行代理记录）。
 	apply := doJSON(t, h, http.MethodPost, "/api/runtime/apply", "127.0.0.1:5000",
