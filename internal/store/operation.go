@@ -89,6 +89,25 @@ func (s *Store) Operation(ctx context.Context, id string) (Operation, bool, erro
 	return op, true, nil
 }
 
+// FailStaleOperations 把上次进程退出时仍未完成的任务标记为失败。
+// 备份和恢复没有可恢复的运行态；继续显示 running 会误导管理员。
+func (s *Store) FailStaleOperations(ctx context.Context, message string) (int64, error) {
+	now := formatTime(nowUTC())
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE operation
+		    SET state = ?, message = ?, error_code = 'interrupted', updated_at = ?, finished_at = ?
+		  WHERE state IN (?, ?)`,
+		OperationFailed, message, now, now, OperationPending, OperationRunning)
+	if err != nil {
+		return 0, fmt.Errorf("标记未完成任务: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("统计未完成任务: %w", err)
+	}
+	return n, nil
+}
+
 // ListOperations 按更新时间倒序返回最近的任务。
 func (s *Store) ListOperations(ctx context.Context, limit int) ([]Operation, error) {
 	if limit <= 0 || limit > 100 {

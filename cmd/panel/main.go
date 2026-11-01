@@ -82,6 +82,11 @@ func run() error {
 		return fmt.Errorf("应用数据库迁移: %w", err)
 	}
 	log.Info("database ready", "path", st.Path(), "schema", schema)
+	if n, err := st.FailStaleOperations(ctx, "面板重启前任务未完成，请检查数据后重试"); err != nil {
+		log.Warn("mark stale operations failed", "error", err)
+	} else if n > 0 {
+		log.Warn("stale operations marked failed", "count", n)
+	}
 
 	initialized, err := st.AdminExists(ctx)
 	if err != nil {
