@@ -201,3 +201,28 @@ jobs:
             args+=(--latest)
           fi
           gh release create "$TAG" "${args[@]}"
+
+  cleanup:
+    # GitHub 没有“只保留最近 N 次运行”的原生设置，这里按分支清理已完成的历史运行。
+    # 只删本工作流的运行，且跳过当前运行与进行中的运行。
+    name: 清理旧运行
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: 每个分支保留最近 10 次运行
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
+          KEEP: "10"
+        run: |
+          set -euo pipefail
+          gh api "repos/${REPO}/actions/workflows/release.yml/runs?branch=${BRANCH}&status=completed&per_page=100" \
+            --jq ".workflow_runs | sort_by(.created_at) | reverse | .[${KEEP}:] | .[].id" |
+          while read -r id; do
+            echo "删除旧运行 ${id}"
+            gh api -X DELETE "repos/${REPO}/actions/runs/${id}" || true
+          done
