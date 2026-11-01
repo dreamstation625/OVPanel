@@ -44,7 +44,12 @@ func Render(input Config) (string, string, error) {
 	var b strings.Builder
 	b.WriteString("# OVPanel 生成的服务端配置；托管项不要手工修改\n")
 	fmt.Fprintf(&b, "port %d\n", cfg.Port)
-	fmt.Fprintf(&b, "proto %s\n", cfg.Protocol)
+	proto := cfg.Protocol
+	if proto == "tcp" {
+		// 服务端模式不能只写 tcp，OpenVPN 需要明确 tcp-server。
+		proto = "tcp-server"
+	}
+	fmt.Fprintf(&b, "proto %s\n", proto)
 	b.WriteString("dev tun\n")
 	b.WriteString("topology subnet\n")
 	// 手动展开 server 指令，才能把动态池限制在固定 IP 保留段之前。

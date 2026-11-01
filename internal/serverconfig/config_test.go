@@ -37,6 +37,22 @@ func TestDefaultsRender(t *testing.T) {
 	}
 }
 
+func TestTCPRenderUsesServerProtocol(t *testing.T) {
+	cfg := Defaults()
+	cfg.Protocol = "tcp"
+	cfg.Port = 21194
+	text, _, err := Render(cfg)
+	if err != nil {
+		t.Fatalf("TCP 渲染失败：%v", err)
+	}
+	if !strings.Contains(text, "proto tcp-server\n") {
+		t.Fatalf("TCP 服务端配置应使用 tcp-server：\n%s", text)
+	}
+	if strings.Contains(text, "proto tcp\n") {
+		t.Fatal("不能输出歧义的 proto tcp")
+	}
+}
+
 func TestGlobalAndDNSRender(t *testing.T) {
 	cfg := Defaults()
 	cfg.RouteMode = RouteGlobal
