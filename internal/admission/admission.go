@@ -67,6 +67,7 @@ type Profile struct {
 	RouteMode       string   `json:"routeMode,omitempty"`
 	AccessMode      string   `json:"accessMode,omitempty"`
 	AllowedInternal []string `json:"allowedInternal,omitempty"`
+	FixedVPNIP      string   `json:"fixedVpnIp,omitempty"`
 
 	// 使用限制；0 表示不限制。QuotaEpoch 由面板手动重置时递增。
 	ConcurrentLimit int64  `json:"concurrentLimit,omitempty"`
@@ -111,6 +112,7 @@ type Decision struct {
 // Validate 在应用快照前检查唯一性与字段一致性。
 func (s Snapshot) Validate() error {
 	users := map[string]struct{}{}
+	fixedIPs := map[string]string{}
 	for _, user := range s.Users {
 		if user.ID == "" {
 			return fmt.Errorf("存在空用户 ID")
@@ -208,6 +210,20 @@ func (s Snapshot) Validate() error {
 		}
 		if profile.ConcurrentLimit < 0 || profile.UploadBps < 0 || profile.DownloadBps < 0 || profile.QuotaEpoch < 0 {
 			return fmt.Errorf("配置 %s 的使用限制不能为负数", profile.ID)
+		}
+		if profile.FixedVPNIP != "" {
+			ip := net.ParseIP(strings.TrimSpace(profile.FixedVPNIP))
+			if ip == nil || ip.To4() == nil {
+				return fmt.Errorf("配置 %s 的固定 IP 非法：%q", profile.ID, profile.FixedVPNIP)
+			}
+			key := ip.To4().String()
+			if other, dup := fixedIPs[key]; dup {
+				return fmt.Errorf("固定 IP %s 同时属于配置 %s 和 %s", key, other, profile.ID)
+			}
+			fixedIPs[key] = profile.ID
+			if profile.ConcurrentLimit != 1 {
+				return fmt.Errorf("配置 %s 设置了固定 IP，并发上限必须为 1", profile.ID)
+			}
 		}
 	}
 	return nil

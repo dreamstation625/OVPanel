@@ -66,6 +66,7 @@ const policy = reactive({
   routeMode: 'inherit' as RouteMode,
   accessMode: 'inherit' as AccessMode,
   allowedText: '',
+  fixedVpnIp: '',
 })
 const policyBusy = ref(false)
 const limits = reactive({
@@ -93,6 +94,7 @@ const accessOptions = [
 
 const backTarget = computed(() => (profile.value ? `/users/${profile.value.userId}` : '/users'))
 const hasCertificate = computed(() => Boolean(profile.value?.certificate))
+const fixedIPActive = computed(() => Boolean(profile.value?.fixedVpnIp))
 const canDownload = computed(() => {
   if (!profile.value) {
     return false
@@ -261,8 +263,9 @@ async function savePolicy() {
               .map((value) => value.trim())
               .filter(Boolean)
           : [],
+      fixedVpnIp: policy.fixedVpnIp.trim(),
     })
-    success.value = '网络策略已保存；路由变更在重新连接后生效。'
+    success.value = '网络策略已保存；路由和固定 IP 在客户端重新连接后生效。'
   } catch (err) {
     error.value = errorMessage(err)
   } finally {
@@ -298,7 +301,7 @@ async function saveLimits() {
   try {
     const result = await api.updateProfileLimits(current.id, {
       expiresAt: limits.expiresAt ? new Date(limits.expiresAt).toISOString() : '',
-      concurrentLimit: limits.concurrentEnabled ? Math.round(limits.concurrentLimit) : 0,
+      concurrentLimit: fixedIPActive.value ? 1 : limits.concurrentEnabled ? Math.round(limits.concurrentLimit) : 0,
       quotaBytes: limits.quotaEnabled ? gbToBytes(limits.quotaGb) : 0,
       uploadBps: limits.uploadEnabled ? mbpsToBps(limits.uploadMbps) : 0,
       downloadBps: limits.downloadEnabled ? mbpsToBps(limits.downloadMbps) : 0,
@@ -349,6 +352,7 @@ watch(
     policy.routeMode = value.routeMode
     policy.accessMode = value.accessMode
     policy.allowedText = value.allowedInternal.join(', ')
+    policy.fixedVpnIp = value.fixedVpnIp ?? ''
     limits.expiresAt = value.expiresAt ? new Date(value.expiresAt).getTime() : null
     limits.concurrentEnabled = value.concurrentLimit > 0
     limits.concurrentLimit = value.concurrentLimit > 0 ? value.concurrentLimit : 3
@@ -483,8 +487,14 @@ watch(() => route.params.id, load, { immediate: true })
               placeholder="例如 10.0.16.0/22，用逗号或换行分隔"
             />
           </NFormItem>
+          <NFormItem label="固定 VPN 地址">
+            <NInput
+              v-model:value="policy.fixedVpnIp"
+              placeholder="留空自动分配；填写 VPN 网段末尾保留段内的地址"
+            />
+          </NFormItem>
           <p class="policy-hint">
-            路由方式决定哪些流量经过 VPN；内网权限决定能访问哪些内网地址。选择“继承服务端”时使用服务端设置。
+            路由方式决定哪些流量经过 VPN；内网权限决定能访问哪些内网地址。固定 IP 使用网段末尾的保留段<template v-if="profile.fixedIpRangeStart">（{{ profile.fixedIpRangeStart }} 至 {{ profile.fixedIpRangeEnd }}）</template>，保存后并发上限固定为 1，客户端重新连接后生效；首次使用或修改 VPN 网段后，请到“服务端”应用一次配置。
           </p>
           <div class="policy-actions">
             <NButton type="primary" :loading="policyBusy" @click="savePolicy">保存网络策略</NButton>
@@ -495,7 +505,7 @@ watch(() => route.params.id, load, { immediate: true })
       <section class="surface">
         <header class="surface-head">
           <h2>使用限制</h2>
-          <span class="surface-meta">由 VPN 服务执行；0 或关闭表示不限制</span>
+          <span class="surface-meta">{{ fixedIPActive ? '已设置固定 IP，并发上限固定为 1' : '由 VPN 服务执行；0 或关闭表示不限制' }}</span>
         </header>
 
         <div class="usage-row">
@@ -538,13 +548,17 @@ watch(() => route.params.id, load, { immediate: true })
             />
           </NFormItem>
           <div class="limit-line">
-            <NSwitch v-model:value="limits.concurrentEnabled" aria-label="并发上限开关" />
+            <NSwitch
+              v-model:value="limits.concurrentEnabled"
+              aria-label="并发上限开关"
+              :disabled="fixedIPActive"
+            />
             <span class="limit-name">并发上限</span>
             <NInputNumber
               v-model:value="limits.concurrentLimit"
               :min="1"
               :max="1000"
-              :disabled="!limits.concurrentEnabled"
+              :disabled="fixedIPActive || !limits.concurrentEnabled"
               :show-button="false"
               class="control-number"
             />

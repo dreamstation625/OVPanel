@@ -38,6 +38,7 @@ func Build(ctx context.Context, st *store.Store) (admission.Snapshot, error) {
 			RouteMode:       record.RouteMode,
 			AccessMode:      record.AccessMode,
 			AllowedInternal: record.AllowedInternal,
+			FixedVPNIP:      record.FixedVPNIP,
 			ConcurrentLimit: record.ConcurrentLimit,
 			QuotaBytes:      uint64(maxInt64(record.QuotaBytes)),
 			UploadBps:       record.UploadBps,

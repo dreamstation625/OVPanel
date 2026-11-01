@@ -100,6 +100,9 @@ export interface Profile {
   routeMode: RouteMode
   accessMode: AccessMode
   allowedInternal: string[]
+  fixedVpnIp: string
+  fixedIpRangeStart?: string
+  fixedIpRangeEnd?: string
   concurrentLimit: number
   quotaBytes: number
   uploadBps: number
@@ -227,6 +230,7 @@ export interface ProfilePatch {
   routeMode?: RouteMode
   accessMode?: AccessMode
   allowedInternal?: string[]
+  fixedVpnIp?: string
 }
 
 export type BackupKind = 'manual' | 'scheduled' | 'pre_restore'

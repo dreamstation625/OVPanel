@@ -20,6 +20,7 @@ type AuthRecord struct {
 	RouteMode       string
 	AccessMode      string
 	AllowedInternal []string
+	FixedVPNIP      string
 
 	ConcurrentLimit int64
 	QuotaBytes      int64
@@ -42,7 +43,7 @@ func (s *Store) AuthRecords(ctx context.Context) ([]AuthRecord, error) {
 		`SELECT u.id, u.status,
 		        p.id, p.auth_type, COALESCE(p.username, ''), COALESCE(p.password_hash, ''),
 		        p.status, p.expires_at, p.route_mode, p.access_mode, p.allowed_internal_json,
-		        p.concurrent_limit, p.quota_bytes, p.upload_bps, p.download_bps, p.quota_epoch,
+		        p.fixed_vpn_ip, p.concurrent_limit, p.quota_bytes, p.upload_bps, p.download_bps, p.quota_epoch,
 		        c.serial_number, c.fingerprint_sha256, c.status, c.expires_at
 		   FROM app_user u
 		   JOIN client_profile p ON p.user_id = u.id
@@ -66,7 +67,7 @@ func (s *Store) AuthRecords(ctx context.Context) ([]AuthRecord, error) {
 			&record.UserID, &record.UserStatus,
 			&record.ProfileID, &record.AuthType, &record.Username, &record.PasswordHash,
 			&record.ProfileStatus, &profileExpires,
-			&record.RouteMode, &record.AccessMode, &allowedInternal,
+			&record.RouteMode, &record.AccessMode, &allowedInternal, &record.FixedVPNIP,
 			&concurrent, &quota, &up, &down, &record.QuotaEpoch,
 			&certSerial, &certFP, &certStatus, &certExpires,
 		); err != nil {

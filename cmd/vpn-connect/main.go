@@ -43,7 +43,7 @@ func run() error {
 	lines := []string{}
 	if found {
 		var err error
-		lines, err = connectpolicy.PushLines(policy)
+		lines, err = connectpolicy.ClientLines(policy)
 		if err != nil {
 			return err
 		}

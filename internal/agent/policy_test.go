@@ -42,6 +42,7 @@ func policyBundle(t *testing.T) []byte {
 					CertSerial: "0A1B", CertFingerprint: "aa:bb", CertStatus: "active",
 					RouteMode: "global", AccessMode: "allow",
 					AllowedInternal: []string{"192.168.50.0/24"},
+					FixedVPNIP:      "10.8.255.200", ConcurrentLimit: 1,
 				},
 				{
 					ID: "B", UserID: "u1", AuthType: admission.AuthCertificatePassword, Status: "active",
@@ -90,6 +91,9 @@ func TestApplyWritesConnectPolicyAndSessionACL(t *testing.T) {
 	a, ok := connectpolicy.Lookup(file, "aa:bb", "")
 	if !ok || !a.GlobalExit || len(a.AllowedInternal) != 1 || a.AllowedInternal[0] != "192.168.50.0/24" {
 		t.Fatalf("A 的连接策略异常：%+v", a)
+	}
+	if a.FixedIP != "10.8.255.200" || a.VPNMask != "255.255.0.0" {
+		t.Fatalf("A 的固定地址策略异常：%+v", a)
 	}
 	b, ok := connectpolicy.Lookup(file, "", "bob")
 	if !ok || b.GlobalExit || len(b.AllowedInternal) != 0 {

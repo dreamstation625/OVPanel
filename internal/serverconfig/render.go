@@ -41,6 +41,10 @@ func Render(input Config) (string, string, error) {
 		return "", "", err
 	}
 	mask := ipv4MaskString(network.Mask)
+	plan, err := PlanAddresses(cfg.VPNNetwork)
+	if err != nil {
+		return "", "", err
+	}
 
 	var b strings.Builder
 	b.WriteString("# OVPanel 生成的服务端配置；托管项不要手工修改\n")
@@ -49,6 +53,8 @@ func Render(input Config) (string, string, error) {
 	b.WriteString("dev tun\n")
 	b.WriteString("topology subnet\n")
 	fmt.Fprintf(&b, "server %s %s\n", network.IP.String(), mask)
+	// 动态池避开网段末尾的保留段；该段由固定 IP 使用。
+	fmt.Fprintf(&b, "ifconfig-pool %s %s %s\n", plan.PoolStart, plan.PoolEnd, plan.Mask)
 	fmt.Fprintf(&b, "ifconfig-pool-persist %s\n", PathPoolState)
 	fmt.Fprintf(&b, "ca %s\n", PathCA)
 	fmt.Fprintf(&b, "cert %s\n", PathServerCert)

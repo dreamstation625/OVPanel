@@ -265,10 +265,10 @@ func (s *Service) UpdateProfileName(ctx context.Context, id, name string) (store
 	return s.profileDetail(ctx, id)
 }
 
-// UpdateProfilePolicy 更新配置级路由方式与内网权限。
+// UpdateProfilePolicy 更新配置级路由、内网权限与固定地址。
 // 路由推送与访问权限分别生效：前者决定客户端拿到哪些路由，
 // 后者由运行代理的 nftables 规则执行。
-func (s *Service) UpdateProfilePolicy(ctx context.Context, id, routeMode, accessMode string, allowedInternal []string) (store.ProfileDetail, error) {
+func (s *Service) UpdateProfilePolicy(ctx context.Context, id, routeMode, accessMode string, allowedInternal []string, fixedVPNIP string) (store.ProfileDetail, error) {
 	routeMode = strings.TrimSpace(routeMode)
 	accessMode = strings.TrimSpace(accessMode)
 	switch routeMode {
@@ -295,10 +295,26 @@ func (s *Service) UpdateProfilePolicy(ctx context.Context, id, routeMode, access
 	if err := serverconfig.ValidateInternalCIDRs(vpnNetwork, allowedInternal); err != nil {
 		return store.ProfileDetail{}, validation(err.Error())
 	}
-	if err := s.store.UpdateProfilePolicy(ctx, id, routeMode, accessMode, allowedInternal); err != nil {
+	fixedVPNIP = strings.TrimSpace(fixedVPNIP)
+	if fixedVPNIP != "" {
+		fixedVPNIP, err = serverconfig.ValidateFixedIP(vpnNetwork, fixedVPNIP)
+		if err != nil {
+			return store.ProfileDetail{}, validation(err.Error())
+		}
+	}
+	if err := s.store.UpdateProfileNetwork(ctx, id, routeMode, accessMode, allowedInternal, fixedVPNIP); err != nil {
 		return store.ProfileDetail{}, err
 	}
 	return s.profileDetail(ctx, id)
+}
+
+// FixedIPRange 返回当前 VPN 网段为固定地址保留的范围。
+func (s *Service) FixedIPRange(ctx context.Context) (serverconfig.AddressPlan, error) {
+	network, err := s.activeVPNNetwork(ctx)
+	if err != nil {
+		return serverconfig.AddressPlan{}, err
+	}
+	return serverconfig.PlanAddresses(network)
 }
 
 func (s *Service) activeVPNNetwork(ctx context.Context) (string, error) {
@@ -766,6 +782,12 @@ func normalizeExportSettings(input ExportSettings) (ExportSettings, error) {
 	return ExportSettings{Host: host, Port: input.Port, Proto: proto}, nil
 }
 
+type validationError string
+
+func (e validationError) Error() string { return string(e) }
+
+func (e validationError) Is(target error) bool { return target == ErrValidation }
+
 func validation(message string) error {
-	return fmt.Errorf("%w：%s", ErrValidation, message)
+	return validationError(message)
 }

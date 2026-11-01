@@ -212,7 +212,7 @@ func (s *Server) handleServerCommand(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) writeRuntimeApplyError(w http.ResponseWriter, r *http.Request, err error) {
-	if errors.Is(err, accounts.ErrExportNotConfigured) {
+	if errors.Is(err, accounts.ErrExportNotConfigured) || errors.Is(err, accounts.ErrValidation) {
 		s.writeAccountError(w, r, err)
 		return
 	}

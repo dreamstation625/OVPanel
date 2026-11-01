@@ -60,9 +60,25 @@ func TestBuildAndLookupEffectivePolicies(t *testing.T) {
 	}
 }
 
+func TestClientLinesWithFixedIP(t *testing.T) {
+	lines, err := ClientLines(Policy{
+		FixedIP: "10.8.255.200", VPNMask: "255.255.0.0", GlobalExit: true,
+	})
+	if err != nil {
+		t.Fatalf("生成固定地址配置失败：%v", err)
+	}
+	if len(lines) != 2 || lines[0] != "ifconfig-push 10.8.255.200 255.255.0.0" ||
+		lines[1] != `push "redirect-gateway def1 bypass-dhcp"` {
+		t.Fatalf("固定地址配置异常：%v", lines)
+	}
+	if _, err := ClientLines(Policy{FixedIP: "10.8.255.200"}); err == nil {
+		t.Fatal("缺少掩码应被拒绝")
+	}
+}
+
 func TestPushLines(t *testing.T) {
 	lines, err := PushLines(Policy{GlobalExit: true})
-	if err != nil || len(lines) != 1 || lines[0] != `push "redirect-gateway def1"` {
+	if err != nil || len(lines) != 1 || lines[0] != `push "redirect-gateway def1 bypass-dhcp"` {
 		t.Fatalf("全局出口推送异常：%v %v", lines, err)
 	}
 	lines, err = PushLines(Policy{AllowedInternal: []string{"10.0.16.0/22", "192.168.99.0/24"}})

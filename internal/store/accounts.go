@@ -27,6 +27,7 @@ const (
 var (
 	ErrNotFound      = errors.New("记录不存在")
 	ErrUsernameTaken = errors.New("登录名已被使用")
+	ErrFixedIPTaken  = errors.New("固定 IP 已被使用")
 )
 
 // User 是一个凭据归属人，不是面板登录账号。
@@ -71,6 +72,8 @@ type Profile struct {
 	RouteMode       string
 	AccessMode      string
 	AllowedInternal []string
+	// FixedVPNIP 非空时，client-connect 为该配置分配固定地址。
+	FixedVPNIP string
 
 	// HasPassword 用于详情展示；PasswordHash 只在创建或改密时写入，
 	// 读取详情时不会加载哈希。
@@ -231,14 +234,14 @@ func insertProfile(ctx context.Context, ex dbExec, p Profile) error {
 		`INSERT INTO client_profile (
 			id, user_id, name, auth_type, username, password_hash, status, expires_at,
 			concurrent_limit, quota_bytes, upload_bps, download_bps,
-			route_mode, access_mode, allowed_internal_json, created_at, updated_at
-		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			route_mode, access_mode, allowed_internal_json, fixed_vpn_ip, created_at, updated_at
+		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		p.ID, p.UserID, p.Name, p.AuthType,
 		nullableString(p.Username), nullableString(p.PasswordHash),
 		p.Status, nullableTimeValue(p.ExpiresAt),
 		nullableInt(p.ConcurrentLimit), nullableInt(p.QuotaBytes),
 		nullableInt(p.UploadBps), nullableInt(p.DownloadBps),
-		routeMode, accessMode, allowed,
+		routeMode, accessMode, allowed, p.FixedVPNIP,
 		formatTime(p.CreatedAt), formatTime(p.UpdatedAt))
 	if err != nil {
 		if isUsernameConflict(err) {
@@ -311,18 +314,24 @@ func (s *Store) UpdateProfileName(ctx context.Context, id, name string) error {
 	return nil
 }
 
-// UpdateProfilePolicy 更新配置级路由方式与内网权限。
-func (s *Store) UpdateProfilePolicy(ctx context.Context, id, routeMode, accessMode string, allowedInternal []string) error {
+// UpdateProfileNetwork 更新配置级路由、内网权限与固定地址。
+// 设置固定地址时并发上限同步锁定为 1，避免同一配置的多条连接争用同一地址。
+func (s *Store) UpdateProfileNetwork(ctx context.Context, id, routeMode, accessMode string, allowedInternal []string, fixedVPNIP string) error {
 	allowed, err := encodeStringList(allowedInternal)
 	if err != nil {
 		return err
 	}
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE client_profile
-		    SET route_mode = ?, access_mode = ?, allowed_internal_json = ?, updated_at = ?
+		    SET route_mode = ?, access_mode = ?, allowed_internal_json = ?, fixed_vpn_ip = ?,
+		        concurrent_limit = CASE WHEN ? <> '' THEN 1 ELSE concurrent_limit END,
+		        updated_at = ?
 		  WHERE id = ?`,
-		routeMode, accessMode, allowed, formatTime(nowUTC()), id)
+		routeMode, accessMode, allowed, fixedVPNIP, fixedVPNIP, formatTime(nowUTC()), id)
 	if err != nil {
+		if isFixedIPConflict(err) {
+			return ErrFixedIPTaken
+		}
 		return fmt.Errorf("更新配置网络策略 %s: %w", id, err)
 	}
 	if n, err := res.RowsAffected(); err == nil && n == 0 {
@@ -562,7 +571,7 @@ func (s *Store) ProfileByUsername(ctx context.Context, username string) (Profile
 const profileDetailSelect = `p.id, p.user_id, p.name, p.auth_type, COALESCE(p.username, ''),
 	CASE WHEN p.password_hash IS NULL THEN 0 ELSE 1 END, p.status, p.expires_at,
 	p.concurrent_limit, p.quota_bytes, p.upload_bps, p.download_bps, p.quota_epoch,
-	p.route_mode, p.access_mode, p.allowed_internal_json, p.created_at, p.updated_at,
+	p.route_mode, p.access_mode, p.allowed_internal_json, p.fixed_vpn_ip, p.created_at, p.updated_at,
 	u.display_name, u.status,
 	c.id, c.serial_number, c.fingerprint_sha256, c.common_name, c.status,
 	c.issued_at, c.expires_at, c.revoked_at, c.revoke_reason`
@@ -576,6 +585,7 @@ func scanProfileDetail(row rowScanner) (ProfileDetail, error) {
 		concurrent, quota, upload, down  sql.NullInt64
 		quotaEpoch                       int64
 		routeMode, accessMode, allowed   string
+		fixedVPNIP                       string
 		createdAt, updatedAt             string
 		certID, certSerial, certFP       sql.NullString
 		certCN, certStatus, certIssued   sql.NullString
@@ -584,7 +594,7 @@ func scanProfileDetail(row rowScanner) (ProfileDetail, error) {
 	err := row.Scan(
 		&d.ID, &d.UserID, &d.Name, &d.AuthType, &username, &hasPassword, &d.Status, &expiresAt,
 		&concurrent, &quota, &upload, &down, &quotaEpoch,
-		&routeMode, &accessMode, &allowed, &createdAt, &updatedAt,
+		&routeMode, &accessMode, &allowed, &fixedVPNIP, &createdAt, &updatedAt,
 		&d.UserDisplayName, &d.UserStatus,
 		&certID, &certSerial, &certFP, &certCN, &certStatus, &certIssued, &certExpires, &certRevoked, &reason,
 	)
@@ -602,6 +612,7 @@ func scanProfileDetail(row rowScanner) (ProfileDetail, error) {
 	d.RouteMode = routeMode
 	d.AccessMode = accessMode
 	d.AllowedInternal = decodeStringList(allowed)
+	d.FixedVPNIP = fixedVPNIP
 	d.CreatedAt = parseTime(createdAt)
 	d.UpdatedAt = parseTime(updatedAt)
 
@@ -882,4 +893,8 @@ func nullableIntPtr(v sql.NullInt64) *int64 {
 
 func isUsernameConflict(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "client_profile.username")
+}
+
+func isFixedIPConflict(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "client_profile.fixed_vpn_ip")
 }

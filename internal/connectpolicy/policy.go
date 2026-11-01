@@ -20,6 +20,8 @@ import (
 type Policy struct {
 	GlobalExit      bool     `json:"globalExit"`
 	AllowedInternal []string `json:"allowedInternal,omitempty"`
+	FixedIP         string   `json:"fixedIp,omitempty"`
+	VPNMask         string   `json:"vpnMask,omitempty"`
 }
 
 // File 是按证书指纹或登录名索引的有效策略。
@@ -45,7 +47,12 @@ func Effective(profile admission.Profile, server Policy) Policy {
 	case "deny":
 		allowed = nil
 	}
-	return Policy{GlobalExit: global, AllowedInternal: append([]string(nil), allowed...)}
+	return Policy{
+		GlobalExit:      global,
+		AllowedInternal: append([]string(nil), allowed...),
+		FixedIP:         profile.FixedVPNIP,
+		VPNMask:         server.VPNMask,
+	}
 }
 
 // Build 生成身份到策略的映射。证书身份优先使用 SHA-256 指纹，
@@ -92,10 +99,26 @@ func Lookup(file File, fingerprint, username string) (Policy, bool) {
 	return Policy{}, false
 }
 
+// ClientLines 生成 client-connect 文件中的固定地址和推送指令。
+func ClientLines(policy Policy) ([]string, error) {
+	lines := make([]string, 0, 2)
+	if policy.FixedIP != "" {
+		if policy.VPNMask == "" {
+			return nil, fmt.Errorf("固定 IP 缺少 VPN 掩码")
+		}
+		lines = append(lines, fmt.Sprintf("ifconfig-push %s %s", policy.FixedIP, policy.VPNMask))
+	}
+	push, err := PushLines(policy)
+	if err != nil {
+		return nil, err
+	}
+	return append(lines, push...), nil
+}
+
 // PushLines 生成 client-connect 文件中的推送指令。
 func PushLines(policy Policy) ([]string, error) {
 	if policy.GlobalExit {
-		return []string{`push "redirect-gateway def1"`}, nil
+		return []string{`push "redirect-gateway def1 bypass-dhcp"`}, nil
 	}
 	lines := make([]string, 0, len(policy.AllowedInternal))
 	for _, raw := range policy.AllowedInternal {

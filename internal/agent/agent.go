@@ -633,9 +633,14 @@ func (r *Runtime) writeMaterials(bundle agentproto.Bundle) error {
 // writeConnectPolicy 为 client-connect 助手生成身份到路由策略的映射。
 // 文件只包含有效策略，不含证书或密码材料。
 func (r *Runtime) writeConnectPolicy(bundle agentproto.Bundle) error {
+	_, network, err := net.ParseCIDR(bundle.Policy.VPNPool)
+	if err != nil {
+		return fmt.Errorf("解析 VPN 网段: %w", err)
+	}
 	file, err := connectpolicy.Build(bundle.Snapshot, connectpolicy.Policy{
 		GlobalExit:      bundle.Policy.GlobalExit,
 		AllowedInternal: bundle.Policy.AllowedInternal,
+		VPNMask:         net.IP(network.Mask).String(),
 	})
 	if err != nil {
 		return fmt.Errorf("生成连接路由策略: %w", err)

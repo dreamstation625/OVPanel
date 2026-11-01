@@ -198,6 +198,14 @@ func (s *Service) ApplyConfig(ctx context.Context, config serverconfig.Config, r
 	if err != nil {
 		return Result{}, err
 	}
+	for _, profile := range snapshot.Profiles {
+		if profile.FixedVPNIP == "" {
+			continue
+		}
+		if _, err := serverconfig.ValidateFixedIP(prepared.VPNNetwork, profile.FixedVPNIP); err != nil {
+			return Result{}, fmt.Errorf("%w：配置 %s 的固定 IP %s 不可用：%v", accounts.ErrValidation, profile.ID, profile.FixedVPNIP, err)
+		}
+	}
 
 	bundle := agentproto.Bundle{
 		Version:        agentproto.Version,

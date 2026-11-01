@@ -12,8 +12,9 @@ import (
 )
 
 // Version 是控制包格式版本。
-// v3 增加配置级路由/内网权限与逐会话网络策略。
-const Version = 3
+// v3 增加配置级路由/内网权限与逐会话网络策略；
+// v4 增加配置级固定 VPN 地址。
+const Version = 4
 
 // Bundle 是一次完整应用所需的配置、材料与认证快照。
 type Bundle struct {

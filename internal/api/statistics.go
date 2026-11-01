@@ -280,6 +280,19 @@ func (s *Server) handleUpdateProfileLimits(w http.ResponseWriter, r *http.Reques
 		writeError(w, r, http.StatusBadRequest, CodeInvalidRequest, msg)
 		return
 	}
+	current, found, err := s.store.Profile(r.Context(), id)
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	if !found {
+		writeError(w, r, http.StatusNotFound, CodeNotFound, "客户端配置不存在")
+		return
+	}
+	if current.FixedVPNIP != "" && req.ConcurrentLimit != 1 {
+		writeError(w, r, http.StatusBadRequest, CodeInvalidRequest, "该配置设置了固定 IP，并发上限只能为 1")
+		return
+	}
 	expiresAt, err := parseOptionalTime(req.ExpiresAt)
 	if err != nil {
 		writeError(w, r, http.StatusBadRequest, CodeInvalidRequest, err.Error())
