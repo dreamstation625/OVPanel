@@ -312,7 +312,6 @@ export interface UpdateCheck {
   notes?: string
   url?: string
   publishedAt?: string
-  prerelease: boolean
   updateAvailable: boolean
   checkedAt?: string
   error?: string

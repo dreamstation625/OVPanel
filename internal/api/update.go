@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/dreamstation625/ovpanel/internal/updatecheck"
@@ -25,6 +26,16 @@ func (s *Server) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := s.updateChecker.Check(r.Context(), s.build.Version, s.build.Commit, s.build.BuildTime)
 	if err != nil {
+		if errors.Is(err, updatecheck.ErrNoStableRelease) {
+			s.log.Info("no stable release for update check")
+			writeJSON(w, http.StatusOK, updateErrorResponse{
+				CurrentVersion: s.build.Version,
+				CurrentCommit:  s.build.Commit,
+				URL:            releasePageURL(),
+				Error:          "还没有正式版本，请稍后再试或打开 Release 页面。",
+			})
+			return
+		}
 		s.log.Warn("check release update failed", "error", err)
 		writeJSON(w, http.StatusOK, updateErrorResponse{
 			CurrentVersion: s.build.Version,

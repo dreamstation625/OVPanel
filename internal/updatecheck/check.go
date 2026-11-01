@@ -4,6 +4,7 @@ package updatecheck
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,7 +23,10 @@ const (
 	defaultTTL        = 10 * time.Minute
 )
 
-var semverPattern = regexp.MustCompile(`^v?([0-9]+)\.([0-9]+)\.([0-9]+)$`)
+// ErrNoStableRelease 表示仓库还没有正式 Release。
+var ErrNoStableRelease = errors.New("GitHub 上还没有正式版本")
+
+var versionPattern = regexp.MustCompile(`^v?([0-9]+)\.([0-9]+)\.([0-9]+)(-[0-9A-Za-z.-]+)?$`)
 
 // Release 是 GitHub Release 的公开字段。
 type Release struct {
@@ -44,7 +48,6 @@ type Result struct {
 	Notes           string    `json:"notes,omitempty"`
 	URL             string    `json:"url,omitempty"`
 	PublishedAt     string    `json:"publishedAt,omitempty"`
-	Prerelease      bool      `json:"prerelease"`
 	UpdateAvailable bool      `json:"updateAvailable"`
 	CheckedAt       time.Time `json:"checkedAt"`
 }
@@ -155,78 +158,75 @@ func (c *Checker) fetchReleases(ctx context.Context) ([]Release, error) {
 }
 
 func (c *Checker) choose(ctx context.Context, releases []Release, currentVersion, currentCommit, buildTime string) (Result, error) {
-	var stable, prerelease []Release
-	for _, release := range releases {
-		if release.Draft || strings.TrimSpace(release.TagName) == "" {
-			continue
-		}
-		if release.Prerelease {
-			prerelease = append(prerelease, release)
-		} else {
-			stable = append(stable, release)
-		}
+	stable := stableReleases(releases)
+	if len(stable) == 0 {
+		return Result{}, ErrNoStableRelease
 	}
-	sortReleases(stable)
-	sortReleases(prerelease)
+	latest := stable[0]
+	result := Result{
+		CurrentVersion: currentVersion,
+		CurrentCommit:  currentCommit,
+		LatestVersion:  latest.TagName,
+		LatestName:     latest.Name,
+		Notes:          strings.TrimSpace(latest.Body),
+		URL:            latest.HTMLURL,
+		PublishedAt:    latest.PublishedAt,
+	}
+	latestVersion, _, _ := parseVersion(latest.TagName)
+	currentVersionBase, currentStable, hasCurrent := parseVersion(currentVersion)
 
-	current, hasCurrent := parseSemver(currentVersion)
-	devChannel := !hasCurrent
-	result := Result{CurrentVersion: currentVersion, CurrentCommit: currentCommit}
-
-	var latest *Release
-	if devChannel {
-		// 开发版优先对照预发布 Release；没有预发布时只展示最新正式版。
-		if len(prerelease) > 0 {
-			latest = &prerelease[0]
-		} else if len(stable) > 0 {
-			latest = &stable[0]
+	switch {
+	case hasCurrent && currentStable:
+		result.UpdateAvailable = compareSemver(latestVersion, currentVersionBase) > 0
+	case hasCurrent:
+		switch compareSemver(latestVersion, currentVersionBase) {
+		case 1:
+			result.UpdateAvailable = true
+		case 0:
+			result.UpdateAvailable = c.newerThanBuild(ctx, latest, currentCommit, buildTime)
 		}
-	} else if len(stable) > 0 {
-		latest = &stable[0]
-	}
-	if latest == nil {
-		return result, fmt.Errorf("GitHub 上没有可用的 Release")
-	}
-	result.LatestVersion = latest.TagName
-	result.LatestName = latest.Name
-	result.Notes = strings.TrimSpace(latest.Body)
-	result.URL = latest.HTMLURL
-	result.PublishedAt = latest.PublishedAt
-	result.Prerelease = latest.Prerelease
-
-	if !devChannel {
-		latestVersion, ok := parseSemver(latest.TagName)
-		result.UpdateAvailable = ok && compareSemver(latestVersion, current) > 0
-		return result, nil
-	}
-	if latest.Prerelease {
-		tagCommit, err := c.tagCommit(ctx, latest.TagName)
-		if err == nil && isCommit(currentCommit) && isCommit(tagCommit) {
-			result.UpdateAvailable = !sameCommit(currentCommit, tagCommit)
-			return result, nil
-		}
-		if currentTime, err := time.Parse(time.RFC3339, buildTime); err == nil {
-			if published, err := time.Parse(time.RFC3339, latest.PublishedAt); err == nil {
-				result.UpdateAvailable = published.After(currentTime)
-				return result, nil
-			}
-		}
+	default:
+		result.UpdateAvailable = c.newerThanBuild(ctx, latest, currentCommit, buildTime)
 	}
 	return result, nil
 }
 
-func sortReleases(releases []Release) {
-	sort.SliceStable(releases, func(i, j int) bool {
-		if releases[i].PublishedAt != releases[j].PublishedAt {
-			return releases[i].PublishedAt > releases[j].PublishedAt
+// stableReleases 只保留正式版本，并按语义化版本从高到低排序。
+func stableReleases(releases []Release) []Release {
+	stable := make([]Release, 0, len(releases))
+	for _, release := range releases {
+		if release.Draft || release.Prerelease || strings.TrimSpace(release.TagName) == "" {
+			continue
 		}
-		left, leftOK := parseSemver(releases[i].TagName)
-		right, rightOK := parseSemver(releases[j].TagName)
-		if leftOK && rightOK {
-			return compareSemver(left, right) > 0
+		if _, isStable, ok := parseVersion(release.TagName); !ok || !isStable {
+			continue
 		}
-		return releases[i].TagName > releases[j].TagName
+		stable = append(stable, release)
+	}
+	sort.SliceStable(stable, func(i, j int) bool {
+		left, _, _ := parseVersion(stable[i].TagName)
+		right, _, _ := parseVersion(stable[j].TagName)
+		if cmp := compareSemver(left, right); cmp != 0 {
+			return cmp > 0
+		}
+		return stable[i].PublishedAt > stable[j].PublishedAt
 	})
+	return stable
+}
+
+// newerThanBuild 判断正式版本是否在当前构建之后发布。
+// 发布时间不可用时退回比较 tag 与当前构建的提交。
+func (c *Checker) newerThanBuild(ctx context.Context, release Release, currentCommit, buildTime string) bool {
+	if currentTime, err := time.Parse(time.RFC3339, strings.TrimSpace(buildTime)); err == nil {
+		if published, err := time.Parse(time.RFC3339, strings.TrimSpace(release.PublishedAt)); err == nil {
+			return published.After(currentTime)
+		}
+	}
+	tagCommit, err := c.tagCommit(ctx, release.TagName)
+	if err != nil || !isCommit(currentCommit) || !isCommit(tagCommit) {
+		return false
+	}
+	return !sameCommit(currentCommit, tagCommit)
 }
 
 func (c *Checker) tagCommit(ctx context.Context, tag string) (string, error) {
@@ -272,20 +272,20 @@ func (c *Checker) fetchJSON(ctx context.Context, endpoint string, target any) er
 	return json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(target)
 }
 
-func parseSemver(value string) ([3]int, bool) {
-	match := semverPattern.FindStringSubmatch(strings.TrimSpace(value))
+func parseVersion(value string) ([3]int, bool, bool) {
+	match := versionPattern.FindStringSubmatch(strings.TrimSpace(value))
 	if match == nil {
-		return [3]int{}, false
+		return [3]int{}, false, false
 	}
 	var out [3]int
 	for i := 0; i < 3; i++ {
 		n, err := strconv.Atoi(match[i+1])
 		if err != nil {
-			return [3]int{}, false
+			return [3]int{}, false, false
 		}
 		out[i] = n
 	}
-	return out, true
+	return out, match[4] == "", true
 }
 
 func compareSemver(left, right [3]int) int {

@@ -3,6 +3,7 @@ package updatecheck
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -67,60 +68,149 @@ func TestStableNoUpdate(t *testing.T) {
 	}
 }
 
-func TestDevUpdateUsesTagCommit(t *testing.T) {
-	releases := []Release{{
-		TagName: "dev", Name: "dev", Body: "开发版更新", HTMLURL: "https://example.test/r/dev",
-		PublishedAt: "2026-11-02T00:00:00Z", Prerelease: true,
-	}}
-	server := testServer(t, releases, map[string]string{"dev": "bbbbbbbbbbbb"})
+func TestDevBuildUsesLatestStable(t *testing.T) {
+	releases := []Release{
+		{TagName: "0.0.2", Name: "v0.0.2", Body: "正式版", PublishedAt: "2026-11-02T00:00:00Z"},
+		{TagName: "dev", Name: "dev", Body: "开发版", PublishedAt: "2026-11-03T00:00:00Z", Prerelease: true},
+	}
+	server := testServer(t, releases, nil)
 	defer server.Close()
-	checker := newTestChecker(t, server)
-
-	result, err := checker.Check(context.Background(), "dev", "aaaaaaaaaaaa", "2026-11-01T00:00:00Z")
+	result, err := newTestChecker(t, server).Check(context.Background(), "dev", "aaaaaaa", "2026-11-01T00:00:00Z")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.UpdateAvailable || result.LatestVersion != "dev" || result.Notes != "开发版更新" {
-		t.Fatalf("开发版更新判断异常：%+v", result)
-	}
-
-	// 同一构建信息在缓存有效期内直接返回上次结果。
-	result, err = checker.Check(context.Background(), "dev", "aaaaaaaaaaaa", "2026-11-01T00:00:00Z")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !result.UpdateAvailable {
-		t.Fatal("缓存结果不应在有效期内变化")
+	if !result.UpdateAvailable || result.LatestVersion != "0.0.2" || result.Notes != "正式版" {
+		t.Fatalf("开发版应只对照正式 Release：%+v", result)
 	}
 }
 
-func TestDevNoUpdateWhenCommitMatches(t *testing.T) {
-	releases := []Release{{
-		TagName: "dev", PublishedAt: "2026-11-02T00:00:00Z", Prerelease: true,
-	}}
-	server := testServer(t, releases, map[string]string{"dev": "bbbbbbbbbbbb"})
+func TestDevBuildNoUpdateWhenStableReleasedBeforeBuild(t *testing.T) {
+	releases := []Release{{TagName: "0.0.2", Name: "v0.0.2", PublishedAt: "2026-10-31T00:00:00Z"}}
+	server := testServer(t, releases, map[string]string{"0.0.2": "bbbbbbbbbbbb"})
 	defer server.Close()
-	result, err := newTestChecker(t, server).Check(context.Background(), "dev", "bbbbbbbbbbbb", "2026-11-01T00:00:00Z")
+	result, err := newTestChecker(t, server).Check(context.Background(), "dev", "aaaaaaaaaaaa", "2026-11-01T00:00:00Z")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result.UpdateAvailable {
-		t.Fatalf("相同提交不应提示更新：%+v", result)
+		t.Fatalf("早于当前构建发布的正式版不应提示更新：%+v", result)
 	}
 }
 
-func TestPrereleaseVersionUsesDevChannel(t *testing.T) {
-	releases := []Release{{
-		TagName: "dev", Name: "dev", Body: "开发版更新", PublishedAt: "2026-11-02T00:00:00Z", Prerelease: true,
-	}}
-	server := testServer(t, releases, map[string]string{"dev": "bbbbbbbbbbbb"})
+func TestDevBuildFallsBackToTagCommit(t *testing.T) {
+	releases := []Release{{TagName: "0.0.2", Name: "v0.0.2", PublishedAt: "2026-11-02T00:00:00Z"}}
+	server := testServer(t, releases, map[string]string{"0.0.2": "bbbbbbbbbbbb"})
 	defer server.Close()
-	result, err := newTestChecker(t, server).Check(context.Background(), "0.0.1-dev", "aaaaaaaaaaaa", "2026-11-01T00:00:00Z")
+	checker := newTestChecker(t, server)
+
+	result, err := checker.Check(context.Background(), "dev", "aaaaaaaaaaaa", "unknown")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.UpdateAvailable || result.LatestVersion != "dev" {
-		t.Fatalf("预发布版本应跟随 dev Release：%+v", result)
+	if !result.UpdateAvailable {
+		t.Fatalf("构建时间不可用时应按 tag 提交判断更新：%+v", result)
+	}
+
+	result, err = checker.Check(context.Background(), "dev", "bbbbbbbbbbbb", "unknown")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.UpdateAvailable {
+		t.Fatalf("同一提交不应提示更新：%+v", result)
+	}
+}
+
+func TestPrereleaseVersionUsesLatestStable(t *testing.T) {
+	releases := []Release{{TagName: "0.0.2", Name: "v0.0.2", PublishedAt: "2026-11-02T00:00:00Z"}}
+	server := testServer(t, releases, nil)
+	defer server.Close()
+	result, err := newTestChecker(t, server).Check(context.Background(), "0.0.1-dev", "aaaaaaa", "2026-11-01T00:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.UpdateAvailable || result.LatestVersion != "0.0.2" {
+		t.Fatalf("预发布版本应可更新到更高的正式版本：%+v", result)
+	}
+}
+
+func TestPrereleaseVersionSameBaseUsesBuildTime(t *testing.T) {
+	releases := []Release{{TagName: "0.0.2", Name: "v0.0.2", PublishedAt: "2026-11-02T00:00:00Z"}}
+	server := testServer(t, releases, nil)
+	defer server.Close()
+	checker := newTestChecker(t, server)
+
+	result, err := checker.Check(context.Background(), "0.0.2-dev", "aaaaaaa", "2026-11-01T00:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.UpdateAvailable {
+		t.Fatalf("同基础版本且正式版晚于构建发布时应提示更新：%+v", result)
+	}
+
+	result, err = checker.Check(context.Background(), "0.0.2-dev", "aaaaaaa", "2026-11-03T00:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.UpdateAvailable {
+		t.Fatalf("正式版早于构建发布时不应提示更新：%+v", result)
+	}
+}
+
+func TestPrereleaseVersionDoesNotOfferOlderStable(t *testing.T) {
+	releases := []Release{{TagName: "0.0.1", Name: "v0.0.1", PublishedAt: "2026-11-02T00:00:00Z"}}
+	server := testServer(t, releases, nil)
+	defer server.Close()
+	result, err := newTestChecker(t, server).Check(context.Background(), "0.0.2-dev", "aaaaaaa", "2026-11-01T00:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.UpdateAvailable {
+		t.Fatalf("较低版本不应提示为更新：%+v", result)
+	}
+}
+
+func TestPrereleaseReleasesAreIgnored(t *testing.T) {
+	releases := []Release{
+		{TagName: "0.0.1", Name: "v0.0.1", PublishedAt: "2026-11-01T00:00:00Z"},
+		{TagName: "0.0.2", Name: "v0.0.2", PublishedAt: "2026-11-03T00:00:00Z", Prerelease: true},
+		{TagName: "dev", Name: "dev", PublishedAt: "2026-11-04T00:00:00Z", Prerelease: true},
+	}
+	server := testServer(t, releases, nil)
+	defer server.Close()
+	result, err := newTestChecker(t, server).Check(context.Background(), "0.0.1", "aaaaaaa", "2026-11-01T00:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.UpdateAvailable || result.LatestVersion != "0.0.1" {
+		t.Fatalf("预发布版本不应参与更新判断：%+v", result)
+	}
+}
+
+func TestNoStableRelease(t *testing.T) {
+	releases := []Release{{
+		TagName: "dev", Name: "dev", PublishedAt: "2026-11-04T00:00:00Z", Prerelease: true,
+	}}
+	server := testServer(t, releases, nil)
+	defer server.Close()
+	_, err := newTestChecker(t, server).Check(context.Background(), "0.0.1", "aaaaaaa", "2026-11-01T00:00:00Z")
+	if !errors.Is(err, ErrNoStableRelease) {
+		t.Fatalf("没有正式版本时应返回明确错误：%v", err)
+	}
+}
+
+func TestOutOfOrderStableUsesHighestVersion(t *testing.T) {
+	releases := []Release{
+		{TagName: "0.0.2", Name: "v0.0.2", PublishedAt: "2026-11-03T00:00:00Z"},
+		{TagName: "0.0.10", Name: "v0.0.10", PublishedAt: "2026-10-01T00:00:00Z"},
+	}
+	server := testServer(t, releases, nil)
+	defer server.Close()
+	result, err := newTestChecker(t, server).Check(context.Background(), "0.0.2", "aaaaaaa", "2026-11-01T00:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.UpdateAvailable || result.LatestVersion != "0.0.10" {
+		t.Fatalf("应按语义版本选择最高正式版：%+v", result)
 	}
 }
 
