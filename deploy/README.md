@@ -167,6 +167,38 @@ data/
 - `/readyz` 包含 TUN、OpenVPN、nft、tc、ip 与内核模块检查，缺项时返回 503。
 - `/v1/environment` 返回完整报告与当前配置状态。
 
+## 宿主转发与 NAT
+
+`./deploy/compose.sh up -d` 在容器启动后会自动检查当前 `ovpanel` 网络，并为该 IPv4
+子网确保 UFW 转发和 NAT。自动配置需要 root 或免密 sudo，只处理本项目网络，规则
+持久化到 UFW；可用 `OVPANEL_AUTO_FORWARD=0 ./deploy/compose.sh up -d` 关闭。
+
+自动配置目前覆盖 UFW。若宿主使用其他防火墙，或 Docker 已关闭 iptables 且没有
+UFW，脚本会明确报错，需要手动配置；Docker 自身已提供 NAT 且 UFW 未启用时会跳过。
+容器公网出口会顺带做一次短测试，失败时只警告，不阻断容器启动。
+
+### 覆盖裸 Compose 和 1Panel 的 systemd 钩子
+
+`compose.sh` 之外的入口（裸 `docker compose up -d`、1Panel Compose）不会触发
+上述脚本。需要覆盖这些入口时，在宿主机安装一次 systemd 钩子：
+
+```bash
+sudo ./deploy/install-forwarding-hook.sh
+```
+
+钩子会把脚本复制到 `/usr/local/lib/ovpanel/`，并启用
+`ovpanel-forwarding.timer`：开机 30 秒后检查，之后每 60 秒检查一次；只处理
+`ovpanel` 网络，规则不变时保持安静。移除钩子使用：
+
+```bash
+sudo ./deploy/install-forwarding-hook.sh --remove
+```
+
+移除钩子不会删除已有防火墙/NAT 规则。1Panel 宿主机没有仓库目录时，把
+`deploy/ensure-forwarding.sh` 和 `deploy/install-forwarding-hook.sh` 复制到同一
+目录后执行安装即可。更新 `ensure-forwarding.sh` 后重新运行安装器，覆盖
+`/usr/local/lib/ovpanel/` 下的副本。
+
 ## 版本检查与升级
 
 面板侧栏显示当前版本，并会检查 GitHub 正式 Release；有新的正式版本时显示提示，

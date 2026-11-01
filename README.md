@@ -45,6 +45,12 @@ cp .env.example .env
 ./deploy/compose.sh up -d --build
 ```
 
+`compose.sh up -d` 会在启动后自动检查并补齐 `ovpanel` 网络的宿主转发和 NAT；
+需要 root 或免密 sudo，可用 `OVPANEL_AUTO_FORWARD=0` 关闭。若使用裸
+`docker compose` 或 1Panel Compose，可在宿主机安装一次
+`deploy/install-forwarding-hook.sh` 的 systemd 钩子覆盖这些入口。详见
+[deploy/README.md](deploy/README.md)。
+
 默认只绑定 `127.0.0.1:8080`，不会直接暴露到局域网。部署细节、HTTPS、容器边界、
 数据目录和升级方式见 [deploy/README.md](deploy/README.md)。不提供独立二进制启动
 或发布方式。
