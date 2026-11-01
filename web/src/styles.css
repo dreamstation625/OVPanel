@@ -97,6 +97,36 @@ a {
   color: var(--accent);
 }
 
+a:focus-visible,
+pre:focus-visible,
+code[tabindex]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+button:focus-visible,
+[role='switch']:focus-visible,
+[role='tab']:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+.n-base-selection:focus-within,
+.n-select:focus-within,
+.n-input:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* 细小图标按钮与输入框后缀仍应达到最小可点击尺寸。 */
+.n-button--tiny,
+.n-button--tiny-type {
+  min-height: 24px;
+}
+
+.n-input__suffix .n-button {
+  min-width: 24px;
+  min-height: 24px;
+}
+
 .auth-shell {
   display: grid;
   place-items: center;

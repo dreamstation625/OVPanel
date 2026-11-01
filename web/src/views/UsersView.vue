@@ -344,6 +344,9 @@ onMounted(() => {
 }
 
 .row-action {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
   color: var(--accent);
   font-size: 12.5px;
   font-weight: 600;
@@ -371,7 +374,7 @@ onMounted(() => {
   font-size: 15px;
 }
 
-@media (max-width: 760px) {
+@media (max-width: 960px) {
   .page-header {
     align-items: flex-start;
     flex-direction: column;
@@ -442,6 +445,15 @@ onMounted(() => {
   .row-action {
     grid-area: action;
     justify-self: start;
+  }
+}
+
+@media (min-width: 961px) and (max-width: 1200px) {
+  .list-head,
+  .list-row {
+    grid-template-columns: minmax(0, 2fr) 74px 62px 52px 100px 128px 44px;
+    gap: 10px;
+    padding: 12px 14px;
   }
 }
 </style>

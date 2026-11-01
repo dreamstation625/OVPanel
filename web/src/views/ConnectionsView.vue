@@ -227,7 +227,7 @@ function endReasonLabel(reason: string) {
           </div>
           <div v-for="item in online.connections" :key="item.id" class="table-row">
             <div class="cell cell-main">
-              <RouterLink :to="`/profiles/${item.profileId}`" class="primary-link">
+              <RouterLink :to="`/profiles/${item.profileId}`" class="primary-link" :title="item.profileName">
                 {{ item.profileName }}
               </RouterLink>
               <span>{{ item.userDisplayName || '未知用户' }} · {{ item.authType ? authLabel(item.authType as AuthType) : '—' }}</span>
@@ -284,7 +284,7 @@ function endReasonLabel(reason: string) {
         </div>
         <div v-for="item in history" :key="item.id" class="table-row">
           <div class="cell cell-main">
-            <RouterLink :to="`/profiles/${item.profileId}`" class="primary-link">
+            <RouterLink :to="`/profiles/${item.profileId}`" class="primary-link" :title="item.profileName">
               {{ item.profileName || '未知配置' }}
             </RouterLink>
             <span>{{ item.userDisplayName || '—' }}</span>
@@ -490,6 +490,9 @@ function endReasonLabel(reason: string) {
 }
 
 .cell-main .primary-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
   color: var(--text-1);
   font-weight: 600;
   text-decoration: none;
@@ -535,7 +538,7 @@ function endReasonLabel(reason: string) {
   font-weight: 600;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1100px) {
   .table-head {
     display: none;
   }
@@ -568,8 +571,29 @@ function endReasonLabel(reason: string) {
     flex-direction: column;
   }
 
+  .header-tools {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
   .stat-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .stat-card {
+    min-height: 0;
+    padding: 10px;
+  }
+
+  .stat-value {
+    font-size: 17px;
+    letter-spacing: -0.03em;
+    white-space: nowrap;
+  }
+
+  .stat-hint {
+    display: none;
   }
 
   .surface {
@@ -578,7 +602,7 @@ function endReasonLabel(reason: string) {
 
   .table-row,
   .table--history .table-row {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .align-end {

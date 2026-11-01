@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import { Activity, FileBadge, RefreshCw, Users } from '@lucide/vue'
 import { NAlert, NButton } from 'naive-ui'
 import { api, ApiError, type Operation, type Overview, type SystemInfo } from '../api'
-import { errorMessage, formatBytes, formatDate, formatRate } from '../labels'
+import { errorMessage, formatBytes, formatDate, formatRate, operationKindLabel } from '../labels'
 
 const router = useRouter()
 const system = ref<SystemInfo | null>(null)
@@ -167,7 +167,7 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="panel-grid">
-      <section class="surface">
+      <section class="surface trend-surface">
         <header class="surface-head">
           <h2>近 7 天流量</h2>
           <span class="surface-meta">上传 + 下载</span>
@@ -192,7 +192,7 @@ onBeforeUnmount(() => {
         <ul v-if="liveConnections.length" class="live-list">
           <li v-for="item in liveConnections" :key="item.id">
             <div class="live-main">
-              <RouterLink :to="`/profiles/${item.profileId}`" class="live-name">{{ item.profileName }}</RouterLink>
+              <RouterLink :to="`/profiles/${item.profileId}`" class="live-name" :title="item.profileName">{{ item.profileName }}</RouterLink>
               <span class="live-meta">{{ item.userDisplayName || '未知用户' }} · {{ item.vpnIp || '等待地址' }}</span>
             </div>
             <div class="live-side">
@@ -231,8 +231,8 @@ onBeforeUnmount(() => {
         <ul v-if="operations.length" class="operation-list">
           <li v-for="operation in operations" :key="operation.id">
             <div class="operation-main">
-              <strong>{{ operation.kind }}</strong>
-              <span class="operation-message">{{ operation.message || '—' }}</span>
+              <strong>{{ operationKindLabel(operation.kind) }}</strong>
+              <span class="operation-message" :title="operation.message">{{ operation.message || '—' }}</span>
             </div>
             <div class="operation-side">
               <span class="chip" :class="`chip--${operation.state}`">{{ stateLabel(operation.state) }}</span>
@@ -365,20 +365,33 @@ onBeforeUnmount(() => {
 }
 
 .text-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
   color: var(--accent);
   font-size: 12px;
   text-decoration: none;
+}
+.text-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .text-link:hover {
   text-decoration: underline;
 }
 
+.trend-surface {
+  display: flex;
+  flex-direction: column;
+}
+
 .trend {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 10px;
-  align-items: end;
+  align-items: stretch;
+  flex: 1;
   min-height: 210px;
   padding-top: 8px;
 }
@@ -386,6 +399,7 @@ onBeforeUnmount(() => {
 .trend-col {
   display: flex;
   flex-direction: column;
+  justify-content: flex-end;
   align-items: center;
   gap: 6px;
   min-width: 0;
@@ -393,9 +407,10 @@ onBeforeUnmount(() => {
 
 .trend-track {
   display: flex;
+  flex: 1;
   align-items: flex-end;
   width: 100%;
-  height: 140px;
+  min-height: 140px;
   border-radius: 6px;
   background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--accent) 7%, transparent));
 }
@@ -450,6 +465,9 @@ onBeforeUnmount(() => {
 }
 
 .live-name {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
   overflow: hidden;
   color: var(--text-1);
   font-size: 13px;
@@ -610,7 +628,7 @@ onBeforeUnmount(() => {
   }
 
   .panel-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

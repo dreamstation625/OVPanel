@@ -28,7 +28,7 @@ func (s *Server) handleOpenVPNMaintenance(w http.ResponseWriter, r *http.Request
 		PanelManualSteps: []string{
 			"备份当前数据并确认恢复密码可用。",
 			"拉取目标面板镜像并固定版本。",
-			"仅重建 panel 容器：docker compose up -d --no-deps panel。",
+			"仅重建 panel 容器：./deploy/compose.sh up -d --no-deps panel。",
 			"检查面板健康、登录和数据；OpenVPN 容器不应被联动重启。",
 		},
 		ImageSwapWarning: "OpenVPN 更新会短暂中断全部 VPN 连接；任何时刻只保留两个项目容器。",

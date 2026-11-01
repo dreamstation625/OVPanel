@@ -111,6 +111,19 @@ export function suggestUsername(): string {
   return 'u-' + Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
 }
 
+export function operationKindLabel(kind: string): string {
+  switch (kind) {
+    case 'backup':
+      return '加密备份'
+    case 'restore':
+      return '数据恢复'
+    case 'openvpn_update':
+      return 'OpenVPN 更新'
+    default:
+      return kind
+  }
+}
+
 export function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : '操作失败'
 }

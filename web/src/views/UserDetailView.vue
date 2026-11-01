@@ -269,6 +269,7 @@ watch(() => route.params.id, load, { immediate: true })
 .back-link {
   display: inline-flex;
   align-items: center;
+  min-height: 30px;
   gap: 5px;
   margin-bottom: 18px;
   color: var(--text-3);

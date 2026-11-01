@@ -335,7 +335,7 @@ onMounted(load)
           </NFormItem>
         </div>
         <div class="schedule-line">
-          <NSwitch v-model:value="settingsForm.enabled" />
+          <NSwitch v-model:value="settingsForm.enabled" aria-label="启用每日自动备份" />
           <span>启用每日自动备份</span>
           <span class="muted">失败不会删除最后可用备份</span>
         </div>
@@ -621,9 +621,16 @@ onMounted(load)
 
 .file-picker input {
   position: absolute;
-  width: 1px;
-  height: 1px;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
   opacity: 0;
+}
+
+.file-picker:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .file-picker span {
@@ -728,6 +735,20 @@ onMounted(load)
 
   .surface {
     padding: 16px;
+  }
+
+  .surface-head {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .file-picker {
+    min-height: 44px;
+  }
+
+  .backup-actions :deep(.n-button) {
+    min-height: 36px;
   }
 }
 </style>

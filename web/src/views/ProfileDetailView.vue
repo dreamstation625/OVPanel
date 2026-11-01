@@ -542,7 +542,7 @@ watch(() => route.params.id, load, { immediate: true })
             />
           </NFormItem>
           <div class="limit-line">
-            <NSwitch v-model:value="limits.concurrentEnabled" />
+            <NSwitch v-model:value="limits.concurrentEnabled" aria-label="并发上限开关" />
             <span class="limit-name">并发上限</span>
             <NInputNumber
               v-model:value="limits.concurrentLimit"
@@ -555,7 +555,7 @@ watch(() => route.params.id, load, { immediate: true })
             <span class="limit-unit">条</span>
           </div>
           <div class="limit-line">
-            <NSwitch v-model:value="limits.quotaEnabled" />
+            <NSwitch v-model:value="limits.quotaEnabled" aria-label="流量额度开关" />
             <span class="limit-name">流量额度</span>
             <NInputNumber
               v-model:value="limits.quotaGb"
@@ -579,7 +579,7 @@ watch(() => route.params.id, load, { immediate: true })
             </NButton>
           </div>
           <div class="limit-line">
-            <NSwitch v-model:value="limits.uploadEnabled" />
+            <NSwitch v-model:value="limits.uploadEnabled" aria-label="上传限速开关" />
             <span class="limit-name">上传限速</span>
             <NInputNumber
               v-model:value="limits.uploadMbps"
@@ -593,7 +593,7 @@ watch(() => route.params.id, load, { immediate: true })
             <span class="limit-unit">Mbps / 每条连接</span>
           </div>
           <div class="limit-line">
-            <NSwitch v-model:value="limits.downloadEnabled" />
+            <NSwitch v-model:value="limits.downloadEnabled" aria-label="下载限速开关" />
             <span class="limit-name">下载限速</span>
             <NInputNumber
               v-model:value="limits.downloadMbps"
@@ -638,7 +638,7 @@ watch(() => route.params.id, load, { immediate: true })
           </dl>
           <div class="fingerprint">
             <span>SHA-256 指纹</span>
-            <code>{{ formatFingerprint(profile.certificate.fingerprint) }}</code>
+            <code tabindex="0">{{ formatFingerprint(profile.certificate.fingerprint) }}</code>
             <NButton size="tiny" @click="copyFingerprint">
               <template #icon><Copy :size="13" /></template>
               {{ copied ? '已复制' : '复制' }}
@@ -680,6 +680,7 @@ watch(() => route.params.id, load, { immediate: true })
 .back-link {
   display: inline-flex;
   align-items: center;
+  min-height: 30px;
   gap: 5px;
   margin-bottom: 18px;
   color: var(--text-3);
@@ -1018,6 +1019,44 @@ watch(() => route.params.id, load, { immediate: true })
 
   .limit-reset {
     margin-left: 0;
+  }
+
+  .limit-line {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 6px 10px;
+    align-items: center;
+    padding: 10px 0;
+  }
+
+  .limit-line > :deep(.n-switch) {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .limit-name {
+    grid-column: 2;
+    grid-row: 1;
+    min-width: 0;
+  }
+
+  .limit-unit {
+    grid-column: 3;
+    grid-row: 1;
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  .control-number {
+    grid-column: 2 / 4;
+    grid-row: 2;
+    width: min(220px, 100%);
+  }
+
+  .limit-reset {
+    grid-column: 2 / 4;
+    grid-row: 3;
+    justify-self: start;
   }
 
   .fingerprint {

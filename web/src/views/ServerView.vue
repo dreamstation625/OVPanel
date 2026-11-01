@@ -240,14 +240,14 @@ onMounted(load)
               <strong>允许客户端互访</strong>
               <span>默认关闭；内网权限与互访分别控制。</span>
             </div>
-            <NSwitch v-model:value="form.allowInterClient" />
+            <NSwitch v-model:value="form.allowInterClient" aria-label="允许客户端互访" />
           </div>
           <div class="switch-row">
             <div>
               <strong>阻断 IPv6</strong>
               <span>第一版不转发 IPv6，按兼容客户端执行阻断。</span>
             </div>
-            <NSwitch v-model:value="form.blockIpv6" />
+            <NSwitch v-model:value="form.blockIpv6" aria-label="阻断 IPv6" />
           </div>
           <NFormItem label="额外指令">
             <NInput
@@ -347,7 +347,7 @@ onMounted(load)
         <h2><ShieldCheck :size="16" /> 配置预览</h2>
         <span class="surface-meta">{{ formatDate(meta?.draft?.createdAt || meta?.active?.createdAt) }}</span>
       </header>
-      <pre class="config-preview">{{ rendered || '保存或预览草稿后显示渲染结果' }}</pre>
+      <pre class="config-preview" tabindex="0">{{ rendered || '保存或预览草稿后显示渲染结果' }}</pre>
     </section>
 
     <PasswordPromptModal

@@ -12,7 +12,7 @@ import {
   type PKIStatus,
   type SystemInfo,
 } from '../api'
-import { errorMessage, formatDate } from '../labels'
+import { errorMessage, formatDate, operationKindLabel } from '../labels'
 import { copyText } from '../utils'
 
 const system = ref<SystemInfo | null>(null)
@@ -342,7 +342,7 @@ onBeforeUnmount(stopPoll)
           </dl>
           <div class="fingerprint">
             <span>CA 指纹</span>
-            <code>{{ pki.ca.fingerprint }}</code>
+            <code tabindex="0">{{ pki.ca.fingerprint }}</code>
             <NButton size="tiny" @click="copyFingerprint">
               <template #icon><Copy :size="13" /></template>
               {{ copied ? '已复制' : '复制' }}
@@ -411,7 +411,7 @@ onBeforeUnmount(stopPoll)
         <header class="surface-head">
           <h2><Wrench :size="17" /> OpenVPN 维护</h2>
           <span class="surface-meta">
-            {{ maintenance?.available ? '维护进程可用' : maintenance?.reason || '读取中' }}
+            {{ maintenance?.available ? '维护进程可用' : maintenance ? '维护进程不可用' : '读取中' }}
           </span>
         </header>
 
@@ -423,6 +423,13 @@ onBeforeUnmount(stopPoll)
         </NAlert>
         <NAlert type="warning" :bordered="false" class="stack-gap">
           {{ maintenance?.imageSwapWarning || '更新 OpenVPN 会中断全部 VPN 连接。' }}
+        </NAlert>
+        <NAlert v-if="maintenance && !maintenance.available" type="info" :bordered="false" class="stack-gap">
+          维护进程不可用，当前无法更新 OpenVPN。请检查 Docker Socket、维护进程和容器权限。
+          <details class="maintenance-diagnostic">
+            <summary>诊断信息</summary>
+            <code>{{ maintenance.reason }}</code>
+          </details>
         </NAlert>
 
         <dl class="fact-list maintenance-facts">
@@ -455,7 +462,7 @@ onBeforeUnmount(stopPoll)
             :disabled="taskRunning || !maintenance?.available"
           />
           <NButton
-            type="primary"
+            :type="maintenance?.available ? 'primary' : 'default'"
             :loading="maintenanceBusy"
             :disabled="taskRunning || !maintenance?.available"
             @click="startUpdate"
@@ -499,8 +506,8 @@ onBeforeUnmount(stopPoll)
         <ul v-if="operations.length" class="operation-list">
           <li v-for="operation in operations" :key="operation.id">
             <div>
-              <strong>{{ operation.kind }}</strong>
-              <span>{{ operation.message || '—' }}</span>
+              <strong>{{ operationKindLabel(operation.kind) }}</strong>
+              <span :title="operation.message">{{ operation.message || '—' }}</span>
             </div>
             <div class="operation-side">
               <span class="chip">{{ stateLabel(operation.state) }}</span>
@@ -767,6 +774,23 @@ onBeforeUnmount(stopPoll)
   max-width: 360px;
 }
 
+.maintenance-diagnostic {
+  margin-top: 6px;
+  color: var(--text-2);
+  font-size: 11.5px;
+}
+
+.maintenance-diagnostic summary {
+  cursor: pointer;
+}
+
+.maintenance-diagnostic code {
+  display: block;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+
 .maint-task {
   margin-top: 14px;
   padding: 12px 14px;
@@ -838,6 +862,12 @@ onBeforeUnmount(stopPoll)
 
   .fact-list > div {
     grid-template-columns: 88px minmax(0, 1fr);
+  }
+
+  .surface-head {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
   }
 
   .update-row {

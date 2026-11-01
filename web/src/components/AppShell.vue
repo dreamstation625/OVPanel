@@ -1,7 +1,18 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { Archive, LayoutDashboard, LogOut, Radio, Server, Settings, Users } from '@lucide/vue'
+import {
+  Archive,
+  LayoutDashboard,
+  LogOut,
+  Menu,
+  Radio,
+  ScrollText,
+  Server,
+  Settings,
+  Users,
+  X,
+} from '@lucide/vue'
 import { NButton } from 'naive-ui'
 import BrandMark from './BrandMark.vue'
 import ThemeToggle from './ThemeToggle.vue'
@@ -16,7 +27,63 @@ const emit = defineEmits<{
 }>()
 
 const route = useRoute()
-const usersActive = computed(() => route.path.startsWith('/users') || route.path.startsWith('/profiles'))
+const menuOpen = ref(false)
+const drawer = ref<HTMLElement | null>(null)
+
+const navItems = [
+  { to: '/overview', label: '概览', icon: LayoutDashboard },
+  { to: '/connections', label: '在线连接', icon: Radio },
+  { to: '/users', label: '用户与客户端', icon: Users },
+  { to: '/server', label: '服务端', icon: Server },
+  { to: '/logs', label: '日志', icon: ScrollText },
+  { to: '/backups', label: '备份', icon: Archive },
+  { to: '/system', label: '系统', icon: Settings },
+]
+
+function isUsersSection() {
+  return route.path.startsWith('/users') || route.path.startsWith('/profiles')
+}
+
+function setMenu(open: boolean, restoreFocus = false) {
+  if (menuOpen.value === open) return
+  menuOpen.value = open
+  if (open) {
+    nextTick(() => drawer.value?.querySelector<HTMLElement>('.nav-link')?.focus())
+  } else if (restoreFocus) {
+    nextTick(() => document.querySelector<HTMLElement>('.mobile-menu-button')?.focus())
+  }
+}
+
+function onDrawerKeydown(event: KeyboardEvent) {
+  if (event.key !== 'Tab' || !drawer.value) return
+  const links = Array.from(drawer.value.querySelectorAll<HTMLElement>('.nav-link'))
+  if (!links.length) return
+  const first = links[0]
+  const last = links[links.length - 1]
+  if (!first || !last) return
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault()
+    last.focus()
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault()
+    first.focus()
+  }
+}
+
+function onGlobalKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape' && menuOpen.value) {
+    event.preventDefault()
+    setMenu(false, true)
+  }
+}
+
+onMounted(() => window.addEventListener('keydown', onGlobalKeydown))
+onBeforeUnmount(() => window.removeEventListener('keydown', onGlobalKeydown))
+
+watch(
+  () => route.path,
+  () => setMenu(false),
+)
 
 async function logout() {
   try {
@@ -40,33 +107,33 @@ async function logout() {
       </RouterLink>
 
       <nav class="nav" aria-label="主导航">
-        <RouterLink to="/overview" class="nav-link">
-          <LayoutDashboard :size="17" aria-hidden="true" />
-          <span>概览</span>
-        </RouterLink>
-        <RouterLink to="/connections" class="nav-link">
-          <Radio :size="17" aria-hidden="true" />
-          <span>在线连接</span>
-        </RouterLink>
-        <RouterLink to="/users" class="nav-link" :class="{ active: usersActive }">
-          <Users :size="17" aria-hidden="true" />
-          <span>用户与客户端</span>
-        </RouterLink>
-        <RouterLink to="/server" class="nav-link">
-          <Server :size="17" aria-hidden="true" />
-          <span>服务端</span>
-        </RouterLink>
-        <RouterLink to="/backups" class="nav-link">
-          <Archive :size="17" aria-hidden="true" />
-          <span>备份</span>
-        </RouterLink>
-        <RouterLink to="/system" class="nav-link">
-          <Settings :size="17" aria-hidden="true" />
-          <span>系统</span>
+        <RouterLink
+          v-for="item in navItems"
+          :key="item.to"
+          :to="item.to"
+          class="nav-link"
+          :class="{ active: item.to === '/users' && isUsersSection() }"
+        >
+          <component :is="item.icon" :size="17" aria-hidden="true" />
+          <span>{{ item.label }}</span>
         </RouterLink>
       </nav>
 
       <div class="sidebar-foot">
+        <NButton
+          class="mobile-menu-button"
+          quaternary
+          circle
+          :aria-label="menuOpen ? '关闭导航' : '打开导航'"
+          :aria-expanded="menuOpen"
+          aria-controls="mobile-navigation"
+          @click="setMenu(!menuOpen)"
+        >
+          <template #icon>
+            <X v-if="menuOpen" :size="18" />
+            <Menu v-else :size="18" />
+          </template>
+        </NButton>
         <ThemeToggle />
         <div class="account">
           <span class="account-name" :title="username">{{ username }}</span>
@@ -75,6 +142,28 @@ async function logout() {
           </NButton>
         </div>
       </div>
+
+      <div v-if="menuOpen" class="mobile-backdrop" aria-hidden="true" @click="setMenu(false, true)" />
+      <nav
+        v-if="menuOpen"
+        id="mobile-navigation"
+        ref="drawer"
+        class="mobile-drawer"
+        aria-label="移动导航"
+        @keydown="onDrawerKeydown"
+      >
+        <RouterLink
+          v-for="item in navItems"
+          :key="item.to"
+          :to="item.to"
+          class="nav-link"
+          :class="{ active: item.to === '/users' && isUsersSection() }"
+          @click="setMenu(false)"
+        >
+          <component :is="item.icon" :size="18" aria-hidden="true" />
+          <span>{{ item.label }}</span>
+        </RouterLink>
+      </nav>
     </aside>
 
     <main class="workspace">
@@ -201,20 +290,29 @@ async function logout() {
   padding: clamp(22px, 4vw, 44px) clamp(16px, 4vw, 40px) 64px;
 }
 
+.mobile-menu-button,
+.mobile-drawer,
+.mobile-backdrop {
+  display: none;
+}
+
 @media (max-width: 900px) {
   .shell {
     display: block;
   }
 
   .sidebar {
-    position: static;
+    position: relative;
     display: flex;
+    width: 100%;
+    max-width: 100%;
     flex-direction: row;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     align-items: center;
     gap: 8px;
     height: auto;
     padding: 10px 14px;
+    overflow: visible;
     border-right: 0;
     border-bottom: 1px solid var(--border);
   }
@@ -228,17 +326,40 @@ async function logout() {
   }
 
   .nav {
-    order: 3;
-    flex: 1 1 100%;
-    flex-direction: row;
-    overflow-x: auto;
-    padding-bottom: 2px;
+    display: none;
+  }
+
+  .mobile-menu-button {
+    display: inline-flex;
   }
 
   .nav-link {
     flex: none;
-    min-height: 38px;
+    min-height: 44px;
     padding: 0 12px;
+  }
+
+  .mobile-backdrop {
+    position: fixed;
+    inset: 54px 0 0;
+    z-index: 40;
+    display: block;
+    background: color-mix(in srgb, var(--bg) 62%, transparent);
+  }
+
+  .mobile-drawer {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    left: 0;
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px 12px 12px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    box-shadow: var(--shadow-card);
   }
 
   .sidebar-foot {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterView } from 'vue-router'
 import { NButton, NConfigProvider, darkTheme } from 'naive-ui'
 import BrandMark from './components/BrandMark.vue'
@@ -75,7 +75,39 @@ function handleExpired() {
 
 registerUnauthorizedHandler(handleExpired)
 
-onMounted(bootstrap)
+// Naive UI 的密码可见性切换按钮没有可访问名称，按输入框类型补齐。
+// 组件在弹层中动态创建，因此用 MutationObserver 覆盖后续节点。
+function labelInputActions(root: ParentNode) {
+  root.querySelectorAll<HTMLButtonElement>('.n-input__suffix .n-button').forEach((button) => {
+    if (button.getAttribute('aria-label')) {
+      return
+    }
+    const input = button.closest('.n-input')?.querySelector('input')
+    button.setAttribute('aria-label', input?.type === 'password' ? '显示或隐藏密码' : '输入框操作')
+  })
+}
+
+let observer: MutationObserver | undefined
+
+onMounted(() => {
+  bootstrap()
+  labelInputActions(document)
+  observer = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      mutation.addedNodes.forEach((node) => {
+        if (node instanceof Element) {
+          labelInputActions(node)
+          if (node.parentElement) {
+            labelInputActions(node.parentElement)
+          }
+        }
+      })
+    }
+  })
+  observer.observe(document.body, { childList: true, subtree: true })
+})
+
+onBeforeUnmount(() => observer?.disconnect())
 </script>
 
 <template>
