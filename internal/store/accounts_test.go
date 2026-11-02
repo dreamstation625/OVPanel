@@ -153,6 +153,50 @@ func TestUpdateProfileNetworkFixedIP(t *testing.T) {
 	}
 }
 
+func TestFixedIPProfilesClearAndRestore(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+
+	if err := s.CreateUserWithProfile(ctx, testUser("u1"), testProfile("p1", "u1", AuthCertificate, ""), nil); err != nil {
+		t.Fatalf("创建首个配置失败：%v", err)
+	}
+	if err := s.CreateUserWithProfile(ctx, testUser("u2"), testProfile("p2", "u2", AuthCertificate, ""), nil); err != nil {
+		t.Fatalf("创建第二个配置失败：%v", err)
+	}
+	if err := s.UpdateProfileNetwork(ctx, "p1", RouteInherit, AccessInherit, nil, nil, ClientLANInherit, "10.8.255.200"); err != nil {
+		t.Fatalf("设置首个固定 IP 失败：%v", err)
+	}
+	if err := s.UpdateProfileNetwork(ctx, "p2", RouteInherit, AccessInherit, nil, nil, ClientLANInherit, "10.8.255.201"); err != nil {
+		t.Fatalf("设置第二个固定 IP 失败：%v", err)
+	}
+
+	items, err := s.FixedIPProfiles(ctx)
+	if err != nil || len(items) != 2 {
+		t.Fatalf("读取固定 IP 配置失败：%+v %v", items, err)
+	}
+	if items[0].UserDisplayName == "" || items[0].Name == "" {
+		t.Fatalf("固定 IP 配置缺少展示信息：%+v", items[0])
+	}
+
+	n, err := s.ClearFixedVPNIPs(ctx)
+	if err != nil || n != 2 {
+		t.Fatalf("清除固定 IP 失败：count=%d err=%v", n, err)
+	}
+	if left, err := s.FixedIPProfiles(ctx); err != nil || len(left) != 0 {
+		t.Fatalf("清除后仍有固定 IP：%+v %v", left, err)
+	}
+	if detail, ok, _ := s.Profile(ctx, "p1"); !ok || detail.FixedVPNIP != "" {
+		t.Fatalf("配置固定 IP 未清空：%+v ok=%v", detail, ok)
+	}
+
+	if err := s.RestoreFixedVPNIPs(ctx, items); err != nil {
+		t.Fatalf("恢复固定 IP 失败：%v", err)
+	}
+	if detail, ok, _ := s.Profile(ctx, "p2"); !ok || detail.FixedVPNIP != "10.8.255.201" {
+		t.Fatalf("配置固定 IP 未恢复：%+v ok=%v", detail, ok)
+	}
+}
+
 func TestCertificateRotationAndRevocation(t *testing.T) {
 	ctx := context.Background()
 	s := openTestStore(t)

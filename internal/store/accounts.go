@@ -332,6 +332,85 @@ func (s *Store) UpdateProfileName(ctx context.Context, id, name string) error {
 	return nil
 }
 
+// FixedIPProfile 是设置了固定 VPN 地址的配置，用于网段变更前的提示和批量重置。
+type FixedIPProfile struct {
+	ID              string
+	UserID          string
+	UserDisplayName string
+	Name            string
+	FixedVPNIP      string
+}
+
+// FixedIPProfiles 返回所有设置了固定 VPN 地址的配置。
+func (s *Store) FixedIPProfiles(ctx context.Context) ([]FixedIPProfile, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT p.id, p.user_id, u.display_name, p.name, p.fixed_vpn_ip
+		   FROM client_profile p
+		   JOIN app_user u ON u.id = p.user_id
+		  WHERE p.fixed_vpn_ip <> ''
+		  ORDER BY u.display_name, p.name, p.id`)
+	if err != nil {
+		return nil, fmt.Errorf("读取固定 IP 配置: %w", err)
+	}
+	defer rows.Close()
+	out := make([]FixedIPProfile, 0)
+	for rows.Next() {
+		var item FixedIPProfile
+		if err := rows.Scan(&item.ID, &item.UserID, &item.UserDisplayName, &item.Name, &item.FixedVPNIP); err != nil {
+			return nil, fmt.Errorf("读取固定 IP 配置: %w", err)
+		}
+		out = append(out, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("读取固定 IP 配置: %w", err)
+	}
+	return out, nil
+}
+
+// ClearFixedVPNIPs 把所有固定 VPN 地址改为自动分配；并发上限保持原值。
+func (s *Store) ClearFixedVPNIPs(ctx context.Context) (int, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE client_profile
+		    SET fixed_vpn_ip = '', updated_at = ?
+		  WHERE fixed_vpn_ip <> ''`,
+		formatTime(nowUTC()))
+	if err != nil {
+		return 0, fmt.Errorf("清除固定 IP: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("清除固定 IP: %w", err)
+	}
+	return int(n), nil
+}
+
+// RestoreFixedVPNIPs 在网段变更应用失败时恢复刚清除的固定地址。
+// 只恢复仍为空的记录，避免覆盖期间的人工修改。
+func (s *Store) RestoreFixedVPNIPs(ctx context.Context, items []FixedIPProfile) error {
+	if len(items) == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("恢复固定 IP: %w", err)
+	}
+	now := formatTime(nowUTC())
+	for _, item := range items {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE client_profile
+			    SET fixed_vpn_ip = ?, updated_at = ?
+			  WHERE id = ? AND fixed_vpn_ip = ''`,
+			item.FixedVPNIP, now, item.ID); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("恢复固定 IP %s: %w", item.ID, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("恢复固定 IP: %w", err)
+	}
+	return nil
+}
+
 // UpdateProfileNetwork 更新配置级路由、目标网段权限、共享内网与固定地址。
 // 设置固定地址时并发上限同步锁定为 1，避免同一配置的多条连接争用同一地址。
 func (s *Store) UpdateProfileNetwork(ctx context.Context, id, routeMode, accessMode string, allowedInternal, clientNetworks []string, clientLANAccess, fixedVPNIP string) error {

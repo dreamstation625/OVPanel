@@ -108,6 +108,38 @@ func TestPrepareNormalizesTargets(t *testing.T) {
 	}
 }
 
+func TestPrepareAcceptsPrivateSlash24Network(t *testing.T) {
+	cfg := Defaults()
+	cfg.VPNNetwork = "192.168.99.0/24"
+	prepared, err := Prepare(cfg)
+	if err != nil {
+		t.Fatalf("192.168.99.0/24 应可作为 VPN 网段：%v", err)
+	}
+	plan, err := PlanAddresses(prepared.VPNNetwork)
+	if err != nil {
+		t.Fatalf("计算 /24 地址规划失败：%v", err)
+	}
+	if plan.Server != "192.168.99.1" ||
+		plan.PoolStart != "192.168.99.64" ||
+		plan.PoolEnd != "192.168.99.191" ||
+		plan.FixedStart != "192.168.99.2" ||
+		plan.FixedEnd != "192.168.99.254" {
+		t.Fatalf("地址规划异常：%+v", plan)
+	}
+	text, _, err := Render(prepared)
+	if err != nil {
+		t.Fatalf("/24 配置渲染失败：%v", err)
+	}
+	for _, want := range []string{
+		"ifconfig 192.168.99.1 255.255.255.0",
+		"ifconfig-pool 192.168.99.64 192.168.99.191 255.255.255.0",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("渲染结果缺少 %q：\n%s", want, text)
+		}
+	}
+}
+
 func TestValidateRejectsBadInput(t *testing.T) {
 	cases := []Config{
 		func() Config { c := Defaults(); c.VPNNetwork = "10.8.0.1/16"; return c }(),

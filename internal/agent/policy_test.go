@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -295,6 +296,85 @@ func TestServerCertificateSerialChangeRestartsOpenVPN(t *testing.T) {
 	rt.mu.Unlock()
 	if serial != "S2" {
 		t.Fatalf("运行代理未记录新证书序列号：%q", serial)
+	}
+}
+
+func bundleWithPool(t *testing.T, base []byte, pool, config string, issued time.Time) []byte {
+	t.Helper()
+	var bundle agentproto.Bundle
+	if err := json.Unmarshal(base, &bundle); err != nil {
+		t.Fatalf("解析控制包失败：%v", err)
+	}
+	sum := sha256.Sum256([]byte(config))
+	bundle.Config = config
+	bundle.ConfigHash = hex.EncodeToString(sum[:])
+	bundle.Policy.VPNPool = pool
+	bundle.IssuedAt = issued
+	data, err := json.Marshal(bundle)
+	if err != nil {
+		t.Fatalf("编码控制包失败：%v", err)
+	}
+	return data
+}
+
+func TestVPNPoolChangeEndsClientsBeforeApply(t *testing.T) {
+	controlDir, stateDir := t.TempDir(), t.TempDir()
+	rt := New(controlDir, stateDir, testLogger())
+	rt.configDir = t.TempDir()
+	rt.localNetsFn = func(string) []string { return nil }
+	rt.applyPolicyFn = func(netpolicy.Policy) error { return nil }
+	rt.syncRoutesFn = func([]string, bool, string) error { return nil }
+	starts := 0
+	rt.startVPNFn = func(_ context.Context, hash string) error {
+		starts++
+		rt.mu.Lock()
+		rt.configHash = hash
+		rt.openvpnRunning = true
+		rt.managementConnected = true
+		rt.mu.Unlock()
+		return nil
+	}
+
+	base := policyBundle(t)
+	now := time.Now().UTC()
+	writeBundle(t, controlDir, base)
+	if err := rt.applyOnce(context.Background()); err != nil {
+		t.Fatalf("首次应用失败：%v", err)
+	}
+	if starts != 1 {
+		t.Fatalf("首次应用应启动 OpenVPN，实际 %d 次", starts)
+	}
+
+	// 模拟旧网段下的一条在线连接及其地址持久化记录。
+	rt.mu.Lock()
+	rt.sessions["1"] = sessionInfo{
+		id: "session-1", profileID: "A", vpnIP: "10.8.64.0", connectedAt: now,
+	}
+	rt.mu.Unlock()
+	if err := os.WriteFile(filepath.Join(stateDir, poolStateFile), []byte("client,10.8.64.0\n"), 0o600); err != nil {
+		t.Fatalf("写入旧地址记录失败：%v", err)
+	}
+
+	next := bundleWithPool(t, base, "10.18.0.0/16", "server 10.18.0.0 255.255.0.0\n", now.Add(time.Second))
+	writeBundle(t, controlDir, next)
+	if err := rt.applyOnce(context.Background()); err != nil {
+		t.Fatalf("VPN 网段变更应自动结束旧会话后应用：%v", err)
+	}
+	if starts != 2 {
+		t.Fatalf("VPN 网段变更后应重启 OpenVPN，实际 %d 次", starts)
+	}
+	rt.mu.Lock()
+	remaining := len(rt.sessions)
+	pool := rt.serverPolicy.VPNPool
+	rt.mu.Unlock()
+	if remaining != 0 {
+		t.Fatalf("VPN 网段变更后旧会话应被清空，剩余 %d 条", remaining)
+	}
+	if pool != "10.18.0.0/16" {
+		t.Fatalf("新地址池未生效：%q", pool)
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, poolStateFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("VPN 网段变更后应清除旧 IP 分配记录：%v", err)
 	}
 }
 
