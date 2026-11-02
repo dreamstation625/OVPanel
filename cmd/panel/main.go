@@ -203,6 +203,11 @@ func run() error {
 		defer cleanupWG.Done()
 		runBackupSchedule(ctx, backupService, log)
 	}()
+	cleanupWG.Add(1)
+	go func() {
+		defer cleanupWG.Done()
+		runAccountSync(ctx, runtimeService, backupService, log)
+	}()
 
 	httpServer := &http.Server{
 		Addr:              cfg.Listen,
@@ -269,6 +274,27 @@ func run() error {
 	}
 	log.Info("panel stopped")
 	return nil
+}
+
+// 数据库是期望状态。即使请求被取消、写盘失败或面板重启，也会重新核对并补发。
+func runAccountSync(ctx context.Context, service *vpnruntime.Service, backups *backup.Service, log *slog.Logger) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		if !backups.Mutating() {
+			syncCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			_, err := service.SyncAccounts(syncCtx)
+			cancel()
+			if err != nil {
+				log.Warn("retry account sync failed", "error", err)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 // runBackupSchedule 每 30 秒检查一次定时备份；同一天最多执行一次。

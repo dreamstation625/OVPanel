@@ -10,7 +10,6 @@ DATA_DIR="${OVPANEL_DATA_DIR:-/data}"
 CONTROL_DIR="${OVPANEL_CONTROL_DIR:-}"
 SOCKET="${OVPANEL_MAINTENANCE_SOCKET:-/run/ovpanel/maintain.sock}"
 SOCKET_DIR="$(dirname "$SOCKET")"
-MAINT_DIR="$DATA_DIR/maintenance"
 
 mkdir -p "$DATA_DIR"
 
@@ -22,9 +21,11 @@ if [ "$(id -u)" = "0" ]; then
     chown 10001:10001 "$CONTROL_DIR"
   fi
 
-  mkdir -p "$SOCKET_DIR" "$MAINT_DIR"
-  chown 0:10001 "$SOCKET_DIR" "$MAINT_DIR"
-  chmod 0770 "$SOCKET_DIR" "$MAINT_DIR"
+  # Socket 目录只允许 root 创建/替换端点；Socket 本身授权给 Web 用户组。
+  # 维护状态由维护进程在独立挂载内创建，不能放进 Web 可写的 /data。
+  mkdir -p "$SOCKET_DIR"
+  chown 0:10001 "$SOCKET_DIR"
+  chmod 0750 "$SOCKET_DIR"
 
   # 维护进程需要访问宿主 Docker Socket；容器根文件系统只读，无法在运行期
   # 修改 /etc/group，因此维护进程以容器 root 运行，Web 仍为非 root 用户。

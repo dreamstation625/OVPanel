@@ -8,6 +8,19 @@ import (
 	"github.com/dreamstation625/ovpanel/internal/vpnruntime"
 )
 
+func (s *Server) handleRuntimeSync(w http.ResponseWriter, r *http.Request) {
+	if s.runtime == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"pending": false})
+		return
+	}
+	pending, err := s.runtime.AccountsPending(r.Context())
+	if err != nil {
+		s.log.Warn("read account sync state failed", "error", err)
+		pending = true
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"pending": pending})
+}
+
 func (s *Server) handleRuntimeApply(w http.ResponseWriter, r *http.Request) {
 	if s.runtime == nil {
 		writeError(w, r, http.StatusServiceUnavailable, CodeInternal, "运行控制未配置")

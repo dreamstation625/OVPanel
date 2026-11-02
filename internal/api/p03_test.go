@@ -139,7 +139,7 @@ func TestP03UserProfileCertificateFlow(t *testing.T) {
 	// 轮换证书后指纹变化。
 	rotate := doJSON(t, h, http.MethodPost, "/api/profiles/"+certProfileID+"/certificate/rotate", "127.0.0.1:5000",
 		map[string]string{}, cookies...)
-	if rotate.Code != http.StatusOK {
+	if rotate.Code != http.StatusAccepted {
 		t.Fatalf("轮换失败：%d %s", rotate.Code, rotate.Body.String())
 	}
 	var rotated struct {
@@ -155,7 +155,7 @@ func TestP03UserProfileCertificateFlow(t *testing.T) {
 	// 吊销后配置无生效证书。
 	revoke := doJSON(t, h, http.MethodPost, "/api/profiles/"+certProfileID+"/certificate/revoke", "127.0.0.1:5000",
 		map[string]string{}, cookies...)
-	if revoke.Code != http.StatusOK {
+	if revoke.Code != http.StatusAccepted {
 		t.Fatalf("吊销失败：%d %s", revoke.Code, revoke.Body.String())
 	}
 	var revoked struct {
@@ -171,7 +171,7 @@ func TestP03UserProfileCertificateFlow(t *testing.T) {
 	// 重置密码并校验新密码。
 	reset := doJSON(t, h, http.MethodPost, "/api/profiles/"+added.Profile.ID+"/password", "127.0.0.1:5000",
 		map[string]string{}, cookies...)
-	if reset.Code != http.StatusOK {
+	if reset.Code != http.StatusAccepted {
 		t.Fatalf("重置密码失败：%d %s", reset.Code, reset.Body.String())
 	}
 	var resetBody struct {
@@ -191,7 +191,7 @@ func TestP03UserProfileCertificateFlow(t *testing.T) {
 	// 停用用户后所有配置的有效状态变化。
 	disable := doJSON(t, h, http.MethodPatch, "/api/users/"+userID, "127.0.0.1:5000",
 		map[string]string{"status": "disabled"}, cookies...)
-	if disable.Code != http.StatusOK {
+	if disable.Code != http.StatusAccepted {
 		t.Fatalf("停用用户失败：%d %s", disable.Code, disable.Body.String())
 	}
 	var disabled userDetailDTO

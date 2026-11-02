@@ -46,6 +46,9 @@ type errorDetail struct {
 // 编码失败时无法再改响应头，因此只记录到日志由调用方决定；
 // 这里不返回错误，避免调用点写一堆无用分支。
 func writeJSON(w http.ResponseWriter, status int, v any) {
+	if (status == http.StatusOK || status == http.StatusCreated) && w.Header().Get("X-OVPanel-Runtime-State") != "" {
+		status = http.StatusAccepted
+	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)

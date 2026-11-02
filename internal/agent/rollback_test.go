@@ -127,6 +127,78 @@ func TestApplyFailureRollsBackToLastGood(t *testing.T) {
 	}
 }
 
+func TestCredentialUpdateFailureStopsVPNInsteadOfRestoringOldAuthorization(t *testing.T) {
+	controlDir, stateDir := t.TempDir(), t.TempDir()
+	good := policyBundle(t)
+	rt, _ := newTestRuntime(t, controlDir, stateDir, "")
+	writeBundle(t, controlDir, good)
+	if err := rt.applyOnce(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var changed agentproto.Bundle
+	if err := json.Unmarshal(good, &changed); err != nil {
+		t.Fatal(err)
+	}
+	changed.Snapshot.Users[0].Status = "disabled"
+	changed.IssuedAt = changed.IssuedAt.Add(time.Second)
+	data, err := json.Marshal(changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.applyPolicyFn = func(netpolicy.Policy) error { return errors.New("临时 nft 故障") }
+	writeBundle(t, controlDir, data)
+	if err := rt.applyOnce(t.Context()); err == nil {
+		t.Fatal("凭据更新失败应上报并停止服务")
+	}
+	if status := rt.Status(); status.OpenVPNRunning || status.RolledBack || status.BundleHash == hashBytes(data) {
+		t.Fatalf("不能运行旧授权或确认失败的快照：%+v", status)
+	}
+	if rt.snapshot.Users[0].Status != "disabled" {
+		t.Fatal("不得撤销本次停用状态")
+	}
+	// 面板补发新尝试后，短暂故障消失即可恢复；不得要求手工撤销停用。
+	rt.applyPolicyFn = func(netpolicy.Policy) error { return nil }
+	changed.IssuedAt = changed.IssuedAt.Add(time.Second)
+	data, _ = json.Marshal(changed)
+	writeBundle(t, controlDir, data)
+	if err := rt.applyOnce(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if status := rt.Status(); !status.OpenVPNRunning || status.BundleHash != hashBytes(data) {
+		t.Fatalf("重试后应恢复服务并确认最新控制包：%+v", status)
+	}
+}
+
+func TestConfigRollbackCannotResurrectRevokedCredentials(t *testing.T) {
+	controlDir, stateDir := t.TempDir(), t.TempDir()
+	good := policyBundle(t)
+	rt, _ := newTestRuntime(t, controlDir, stateDir, "")
+	writeBundle(t, controlDir, good)
+	if err := rt.applyOnce(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var changed agentproto.Bundle
+	if err := json.Unmarshal(good, &changed); err != nil {
+		t.Fatal(err)
+	}
+	changed.Snapshot.Users[0].Status = "disabled"
+	changed.Config += "# 新的服务端候选\n"
+	sum := sha256.Sum256([]byte(changed.Config))
+	changed.ConfigHash = hex.EncodeToString(sum[:])
+	rt.applyPolicyFn = func(netpolicy.Policy) error { return errors.New("候选规则失败") }
+	for attempt := 0; attempt < 2; attempt++ {
+		changed.IssuedAt = changed.IssuedAt.Add(time.Second)
+		data, _ := json.Marshal(changed)
+		writeBundle(t, controlDir, data)
+		if err := rt.applyOnce(t.Context()); err == nil {
+			t.Fatal("包含凭据变更的配置失败不能自动恢复旧授权")
+		}
+		if rt.Status().OpenVPNRunning || rt.snapshot.Users[0].Status != "disabled" {
+			t.Fatal("配置重试恢复了已撤销的授权")
+		}
+	}
+}
+
 func TestStartFailureRollsBackAndRestartsPreviousConfig(t *testing.T) {
 	controlDir, stateDir := t.TempDir(), t.TempDir()
 	good := makeBundle(t, "server 10.8.0.0 255.255.0.0\n", "10.8.0.0/16")

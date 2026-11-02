@@ -7,6 +7,7 @@ package agent
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -78,6 +79,7 @@ type Status struct {
 	OpenVPNRunning      bool       `json:"openvpnRunning"`
 	ManagementConnected bool       `json:"managementConnected"`
 	ConfigHash          string     `json:"configHash,omitempty"`
+	BundleHash          string     `json:"bundleHash,omitempty"`
 	Sessions            int        `json:"sessions"`
 	UsageGeneration     string     `json:"usageGeneration,omitempty"`
 	UsageSeq            uint64     `json:"usageSeq"`
@@ -359,17 +361,35 @@ func (r *Runtime) applyOnce(ctx context.Context) error {
 	r.mu.Lock()
 	applied := r.bundleHash == bundleHash && r.openvpnRunning && r.managementConnected
 	failed := r.failedHash == bundleHash
+	credentialsOnly := r.configHash != "" && r.configHash == bundle.ConfigHash
+	lastGood := append([]byte(nil), r.lastGoodBundle...)
 	r.mu.Unlock()
 	if applied || failed {
 		// failedHash 防止同一份已经失败的控制包每秒重试；
 		// 面板重新下发会产生新的控制包哈希，届时再尝试。
 		return nil
 	}
+	authorizationChanged := false
+	if len(lastGood) > 0 {
+		var previous agentproto.Bundle
+		if err := json.Unmarshal(lastGood, &previous); err != nil {
+			authorizationChanged = true
+		} else {
+			oldSnapshot, _ := json.Marshal(previous.Snapshot)
+			newSnapshot, _ := json.Marshal(bundle.Snapshot)
+			authorizationChanged = !bytes.Equal(oldSnapshot, newSnapshot)
+		}
+	}
 
 	if err := r.applyBundle(ctx, bundle, bundleHash); err != nil {
 		r.mu.Lock()
 		r.failedHash = bundleHash
 		r.mu.Unlock()
+		if credentialsOnly || authorizationChanged {
+			// 撤销凭据失败不能回退成旧授权。停止数据服务，等待面板重新下发重试。
+			r.stopProcess()
+			return fmt.Errorf("凭据或权限更新失败，VPN 已停止以避免沿用旧授权：%w", err)
+		}
 		return r.rollback(ctx, bundleHash, err)
 	}
 	r.commitGood(data, bundleHash)
@@ -1729,6 +1749,7 @@ func (r *Runtime) Status() Status {
 		OpenVPNRunning:      r.openvpnRunning,
 		ManagementConnected: r.managementConnected,
 		ConfigHash:          r.configHash,
+		BundleHash:          r.bundleHash,
 		Sessions:            len(r.sessions),
 		UsageGeneration:     r.usage.Generation(),
 		UsageSeq:            r.usage.CurrentSeq(),

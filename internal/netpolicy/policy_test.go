@@ -5,6 +5,37 @@ import (
 	"testing"
 )
 
+func TestPolicyProtectsLocalServicesAndScopesHostForwarding(t *testing.T) {
+	script, err := Render(Policy{
+		VPNPool: "10.8.0.0/16", TunDevice: "ovp-tun", BlockIPv6: true,
+		ProtectTargets: []string{"172.18.0.0/16"},
+		SharedNetworks: []string{"192.168.50.0/24"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := strings.Index(script, "type filter hook input")
+	forward := strings.Index(script, "type filter hook forward")
+	if input < 0 || forward < input || !strings.Contains(script[input:forward], `iifname "ovp-tun" counter drop`) {
+		t.Fatal("必须在 input 阻断隧道到本机服务的流量")
+	}
+	guard := strings.Index(script, `iifname != "ovp-tun" oifname != "ovp-tun" return`)
+	for _, rule := range []string{"ip daddr 172.18.0.0/16 counter drop", "meta nfproto ipv6 counter drop", "ip saddr @shared ct state new counter drop"} {
+		index := strings.Index(script, rule)
+		if guard < forward || index < guard {
+			t.Fatalf("非 VPN 转发必须在规则 %q 之前返回", rule)
+		}
+	}
+	if !strings.Contains(script, `iifname "ovp-tun" ip saddr 10.8.0.0/16 ip daddr != 10.8.0.0/16 ip daddr != @shared counter masquerade`) {
+		t.Fatal("NAT 必须只匹配隧道流量并保留共享内网回程")
+	}
+	for _, bad := range []string{"tun0\naccept", "tun*", "tun\"0", "interface-name-too-long"} {
+		if _, err := Render(Policy{VPNPool: "10.8.0.0/16", TunDevice: bad}); err == nil {
+			t.Fatalf("不应接受非法接口名：%q", bad)
+		}
+	}
+}
+
 func TestRenderPolicyOrderAndRules(t *testing.T) {
 	script, err := Render(Policy{
 		VPNPool:          "10.8.0.0/16",

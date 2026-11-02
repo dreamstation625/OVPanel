@@ -2,13 +2,11 @@ package api
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/dreamstation625/ovpanel/internal/accounts"
 	"github.com/dreamstation625/ovpanel/internal/store"
 	"github.com/dreamstation625/ovpanel/internal/telemetry"
 )
@@ -304,7 +302,7 @@ func (s *Server) handleUpdateProfileLimits(w http.ResponseWriter, r *http.Reques
 		s.writeAccountError(w, r, err)
 		return
 	}
-	s.applyRuntimeBundle(r.Context(), "profile limits updated")
+	s.applyRuntimeBundle(w, r, "profile limits updated")
 	detail, ok, err := s.store.Profile(r.Context(), id)
 	if err != nil {
 		s.internalError(w, r, err)
@@ -327,7 +325,7 @@ func (s *Server) handleResetQuota(w http.ResponseWriter, r *http.Request) {
 		s.writeAccountError(w, r, err)
 		return
 	}
-	s.applyRuntimeBundle(r.Context(), "quota reset")
+	s.applyRuntimeBundle(w, r, "quota reset")
 	detail, ok, err := s.store.Profile(r.Context(), profileID)
 	if err != nil {
 		s.internalError(w, r, err)
@@ -579,12 +577,16 @@ func profileMap(details []store.ProfileDetail) map[string]store.ProfileDetail {
 }
 
 // applyRuntimeBundle 把账号、限额或额度变更同步给运行代理。
-// 尚未配置导出地址时没有可下发的运行配置，不视为操作失败。
-func (s *Server) applyRuntimeBundle(ctx context.Context, reason string) {
+// 数据已保存时保留正常返回体（包括一次性密码），用 202 明确表示 VPN 尚未确认生效。
+func (s *Server) applyRuntimeBundle(w http.ResponseWriter, r *http.Request, reason string) {
 	if s.runtime == nil {
 		return
 	}
-	if _, err := s.runtime.Apply(ctx); err != nil && !errors.Is(err, accounts.ErrExportNotConfigured) {
+	pending, err := s.runtime.SyncAccounts(r.Context())
+	if err != nil {
 		s.log.Warn("apply runtime bundle failed", "reason", reason, "error", err)
+		w.Header().Set("X-OVPanel-Runtime-State", "failed")
+	} else if pending {
+		w.Header().Set("X-OVPanel-Runtime-State", "pending")
 	}
 }

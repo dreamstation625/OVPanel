@@ -312,3 +312,6 @@ textarea:focus-visible,
     transition-duration: 0.01ms !important;
   }
 }
+.runtime-sync-warning {
+  margin-bottom: 16px;
+}
