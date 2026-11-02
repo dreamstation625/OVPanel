@@ -3,6 +3,8 @@
 本目录提供 Dockerfile、部署前检查与运行手册；严格双容器部署入口是项目根目录的
 `compose.yaml`，推荐叠加 `compose.hostnet.yaml`，让 OpenVPN 使用 host 网络；
 面板仍使用 bridge 网络。环境变量示例是根目录的 `.env.example`。
+宝塔、1Panel 等面板可直接使用独立的 [`compose.host.yaml`](../compose.host.yaml)，
+配套环境变量见 [`.env.host.example`](../.env.host.example)，无需克隆仓库或合并多个 Compose 文件。
 
 OpenVPN 容器运行真实 OpenVPN 与运行代理，服务端配置、准入、网络策略、统计、
 限额和限速由代理执行。容器 healthy 代表进程、代理握手与数据面环境检查通过，
@@ -19,12 +21,15 @@ deploy/
   check-host.sh           宿主 Docker、TUN、nft、tc、内核模块检查
 ```
 
-部署入口是项目根目录的 `compose.yaml`；运行数据与证书默认保存在根目录的
-`data/`、`certs/`（Git 忽略，首次启动创建）。以下命令都在项目根目录执行。
+仓库部署使用根目录的 `compose.yaml` 与 `compose.hostnet.yaml`，运行数据与证书默认
+保存在根目录的 `data/`、`certs/`（Git 忽略，首次启动创建）。独立 `compose.host.yaml`
+使用 `/opt/ovpanel/data`、`/opt/ovpanel/certs`，不依赖面板的编排工作目录。
+除宝塔 / 1Panel 部署一节外，以下命令都在项目根目录执行。
 
 ## 前置条件
 
-- Linux amd64 或 arm64，rootful Docker Engine + Compose v2（host 模式需支持 `!reset`）。
+- Linux amd64 或 arm64，rootful Docker Engine + Compose v2；仓库的 host 覆盖文件需支持
+  `!reset`，独立 `compose.host.yaml` 不使用此标签。
 - 宿主存在 `/dev/net/tun`，可加载 `ifb`、`sch_htb`、`act_mirred`。
 - 不把 Windows/macOS Docker Desktop、rootless Docker 当作已支持生产环境。
 
@@ -42,7 +47,56 @@ printf 'net.ipv4.ip_forward=1\n' | sudo tee /etc/sysctl.d/90-ovpanel.conf
 sudo sysctl -p /etc/sysctl.d/90-ovpanel.conf
 ```
 
-## 首次启动（推荐 host 网络）
+## 宝塔 / 1Panel 部署
+
+先满足上文的 Linux、TUN、内核模块和 IPv4 转发要求。宿主没有仓库时，可手动检查
+`/dev/net/tun` 及 `ifb`、`sch_htb`、`act_mirred` 模块；启动后再检查 OpenVPN 容器健康状态。
+
+1. 在面板中创建 Compose 编排，粘贴 [`compose.host.yaml`](../compose.host.yaml) 的全部内容。
+   [1Panel 支持 Web 编辑器创建编排](https://docs.fit2cloud.com/1panel/user_manual/containers/compose/)。
+2. 将 [`.env.host.example`](../.env.host.example) 保存为编排目录下的 `.env`，或将参数
+   填入面板的编排环境变量配置。通过这些变量调整镜像标签、数据目录、管理端口和 HTTPS，
+   两个镜像使用同一个发布标签。已有 `.env` 时合并所需参数，不覆盖原有配置。
+   当前示例默认使用与 `dev` 分支配套的预发布镜像；切换正式版时，请选择包含 host
+   网络转发入口的版本，避免旧镜像缺少 `OVPANEL_HOST_NETWORK` 对应的转发维护逻辑。
+3. 保存并启动编排。保留 `openvpn` 的 `network_mode: host`，不要额外添加端口映射或容器 sysctl。
+4. 在面板的 `ovpanel-panel` 容器终端运行 `cat /data/bootstrap-token` 获取初始化口令。
+   也可在宿主执行：
+
+   ```bash
+   docker exec ovpanel-panel cat /data/bootstrap-token
+   ```
+
+5. 默认管理地址仍为 `http://127.0.0.1:8080`。在自己的电脑建立 SSH 隧道后访问并初始化：
+
+   ```bash
+   ssh -L 8080:127.0.0.1:8080 <SSH用户>@<服务器地址>
+   ```
+
+数据默认保存在宿主 `/opt/ovpanel/data`，初始化口令位于其 `panel/bootstrap-token`，
+初始化成功后删除。HTTPS 证书放入 `/opt/ovpanel/certs`，在 `.env` 或面板的编排环境变量中设置
+`OVPANEL_TLS_CERT=/certs/panel.crt`、`OVPANEL_TLS_KEY=/certs/panel.key`，再调整 `.env` 中的管理绑定地址。
+详细要求见下文「HTTPS」，包括反向代理终止 TLS 的限制。
+
+VPN 默认端口为 `1194/udp`，请同步宿主防火墙及云安全组；管理端口 `9443/tcp` 仅监听回环地址。
+此文件不需要运行宿主 `ensure-forwarding.sh`。升级前先备份，再在编排环境变量中修改两个镜像标签、
+拉取镜像并逐个重建；重建 OpenVPN 会断开连接。不要与已有 OVPanel 编排同时启动。
+已有数据迁移时须先停止原编排，再将本文件的数据和证书路径指向原目录，避免创建空实例。
+
+如需脱离管理面板使用命令行，将 Compose 与环境变量示例放在同一目录，首次创建 `.env`
+并按需修改；已有 `.env` 时合并参数：
+
+```bash
+cp -n .env.host.example .env
+docker compose --env-file .env -f compose.host.yaml pull
+docker compose --env-file .env -f compose.host.yaml up -d
+docker compose --env-file .env -f compose.host.yaml ps
+```
+
+`.env` 用于 Compose 的变量替换，镜像、端口、挂载路径及容器运行参数都会读取对应值；
+无需额外添加服务级 `env_file`。
+
+## 首次启动（仓库 host 部署）
 
 ```bash
 cp .env.example .env

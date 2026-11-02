@@ -54,6 +54,10 @@
 
 > **推荐 host 网络**：OpenVPN 直接监听宿主数据端口，避免 Docker bridge 转发影响客户端来源地址的记录。面板仍使用 bridge，默认仅绑定 `127.0.0.1:8080`。
 
+**宝塔 / 1Panel 部署：** 准备好下文的 Linux 宿主环境后，在面板中新建 Compose 编排，粘贴 [compose.host.yaml](compose.host.yaml)，将 [.env.host.example](.env.host.example) 保存为编排目录的 `.env`，或填入面板的编排环境变量配置。默认使用配套的 `dev` 镜像，数据目录为 `/opt/ovpanel/data`，无需克隆仓库。详见[面板部署说明](deploy/README.md#宝塔--1panel-部署)。
+
+以下步骤为克隆仓库后的命令行部署方式。
+
 ### 1. 准备环境
 
 - Linux amd64 / arm64，使用 rootful Docker Engine。
@@ -194,7 +198,9 @@ deploy/                Dockerfile、部署检查、网络脚本与运行手册
 img/                   README 界面截图
 compose.yaml           双容器基础配置（bridge）
 compose.hostnet.yaml   OpenVPN host 网络覆盖配置（推荐）
+compose.host.yaml      宝塔 / 1Panel 可直接使用的独立 host 配置
 .env.example           部署环境变量示例
+.env.host.example      独立 host 部署环境变量示例
 VERSION                版本号唯一来源
 ```
 
