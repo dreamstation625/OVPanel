@@ -130,7 +130,7 @@ onMounted(load)
 
     <template v-if="tab === 'connections'">
       <div class="toolbar">
-        <NInput v-model:value="query" clearable placeholder="搜索用户、配置、IP 或原因" />
+        <NInput v-model:value="query" clearable placeholder="搜索用户、客户端、IP 或原因" />
         <NSelect v-model:value="reason" :options="reasonOptions" class="reason-filter" />
       </div>
       <section class="surface">
@@ -140,9 +140,9 @@ onMounted(load)
         </header>
         <div v-if="filteredHistory.length" class="log-list">
           <div class="log-head" aria-hidden="true">
-            <span>用户 / 配置</span>
-            <span>地址</span>
-            <span>时间</span>
+            <span>用户 / 客户端</span>
+            <span>VPN 地址</span>
+            <span>连接时间</span>
             <span class="align-end">流量</span>
             <span class="align-end">结束原因</span>
           </div>
@@ -151,11 +151,11 @@ onMounted(load)
               <RouterLink :to="`/profiles/${item.profileId}`" class="log-title">{{ item.profileName || '未知配置' }}</RouterLink>
               <span class="log-meta">{{ item.userDisplayName || '—' }}</span>
             </div>
-            <div class="log-cell" data-label="地址">
+            <div class="log-cell" data-label="VPN 地址">
               <span class="mono">{{ item.vpnIp || '—' }}</span>
               <span class="muted">来源 {{ item.sourceIp || '—' }}</span>
             </div>
-            <div class="log-cell" data-label="时间">
+            <div class="log-cell" data-label="连接时间">
               <span>{{ formatDate(item.connectedAt) }}</span>
               <span class="muted">{{ formatDuration(item.durationSeconds) }}</span>
             </div>

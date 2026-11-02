@@ -28,7 +28,7 @@ const stats = computed(() => {
       icon: Activity,
     },
     { label: '今日流量', value: formatBytes(info.todayUpBytes + info.todayDownBytes), hint: `上行 ${formatBytes(info.todayUpBytes)} · 下行 ${formatBytes(info.todayDownBytes)}`, icon: FileBadge },
-    { label: '用户 / 配置', value: `${info.users} / ${info.profiles}`, hint: '用户数与配置数', icon: Users },
+    { label: '用户 / 配置数', value: `${info.users} / ${info.profiles}`, hint: '用户账号与客户端配置', icon: Users },
   ]
 })
 

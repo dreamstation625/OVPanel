@@ -94,12 +94,12 @@ const routeOptions = [
 const accessOptions = [
   { label: '继承服务端', value: 'inherit' },
   { label: '仅允许指定网段', value: 'allow' },
-  { label: '禁止访问私有网段', value: 'deny' },
+  { label: '禁止访问目标网段', value: 'deny' },
 ]
 const clientLANOptions = [
   { label: '继承服务端', value: 'inherit' },
-  { label: '允许访问其他客户端共享内网', value: 'allow' },
-  { label: '禁止访问其他客户端共享内网', value: 'deny' },
+  { label: '允许访问其他客户端通告的内网', value: 'allow' },
+  { label: '禁止访问其他客户端通告的内网', value: 'deny' },
 ]
 
 const backTarget = computed(() => (profile.value ? `/users/${profile.value.userId}` : '/users'))
@@ -288,10 +288,10 @@ async function savePolicy() {
         show: true,
         text:
           saved.onlineSessions > 0
-            ? `客户端「${label}」有 ${saved.onlineSessions} 条在线连接。请重连该客户端使共享网段生效；需要访问该网段的其他客户端也需重连。`
-            : `请重连客户端「${label}」使共享网段生效；需要访问该网段的其他客户端也需重连。`,
+            ? `客户端「${label}」有 ${saved.onlineSessions} 条在线连接。请重连该客户端使路由通告生效；需要访问这些网段的其他客户端也需重连。`
+            : `请重连客户端「${label}」使路由通告生效；需要访问这些网段的其他客户端也需重连。`,
       }
-      notify.success('网络策略已保存；请重连共享客户端使新路由生效。')
+      notify.success('网络策略已保存；请重连该客户端使新路由生效。')
     } else {
       notify.success('网络策略已保存。')
     }
@@ -312,7 +312,7 @@ async function saveLimits() {
     return
   }
   if (limits.concurrentEnabled && (limits.concurrentLimit < 1 || limits.concurrentLimit > 1000)) {
-    notify.warning('并发上限需在 1 到 1000 之间')
+    notify.warning('并发连接上限需在 1 到 1000 之间')
     return
   }
   if (limits.quotaEnabled && limits.quotaGb < 0.001) {
@@ -489,7 +489,7 @@ watch(() => route.params.id, load, { immediate: true })
             <dd>{{ formatDate(profile.createdAt) }}</dd>
           </div>
           <div v-if="profile.expiresAt">
-            <dt>到期时间</dt>
+            <dt>配置到期时间</dt>
             <dd>{{ formatDate(profile.expiresAt) }}</dd>
           </div>
         </dl>
@@ -498,7 +498,7 @@ watch(() => route.params.id, load, { immediate: true })
       <section class="surface">
         <header class="surface-head">
           <h2>网络策略</h2>
-          <span class="surface-meta">路由、目标网段与共享内网</span>
+          <span class="surface-meta">路由方式、目标网段与路由通告</span>
         </header>
         <NForm>
           <div class="policy-grid">
@@ -508,7 +508,7 @@ watch(() => route.params.id, load, { immediate: true })
             <NFormItem label="目标网段权限">
               <NSelect v-model:value="policy.accessMode" :options="accessOptions" />
             </NFormItem>
-            <NFormItem label="共享内网访问">
+            <NFormItem label="访问其他客户端内网">
               <NSelect v-model:value="policy.clientLanAccess" :options="clientLANOptions" />
             </NFormItem>
           </div>
@@ -520,7 +520,7 @@ watch(() => route.params.id, load, { immediate: true })
               placeholder="例如 10.0.16.0/22、192.168.99.0/24、1.1.1.1，用逗号或换行分隔"
             />
           </NFormItem>
-          <NFormItem label="共享内网">
+          <NFormItem label="路由通告">
             <NInput
               v-model:value="policy.clientNetworksText"
               type="textarea"
@@ -538,13 +538,13 @@ watch(() => route.params.id, load, { immediate: true })
             分流时只把目标网段路由到 VPN；全局时只用于放行私有网络。不要填写 VPN 服务器自身的公网地址。
           </p>
           <p class="policy-hint">
-            共享内网只支持私网/CGNAT IPv4，填写这台客户端后面的内网，不要填写服务端已能访问的网段。客户端需开启转发和 NAT；建议固定 IP 并只保持一条连接。
+            路由通告只支持私网/CGNAT IPv4，填写这台客户端后面的内网，不要填写服务端已能访问的网段。客户端需开启转发和 NAT；建议固定 IP 并只保持一条连接。
           </p>
           <p class="policy-hint">
-            其他客户端只能访问共享内网，共享内网里的设备不能主动访问 VPN 客户端。修改后相关客户端需重连。
+            其他客户端只能访问这些通告网段，通告网段里的设备不能主动访问 VPN 客户端。修改后相关客户端需重连。
           </p>
           <p class="policy-hint">
-            固定 IP 需在 VPN 网段内并避开动态池<template v-if="profile.fixedIpPoolStart">（{{ profile.fixedIpPoolStart }} 至 {{ profile.fixedIpPoolEnd }}）</template>。保存后并发上限为 1，客户端重连后生效；首次设置或修改 VPN 网段后，需到“服务端”应用一次配置。
+            固定 VPN 地址需在 VPN 网段内并避开动态池<template v-if="profile.fixedIpPoolStart">（{{ profile.fixedIpPoolStart }} 至 {{ profile.fixedIpPoolEnd }}）</template>。保存后并发连接上限为 1，客户端重连后生效；首次设置或修改 VPN 网段后，需到“服务端”应用一次配置。
           </p>
           <div class="policy-actions">
             <NButton type="primary" :loading="policyBusy" @click="savePolicy">保存网络策略</NButton>
@@ -555,7 +555,7 @@ watch(() => route.params.id, load, { immediate: true })
       <section class="surface">
         <header class="surface-head">
           <h2>使用限制</h2>
-          <span class="surface-meta">{{ fixedIPActive ? '已设置固定 IP，并发上限为 1' : '0 或关闭表示不限制' }}</span>
+          <span class="surface-meta">{{ fixedIPActive ? '已设置固定 VPN 地址，并发连接上限为 1' : '0 或关闭表示不限制' }}</span>
         </header>
 
         <div class="usage-row">
@@ -588,7 +588,7 @@ watch(() => route.params.id, load, { immediate: true })
         </div>
 
         <NForm class="limits-form">
-          <NFormItem label="到期时间">
+          <NFormItem label="配置到期时间">
             <NDatePicker
               v-model:value="limits.expiresAt"
               type="datetime"
@@ -600,10 +600,10 @@ watch(() => route.params.id, load, { immediate: true })
           <div class="limit-line">
             <NSwitch
               v-model:value="limits.concurrentEnabled"
-              aria-label="并发上限开关"
+              aria-label="并发连接上限开关"
               :disabled="fixedIPActive"
             />
-            <span class="limit-name">并发上限</span>
+            <span class="limit-name">并发连接上限</span>
             <NInputNumber
               v-model:value="limits.concurrentLimit"
               :min="1"
@@ -731,7 +731,7 @@ watch(() => route.params.id, load, { immediate: true })
     <NModal
       v-model:show="shareNotice.show"
       preset="card"
-      title="共享网段已更新"
+      title="路由通告已更新"
       :style="{ width: 'min(460px, calc(100vw - 28px))' }"
     >
       <p class="share-notice">{{ shareNotice.text }}</p>

@@ -191,10 +191,10 @@ onMounted(load)
           下载的 .ovpn 使用这里的地址和端口；修改地址不会更换密钥。
         </p>
         <NAlert v-if="exportSettings && !exportSettings.configured" type="info" :bordered="false" class="stack-gap">
-          下载客户端配置前请先填写 VPN 地址与端口。
+          下载客户端配置前请先填写 VPN 地址或域名与端口。
         </NAlert>
         <NForm>
-          <NFormItem label="VPN 地址" required>
+          <NFormItem label="VPN 地址或域名" required>
             <NInput v-model:value="exportHost" placeholder="vpn.example.com 或 IP 地址" maxlength="255" />
           </NFormItem>
           <NFormItem label="端口" required>
@@ -206,7 +206,7 @@ onMounted(load)
               class="port-input"
             />
           </NFormItem>
-          <NFormItem label="协议" required>
+          <NFormItem label="传输协议" required>
             <NSelect v-model:value="exportProto" :options="protoOptions" />
           </NFormItem>
         </NForm>
@@ -292,7 +292,7 @@ onMounted(load)
       <section class="surface">
         <header class="surface-head">
           <h2><Activity :size="17" /> 系统信息</h2>
-          <span class="surface-meta">{{ system?.users ?? 0 }} 用户 · {{ system?.profiles ?? 0 }} 配置</span>
+          <span class="surface-meta">{{ system?.users ?? 0 }} 用户 · {{ system?.profiles ?? 0 }} 客户端配置</span>
         </header>
         <dl v-if="system" class="fact-list">
           <div v-for="fact in facts" :key="fact.label">

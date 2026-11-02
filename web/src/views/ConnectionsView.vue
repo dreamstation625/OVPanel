@@ -223,8 +223,8 @@ function endReasonLabel(reason: string) {
 
         <div v-if="online?.connections.length" class="table">
           <div class="table-head" aria-hidden="true">
-            <span>用户 / 配置</span>
-            <span>连接</span>
+            <span>用户 / 客户端</span>
+            <span>VPN 地址</span>
             <span>时长</span>
             <span class="align-end">上行</span>
             <span class="align-end">下行</span>
@@ -280,8 +280,8 @@ function endReasonLabel(reason: string) {
       </header>
       <div v-if="history.length" class="table table--history">
         <div class="table-head" aria-hidden="true">
-          <span>用户 / 配置</span>
-          <span>地址</span>
+          <span>用户 / 客户端</span>
+          <span>VPN 地址</span>
           <span>连接时间</span>
           <span class="align-end">上行</span>
           <span class="align-end">下行</span>

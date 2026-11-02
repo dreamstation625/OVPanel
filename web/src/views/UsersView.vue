@@ -126,8 +126,8 @@ onMounted(() => {
       <div class="list-head">
         <span>用户</span>
         <span>状态</span>
-        <span>配置</span>
-        <span>在线</span>
+        <span>配置数</span>
+        <span>在线连接</span>
         <span>累计流量</span>
         <span>创建时间</span>
         <span aria-hidden="true" />
@@ -153,12 +153,12 @@ onMounted(() => {
           </span>
         </div>
         <div class="count-cell">
-          <span class="count-label">配置 </span>
+          <span class="count-label">配置数 </span>
           <strong>{{ user.activeProfileCount }}</strong>
           <span> / {{ user.profileCount }}</span>
         </div>
         <div class="online-cell">
-          <span class="count-label">在线 </span>
+          <span class="count-label">在线连接 </span>
           <strong>{{ user.onlineSessions }}</strong>
         </div>
         <div class="usage-cell">

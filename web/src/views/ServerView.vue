@@ -251,14 +251,14 @@ onMounted(load)
     <div class="server-grid">
       <section class="surface">
         <header class="surface-head">
-          <h2>网络与路由</h2>
+          <h2>服务端设置</h2>
         </header>
         <NForm>
           <NFormItem label="VPN 网段" required>
             <NInput v-model:value="form.vpnNetwork" placeholder="10.8.0.0/16" />
           </NFormItem>
           <div class="two-col">
-            <NFormItem label="协议" required>
+            <NFormItem label="传输协议" required>
               <NSelect v-model:value="form.protocol" :options="protocolOptions" />
             </NFormItem>
             <NFormItem label="端口" required>
@@ -271,7 +271,7 @@ onMounted(load)
           <NFormItem label="路由方式" required>
             <NSelect v-model:value="form.routeMode" :options="routeOptions" />
           </NFormItem>
-          <NFormItem label="默认目标网段">
+          <NFormItem label="默认访问网段">
             <NInput
               v-model:value="internalText"
               type="textarea"
@@ -291,10 +291,10 @@ onMounted(load)
           </div>
           <div class="switch-row">
             <div>
-              <strong>允许访问客户端共享内网</strong>
-              <span>继承服务端设置的配置可以访问其他客户端共享内网；保存应用后生效。</span>
+              <strong>允许访问其他客户端内网</strong>
+              <span>继承服务端设置的配置可以访问其他客户端通告的内网；保存应用后生效。</span>
             </div>
-            <NSwitch v-model:value="form.allowClientNetworks" aria-label="允许访问客户端共享内网" />
+            <NSwitch v-model:value="form.allowClientNetworks" aria-label="允许访问其他客户端内网" />
           </div>
           <div class="switch-row">
             <div>
@@ -313,7 +313,7 @@ onMounted(load)
                 :max-tag-count="3"
               />
             </NFormItem>
-            <NFormItem label="控制通道认证" required>
+            <NFormItem label="控制通道认证算法" required>
               <NSelect v-model:value="form.authDigest" :options="authOptions" />
             </NFormItem>
           </div>
@@ -321,7 +321,7 @@ onMounted(load)
             <NFormItem label="TLS 最低版本" required>
               <NSelect v-model:value="form.tlsMinVersion" :options="tlsOptions" />
             </NFormItem>
-            <NFormItem label="最大客户端数">
+            <NFormItem label="最大连接数">
               <NInputNumber v-model:value="form.maxClients" :min="0" :max="10000" />
             </NFormItem>
           </div>
@@ -337,7 +337,7 @@ onMounted(load)
             数据加密算法按 AES-256-GCM、AES-128-GCM、CHACHA20-POLY1305、AES-256-CBC、AES-128-CBC 的顺序协商，与勾选顺序无关。
           </p>
           <p class="hint">
-            优先使用 GCM/CHACHA20；CBC 仅用于兼容旧客户端。修改后需重新下载客户端 .ovpn 并重连；最大客户端数为 0 表示不额外限制。
+            优先使用 GCM/CHACHA20；CBC 仅用于兼容旧客户端。修改后需重新下载客户端 .ovpn 并重连；最大连接数为 0 表示不额外限制。
           </p>
           <NFormItem label="额外指令">
             <NInput

@@ -311,7 +311,7 @@ onMounted(load)
       </header>
       <NForm>
         <div class="settings-grid">
-          <NFormItem label="恢复密码">
+          <NFormItem label="备份恢复密码">
             <NInput
               v-model:value="settingsForm.backupPassword"
               type="password"
@@ -320,7 +320,7 @@ onMounted(load)
               autocomplete="new-password"
             />
           </NFormItem>
-          <NFormItem label="确认恢复密码">
+          <NFormItem label="确认备份恢复密码">
             <NInput
               v-model:value="settingsForm.backupConfirm"
               type="password"
@@ -332,7 +332,7 @@ onMounted(load)
           <NFormItem label="每日备份时间">
             <NInput v-model:value="settingsForm.scheduleTime" placeholder="03:00" maxlength="5" />
           </NFormItem>
-          <NFormItem label="保留数量">
+          <NFormItem label="保留备份数">
             <NInputNumber v-model:value="settingsForm.retentionCount" :min="1" :max="90" :show-button="false" />
           </NFormItem>
         </div>
@@ -365,7 +365,7 @@ onMounted(load)
             </div>
             <span class="backup-meta">
               {{ formatDate(item.createdAt) }} · {{ formatBytes(item.sizeBytes) }} ·
-              配置版本 {{ item.configRevision || '默认' }}
+              服务端配置版本 {{ item.configRevision || '默认' }}
             </span>
           </div>
           <div class="backup-actions">

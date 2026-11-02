@@ -119,7 +119,7 @@ func Prepare(input Config) (Config, error) {
 	switch cfg.AuthDigest {
 	case "SHA256", "SHA512":
 	default:
-		return Config{}, fmt.Errorf("控制通道认证只能是 SHA256 或 SHA512")
+		return Config{}, fmt.Errorf("控制通道认证算法只能是 SHA256 或 SHA512")
 	}
 	cfg.TLSMinVersion = strings.TrimSpace(cfg.TLSMinVersion)
 	if cfg.TLSMinVersion == "" {
@@ -143,7 +143,7 @@ func Prepare(input Config) (Config, error) {
 		return Config{}, fmt.Errorf("keepalive 超时需在 1 到 86400 秒之间")
 	}
 	if cfg.MaxClients < 0 || cfg.MaxClients > 10000 {
-		return Config{}, fmt.Errorf("最大客户端数需在 0 到 10000 之间")
+		return Config{}, fmt.Errorf("最大连接数需在 0 到 10000 之间")
 	}
 
 	normalizedAllowed, err := netpolicy.PrepareTargets(cfg.VPNNetwork, cfg.AllowedInternal)

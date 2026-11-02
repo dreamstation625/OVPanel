@@ -176,7 +176,7 @@ watch(() => route.params.id, load, { immediate: true })
             <dd>{{ formatDate(detail.user.createdAt) }}</dd>
           </div>
           <div>
-            <dt>配置数量</dt>
+            <dt>客户端配置数</dt>
             <dd>{{ detail.profiles.length }} 份</dd>
           </div>
         </dl>
