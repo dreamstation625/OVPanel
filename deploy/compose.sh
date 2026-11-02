@@ -42,7 +42,16 @@ fi
 
 if [ "$status" -eq 0 ] && [ "$action" = "up" ]; then
   if [ "$detach" -eq 1 ]; then
-    "$(dirname "$0")/ensure-forwarding.sh"
+    control_source="$(docker inspect ovpanel-panel --format '{{range .Mounts}}{{if eq .Destination "/control"}}{{.Source}}{{end}}{{end}}' 2>/dev/null | head -n 1 || true)"
+    if [ -n "$control_source" ]; then
+      host_networks_file="$control_source/host-networks.txt"
+    else
+      case "$DATA_ROOT" in
+        /*) host_networks_file="$DATA_ROOT/control/host-networks.txt" ;;
+        *) host_networks_file="$(pwd)/$DATA_ROOT/control/host-networks.txt" ;;
+      esac
+    fi
+    OVPANEL_HOST_NETWORKS_FILE="$host_networks_file" "$(dirname "$0")/ensure-forwarding.sh"
   else
     printf '[forward][warn] 未使用 -d，跳过自动转发检查；请使用 up -d 部署\n' >&2
   fi

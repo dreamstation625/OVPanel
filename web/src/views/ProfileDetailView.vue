@@ -43,6 +43,7 @@ interface PromptState {
   actionLabel: string
   loading: boolean
   danger: boolean
+  countdown: number
   action: (() => Promise<void>) | null
 }
 
@@ -62,6 +63,7 @@ const prompt = ref<PromptState>({
   actionLabel: '确认',
   loading: false,
   danger: false,
+  countdown: 0,
   action: null,
 })
 
@@ -70,6 +72,7 @@ const policy = reactive({
   accessMode: 'inherit' as AccessMode,
   allowedText: '',
   clientLanAccess: 'inherit' as ClientLANAccess,
+  routeAdvertiseEnabled: false,
   clientNetworksText: '',
   fixedVpnIp: '',
 })
@@ -96,6 +99,24 @@ const accessOptions = [
   { label: '仅允许指定网段', value: 'allow' },
   { label: '禁止访问目标网段', value: 'deny' },
 ]
+const accessScopeDescription = computed(() => {
+  if (policy.routeMode === 'global') {
+    return '全部 IPv4 流量经过 VPN；目标网段访问只控制私有目标的放行。'
+  }
+  if (policy.routeMode === 'split') {
+    return '只有允许访问的目标网段经过 VPN。'
+  }
+  return '未单独设置的项沿用服务端；分流时，目标网段也会作为路由下发。'
+})
+const targetHint = computed(() => {
+  if (policy.routeMode === 'global') {
+    return '全部流量走 VPN 时，这里只放行额外的私有内网；不要填写 VPN 服务器自身的公网地址。'
+  }
+  if (policy.routeMode === 'split') {
+    return '这些网段也会推送到客户端；不要填写 VPN 服务器自身的公网地址。'
+  }
+  return '分流时这些网段也会推送到客户端；全局时只用于放行私有内网。不要填写 VPN 服务器自身的公网地址。'
+})
 const clientLANOptions = [
   { label: '继承服务端', value: 'inherit' },
   { label: '允许访问其他客户端通告的内网', value: 'allow' },
@@ -138,6 +159,7 @@ function openPrompt(
   actionLabel: string,
   action: () => Promise<void>,
   danger = false,
+  countdown = 0,
 ) {
   prompt.value = {
     show: true,
@@ -146,6 +168,7 @@ function openPrompt(
     actionLabel,
     loading: false,
     danger,
+    countdown,
     action,
   }
 }
@@ -256,12 +279,42 @@ async function copyFingerprint() {
   copied.value = await copyText(profile.value.certificate.fingerprint)
 }
 
-async function savePolicy() {
+function savePolicy() {
   const current = profile.value
   if (!current || policyBusy.value) {
     return
   }
+  const clientNetworks = policy.routeAdvertiseEnabled
+    ? policy.clientNetworksText
+        .split(/[,，\s]+/)
+        .map((value) => value.trim())
+        .filter(Boolean)
+    : []
+  if (policy.routeAdvertiseEnabled && clientNetworks.length === 0) {
+    notify.warning('启用路由通告后至少填写一个网段')
+    return
+  }
   const previousShared = networksKey(current.clientNetworks ?? [])
+  if (policy.routeAdvertiseEnabled && clientNetworks.length > 0 && networksKey(clientNetworks) !== previousShared) {
+    openPrompt(
+      '确认路由通告',
+      '路由通告只能填写客户端后面的内网，不能填写宿主机所在或服务端已能访问的网段；填错可能覆盖服务端路由，导致宿主机或面板失联。保存后需要重连该客户端，需要访问这些网段的其他客户端也需重连。',
+      '保存并继续',
+      () => applyPolicy(current, clientNetworks),
+      true,
+      5,
+    )
+    return
+  }
+  void applyPolicy(current, clientNetworks)
+}
+
+async function applyPolicy(current: Profile, clientNetworks: string[]) {
+  if (policyBusy.value) {
+    return
+  }
+  const previousShared = networksKey(current.clientNetworks ?? [])
+  const previousHadNetworks = previousShared !== ''
   policyBusy.value = true
   try {
     profile.value = await api.updateProfile(current.id, {
@@ -275,14 +328,11 @@ async function savePolicy() {
               .filter(Boolean)
           : [],
       clientLanAccess: policy.clientLanAccess,
-      clientNetworks: policy.clientNetworksText
-        .split(/[,，\s]+/)
-        .map((value) => value.trim())
-        .filter(Boolean),
+      clientNetworks,
       fixedVpnIp: policy.fixedVpnIp.trim(),
     })
     const saved = profile.value
-    if (networksKey(saved.clientNetworks ?? []) !== previousShared) {
+    if (saved && saved.clientNetworks.length > 0 && networksKey(saved.clientNetworks) !== previousShared) {
       const label = `${saved.userDisplayName} · ${saved.name}`
       shareNotice.value = {
         show: true,
@@ -292,6 +342,8 @@ async function savePolicy() {
             : `请重连客户端「${label}」使路由通告生效；需要访问这些网段的其他客户端也需重连。`,
       }
       notify.success('网络策略已保存；请重连该客户端使新路由生效。')
+    } else if (saved && saved.clientNetworks.length === 0 && previousHadNetworks) {
+      notify.success('路由通告已关闭；相关客户端重连后生效。')
     } else {
       notify.success('网络策略已保存。')
     }
@@ -384,6 +436,7 @@ watch(
     policy.accessMode = value.accessMode
     policy.allowedText = value.allowedInternal.join(', ')
     policy.clientLanAccess = value.clientLanAccess ?? 'inherit'
+    policy.routeAdvertiseEnabled = (value.clientNetworks ?? []).length > 0
     policy.clientNetworksText = (value.clientNetworks ?? []).join(', ')
     policy.fixedVpnIp = value.fixedVpnIp ?? ''
     limits.expiresAt = value.expiresAt ? new Date(value.expiresAt).getTime() : null
@@ -498,29 +551,43 @@ watch(() => route.params.id, load, { immediate: true })
       <section class="surface">
         <header class="surface-head">
           <h2>网络策略</h2>
-          <span class="surface-meta">路由方式、目标网段与路由通告</span>
+          <span class="surface-meta">客户端访问范围与路由通告</span>
         </header>
         <NForm>
-          <div class="policy-grid">
-            <NFormItem label="路由方式">
-              <NSelect v-model:value="policy.routeMode" :options="routeOptions" />
+          <div class="access-scope">
+            <div class="access-scope-head">
+              <strong>客户端访问范围</strong>
+              <span>{{ accessScopeDescription }}</span>
+            </div>
+            <div class="policy-grid">
+              <NFormItem label="流量路由">
+                <NSelect v-model:value="policy.routeMode" :options="routeOptions" />
+              </NFormItem>
+              <NFormItem label="目标网段访问">
+                <NSelect v-model:value="policy.accessMode" :options="accessOptions" />
+              </NFormItem>
+            </div>
+            <NFormItem v-if="policy.accessMode === 'allow'" label="允许访问的目标网段">
+              <NInput
+                v-model:value="policy.allowedText"
+                type="textarea"
+                :autosize="{ minRows: 2, maxRows: 4 }"
+                placeholder="例如 10.0.16.0/22、192.168.99.0/24、1.1.1.1，用逗号或换行分隔"
+              />
             </NFormItem>
-            <NFormItem label="目标网段权限">
-              <NSelect v-model:value="policy.accessMode" :options="accessOptions" />
-            </NFormItem>
-            <NFormItem label="访问其他客户端内网">
-              <NSelect v-model:value="policy.clientLanAccess" :options="clientLANOptions" />
-            </NFormItem>
+            <p v-if="policy.accessMode === 'allow'" class="policy-hint">{{ targetHint }}</p>
           </div>
-          <NFormItem v-if="policy.accessMode === 'allow'" label="允许访问的目标网段">
-            <NInput
-              v-model:value="policy.allowedText"
-              type="textarea"
-              :autosize="{ minRows: 2, maxRows: 4 }"
-              placeholder="例如 10.0.16.0/22、192.168.99.0/24、1.1.1.1，用逗号或换行分隔"
-            />
+          <NFormItem label="访问其他客户端内网">
+            <NSelect v-model:value="policy.clientLanAccess" :options="clientLANOptions" />
           </NFormItem>
-          <NFormItem label="路由通告">
+          <div class="policy-switch">
+            <div>
+              <strong>启用路由通告</strong>
+              <span>仅在这台客户端后面有内网时开启；关闭后不保存通告网段。</span>
+            </div>
+            <NSwitch v-model:value="policy.routeAdvertiseEnabled" aria-label="启用路由通告" />
+          </div>
+          <NFormItem v-if="policy.routeAdvertiseEnabled" label="路由通告">
             <NInput
               v-model:value="policy.clientNetworksText"
               type="textarea"
@@ -534,13 +601,10 @@ watch(() => route.params.id, load, { immediate: true })
               placeholder="留空自动分配；填写动态池外的地址"
             />
           </NFormItem>
-          <p class="policy-hint">
-            分流时只把目标网段路由到 VPN；全局时只用于放行私有网络。不要填写 VPN 服务器自身的公网地址。
+          <p v-if="policy.routeAdvertiseEnabled" class="policy-hint">
+            路由通告只支持私网/CGNAT IPv4，填写这台客户端后面的内网；不要填写服务端宿主机所在或已能访问的网段，填错可能覆盖服务端路由，导致宿主机或面板失联。客户端需开启转发和 NAT；建议固定 IP 并只保持一条连接。
           </p>
-          <p class="policy-hint">
-            路由通告只支持私网/CGNAT IPv4，填写这台客户端后面的内网，不要填写服务端已能访问的网段。客户端需开启转发和 NAT；建议固定 IP 并只保持一条连接。
-          </p>
-          <p class="policy-hint">
+          <p v-if="policy.routeAdvertiseEnabled" class="policy-hint">
             其他客户端只能访问这些通告网段，通告网段里的设备不能主动访问 VPN 客户端。修改后相关客户端需重连。
           </p>
           <p class="policy-hint">
@@ -719,6 +783,7 @@ watch(() => route.params.id, load, { immediate: true })
       :action-label="prompt.actionLabel"
       :loading="prompt.loading"
       :danger="prompt.danger"
+      :countdown="prompt.countdown"
       @confirm="confirmPrompt"
     />
     <OneTimePasswordModal
@@ -903,10 +968,67 @@ watch(() => route.params.id, load, { immediate: true })
   white-space: nowrap;
 }
 
+.access-scope {
+  margin: 4px 0 16px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.access-scope-head {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 12px;
+}
+
+.access-scope-head strong {
+  font-size: 13px;
+  font-weight: 640;
+}
+
+.access-scope-head span {
+  color: var(--text-3);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.access-scope .policy-hint {
+  margin: 0;
+}
+
 .policy-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 12px;
+}
+
+.policy-switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 4px 0 14px;
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-2);
+}
+
+.policy-switch div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.policy-switch strong {
+  font-size: 13px;
+}
+
+.policy-switch span {
+  color: var(--text-3);
+  font-size: 11.5px;
 }
 
 .policy-hint {

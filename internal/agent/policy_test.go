@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -231,6 +232,72 @@ func TestSharedNetworksRoutesAndPolicy(t *testing.T) {
 	}
 }
 
+func bundleWithServerCert(t *testing.T, base []byte, serial string, issued time.Time) []byte {
+	t.Helper()
+	var bundle agentproto.Bundle
+	if err := json.Unmarshal(base, &bundle); err != nil {
+		t.Fatalf("解析控制包失败：%v", err)
+	}
+	bundle.ServerCertSerial = serial
+	bundle.IssuedAt = issued
+	data, err := json.Marshal(bundle)
+	if err != nil {
+		t.Fatalf("编码控制包失败：%v", err)
+	}
+	return data
+}
+
+func TestServerCertificateSerialChangeRestartsOpenVPN(t *testing.T) {
+	controlDir, stateDir := t.TempDir(), t.TempDir()
+	rt := New(controlDir, stateDir, testLogger())
+	rt.configDir = t.TempDir()
+	rt.localNetsFn = func(string) []string { return nil }
+	rt.applyPolicyFn = func(netpolicy.Policy) error { return nil }
+	rt.syncRoutesFn = func([]string, bool, string) error { return nil }
+	starts := 0
+	rt.startVPNFn = func(_ context.Context, hash string) error {
+		starts++
+		rt.mu.Lock()
+		rt.configHash = hash
+		rt.openvpnRunning = true
+		rt.managementConnected = true
+		rt.mu.Unlock()
+		return nil
+	}
+
+	base := policyBundle(t)
+	now := time.Now().UTC()
+	writeBundle(t, controlDir, bundleWithServerCert(t, base, "S1", now))
+	if err := rt.applyOnce(context.Background()); err != nil {
+		t.Fatalf("首次应用失败：%v", err)
+	}
+	if starts != 1 {
+		t.Fatalf("首次应用应启动 OpenVPN，实际 %d 次", starts)
+	}
+
+	writeBundle(t, controlDir, bundleWithServerCert(t, base, "S1", now.Add(time.Second)))
+	if err := rt.applyOnce(context.Background()); err != nil {
+		t.Fatalf("同证书更新失败：%v", err)
+	}
+	if starts != 1 {
+		t.Fatalf("服务端证书未变化时不应重启，实际 %d 次", starts)
+	}
+
+	writeBundle(t, controlDir, bundleWithServerCert(t, base, "S2", now.Add(2*time.Second)))
+	if err := rt.applyOnce(context.Background()); err != nil {
+		t.Fatalf("证书续签后应用失败：%v", err)
+	}
+	if starts != 2 {
+		t.Fatalf("服务端证书序列号变化应重启 OpenVPN，实际 %d 次", starts)
+	}
+	rt.mu.Lock()
+	serial := rt.serverCertSerial
+	rt.mu.Unlock()
+	if serial != "S2" {
+		t.Fatalf("运行代理未记录新证书序列号：%q", serial)
+	}
+}
+
 func TestHostAddressFromManagement(t *testing.T) {
 	cases := map[string]string{
 		"10.8.0.2":                    "10.8.0.2",
@@ -247,5 +314,48 @@ func TestHostAddressFromManagement(t *testing.T) {
 		if got := hostAddressFromManagement(raw); got != want {
 			t.Fatalf("hostAddressFromManagement(%q)=%q, want %q", raw, got, want)
 		}
+	}
+}
+
+func TestRefreshPolicyRejectsHostNetwork(t *testing.T) {
+	controlDir, stateDir := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(controlDir, "host-networks.txt"), []byte("192.168.50.0/24\n"), 0o644); err != nil {
+		t.Fatalf("写入宿主网段失败：%v", err)
+	}
+	rt := New(controlDir, stateDir, testLogger())
+	rt.applyPolicyFn = func(netpolicy.Policy) error { return nil }
+	rt.snapshot = admission.Snapshot{
+		Users: []admission.User{{ID: "u1", Status: "active"}},
+		Profiles: []admission.Profile{{
+			ID: "A", UserID: "u1", Status: "active",
+			ClientNetworks: []string{"192.168.50.0/24"},
+		}},
+	}
+	rt.serverPolicy = netpolicy.Policy{VPNPool: "10.8.0.0/16", TunDevice: "tun0"}
+	if err := rt.refreshPolicy(); err == nil {
+		t.Fatal("通告宿主机网段应被运行代理拒绝")
+	}
+}
+
+func TestParseHostRouteNetworks(t *testing.T) {
+	got := parseHostRouteNetworks(`
+default via 192.168.31.1 dev eth0 metric 200
+192.168.31.0/24 dev eth0 proto kernel scope link src 192.168.31.190
+10.8.0.0/16 dev tun0 proto kernel scope link src 10.8.0.1
+10.42.42.0/24 dev br-1234 proto kernel scope link src 10.42.42.1
+10.42.42.0/24 dev br-1234 proto kernel scope link src 10.42.42.1
+not-a-cidr dev eth0
+`)
+	seen := map[string]bool{}
+	for _, cidr := range got {
+		seen[cidr] = true
+	}
+	for _, want := range []string{"192.168.31.0/24", "10.42.42.0/24"} {
+		if !seen[want] {
+			t.Fatalf("缺少宿主路由 %s：%v", want, got)
+		}
+	}
+	if seen["10.8.0.0/16"] {
+		t.Fatalf("不应包含 tun 路由：%v", got)
 	}
 }

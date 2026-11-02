@@ -57,7 +57,7 @@ sudo sysctl -p /etc/sysctl.d/90-ovpanel.conf
 2. 将 [`.env.host.example`](../.env.host.example) 保存为编排目录下的 `.env`，或将参数
    填入面板的编排环境变量配置。通过这些变量调整镜像标签、数据目录、管理端口和 HTTPS，
    两个镜像使用同一个发布标签。已有 `.env` 时合并所需参数，不覆盖原有配置。
-   当前示例默认使用 `latest` 正式版，生产环境建议固定为 `0.0.3` 或更新的正式版本。
+   当前示例默认使用 `latest` 正式版，生产环境建议固定为 `0.0.4` 或更新的正式版本。
 3. 保存并启动编排。保留 `openvpn` 的 `network_mode: host`，不要额外添加端口映射或容器 sysctl。
 4. 在面板的 `ovpanel-panel` 容器终端运行 `cat /data/bootstrap-token` 获取初始化口令。
    也可在宿主执行：
@@ -305,10 +305,13 @@ UFW，脚本会明确报错，需要手动配置；Docker 自身已提供 NAT �
 每次部署都执行：
 
 ```bash
-sudo ./deploy/ensure-forwarding.sh
+sudo OVPANEL_HOST_NETWORKS_FILE="$(pwd)/data/control/host-networks.txt" \
+  ./deploy/ensure-forwarding.sh
 ```
 
-1Panel 宿主机没有仓库目录时，把 `deploy/ensure-forwarding.sh` 复制上去执行即可。
+1Panel 宿主机没有仓库目录时，把 `deploy/ensure-forwarding.sh` 复制上去执行，并把
+`OVPANEL_HOST_NETWORKS_FILE` 指向数据目录下的 `control/host-networks.txt`
+（独立 `compose.host.yaml` 默认是 `/opt/ovpanel/data/control/host-networks.txt`）。
 
 host-network 模式不需要执行这个脚本；OpenVPN 容器 entrypoint 会维护自己的
 VPN 地址池转发和 UFW 数据端口规则。两种模式不要同时启用转发配置。
@@ -326,8 +329,8 @@ VPN 地址池转发和 UFW 数据端口规则。两种模式不要同时启用�
 ```bash
 # 1. 先创建并验证加密备份
 # 2. 在 .env 中设置对应版本的镜像
-#    OVPANEL_PANEL_IMAGE=dreamstation625/ovpanel:0.0.3
-#    OVPANEL_OPENVPN_IMAGE=dreamstation625/ovpanel-openvpn:0.0.3
+#    OVPANEL_PANEL_IMAGE=dreamstation625/ovpanel:0.0.4
+#    OVPANEL_OPENVPN_IMAGE=dreamstation625/ovpanel-openvpn:0.0.4
 docker compose -f compose.yaml -f compose.hostnet.yaml pull
 docker compose -f compose.yaml -f compose.hostnet.yaml up -d --no-build --no-deps --force-recreate panel
 docker compose -f compose.yaml -f compose.hostnet.yaml up -d --no-build --no-deps --force-recreate openvpn
@@ -389,7 +392,20 @@ VPN 客户端。例如客户端 A 位于分支办公室，A 连接 VPN 后，其
   中单独设为允许；
 - 共享内网只支持私网/CGNAT IPv4（`10/8`、`172.16/12`、`192.168/16`、`100.64/10`），
   不能与 VPN 地址池、服务端本地网络或其他配置共享的网段重叠；
+- 「路由通告」只能填写客户端后面的内网，不要填写宿主机所在或已能访问的网段；
+  填错可能覆盖服务端路由，导致宿主机或面板失联；
 - 同一个网段只能由一个配置共享。建议共享配置使用固定 IP，并只保持一条连接。
+
+宿主网段保护：
+
+- host 模式由 `ensure-host-forwarding.sh` 自动把宿主接口和路由网段写入
+  `/control/host-networks.txt`，面板和运行代理会拒绝与宿主网段重叠的
+  「路由通告」或 VPN 网段；
+- bridge/NAT 模式由 `compose.sh` 自动把清单写入 panel 的 `/control` 目录；
+  使用裸 `docker compose` 或 1Panel 时，手动执行：
+  `sudo OVPANEL_HOST_NETWORKS_FILE=<data>/control/host-networks.txt ./deploy/ensure-forwarding.sh`；
+- 修改宿主网卡或路由后，重新执行上面的脚本更新清单；清单缺失时面板无法提前拦截，
+  仍以界面警告和运行代理日志为准。
 
 网络行为：
 

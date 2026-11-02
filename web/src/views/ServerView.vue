@@ -97,6 +97,22 @@ const routeOptions = [
   { label: '仅指定网段经过 VPN', value: 'split' },
   { label: '全部 IPv4 流量经过 VPN', value: 'global' },
 ]
+const accessRange = computed(() => {
+  if (form.routeMode === 'global') {
+    return {
+      description: '全部 IPv4 流量经过 VPN，公网默认可访问；列表只额外放行私有内网。',
+      label: '额外放行的私有网段',
+      placeholder: '可选；例如 10.0.16.0/22、192.168.99.0/24',
+      hint: '未列出的私有网段仍会被拒绝，不要填写 VPN 服务器自身的地址。',
+    }
+  }
+  return {
+    description: '只有列表中的网段经过 VPN，并允许访问这些目标。',
+    label: '经过 VPN 的目标网段',
+    placeholder: '例如 192.168.99.0/24、10.0.16.0/22、1.1.1.1，用逗号或换行分隔',
+    hint: '其他流量不经过 VPN，不要填写 VPN 服务器自身的地址。',
+  }
+})
 const cipherOptions = [
   { label: 'AES-256-GCM', value: 'AES-256-GCM' },
   { label: 'AES-128-GCM', value: 'AES-128-GCM' },
@@ -268,20 +284,24 @@ onMounted(load)
           <NFormItem label="DNS">
             <NInput v-model:value="dnsText" placeholder="例如 119.29.29.29，多个用逗号分隔" />
           </NFormItem>
-          <NFormItem label="路由方式" required>
-            <NSelect v-model:value="form.routeMode" :options="routeOptions" />
-          </NFormItem>
-          <NFormItem label="默认访问网段">
-            <NInput
-              v-model:value="internalText"
-              type="textarea"
-              :autosize="{ minRows: 2, maxRows: 4 }"
-              placeholder="例如 192.168.99.0/24、10.0.16.0/22、1.1.1.1，用逗号或换行分隔"
-            />
-          </NFormItem>
-          <p class="hint">
-            分流时推送给客户端；全局时只用于放行私有网络。可填 IPv4 网段或单个 IP。不要填写 VPN 服务器自身的公网地址。
-          </p>
+          <div class="access-scope">
+            <div class="access-scope-head">
+              <strong>客户端默认访问范围</strong>
+              <span>{{ accessRange.description }}</span>
+            </div>
+            <NFormItem label="流量路由" required>
+              <NSelect v-model:value="form.routeMode" :options="routeOptions" />
+            </NFormItem>
+            <NFormItem :label="accessRange.label">
+              <NInput
+                v-model:value="internalText"
+                type="textarea"
+                :autosize="{ minRows: 2, maxRows: 4 }"
+                :placeholder="accessRange.placeholder"
+              />
+            </NFormItem>
+            <p class="access-scope-hint">{{ accessRange.hint }}</p>
+          </div>
           <div class="switch-row">
             <div>
               <strong>允许客户端互相访问</strong>
@@ -521,6 +541,39 @@ onMounted(load)
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
+}
+
+.access-scope {
+  margin: 4px 0 16px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.access-scope-head {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 12px;
+}
+
+.access-scope-head strong {
+  font-size: 13px;
+  font-weight: 640;
+}
+
+.access-scope-head span {
+  color: var(--text-3);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.access-scope-hint {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 11.5px;
+  line-height: 1.6;
 }
 
 .switch-row {

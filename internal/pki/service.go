@@ -1,6 +1,6 @@
-// Package pki 管理项目 CA 与客户端证书生命周期。
+// Package pki 管理项目 CA、客户端与服务端证书生命周期。
 //
-// CA 私钥和客户端私钥都以密文保存；本包只在签发或导出时短暂解密。
+// CA、客户端与服务端私钥都以密文保存；本包只在签发或导出时短暂解密。
 // 证书序列号、指纹与 CN 是可信标识，CN 仅用于展示，不作为唯一身份。
 package pki
 
@@ -27,13 +27,13 @@ import (
 )
 
 const (
-	caKeyAAD       = "ovpanel-ca-key-v1"
-	certKeyAAD     = "ovpanel-cert-key:"
-	serverKeyAAD   = "ovpanel-server-key-v1"
-	caValidity     = 10 * 365 * 24 * time.Hour
-	clientValidity = 2 * 365 * 24 * time.Hour
-	serverValidity = 2 * 365 * 24 * time.Hour
-	rsaBits        = 2048
+	caKeyAAD            = "ovpanel-ca-key-v1"
+	certKeyAAD          = "ovpanel-cert-key:"
+	serverKeyAAD        = "ovpanel-server-key-v1"
+	caValidityYears     = 20
+	clientValidityYears = 15
+	serverValidityYears = 15
+	rsaBits             = 2048
 )
 
 // ErrNoActiveCertificate 表示配置没有可导出的生效证书。
@@ -41,6 +41,17 @@ var ErrNoActiveCertificate = errors.New("配置没有生效证书")
 
 // ErrCANotCreated 表示项目 CA 尚未生成。
 var ErrCANotCreated = errors.New("CA 尚未创建")
+
+func certificateNotAfter(now time.Time, years int, ca *x509.Certificate) time.Time {
+	notAfter := now.AddDate(years, 0, 0)
+	if ca != nil {
+		limit := ca.NotAfter.Add(-24 * time.Hour)
+		if notAfter.After(limit) {
+			return limit
+		}
+	}
+	return notAfter
+}
 
 // CAInfo 是可展示的 CA 信息，不包含私钥。
 type CAInfo struct {
@@ -52,7 +63,17 @@ type CAInfo struct {
 	NotAfter    time.Time
 }
 
-// Service 负责 CA 与客户端证书。
+// ServerCertInfo 是可展示的服务端证书信息，不包含私钥。
+type ServerCertInfo struct {
+	Exists      bool
+	Subject     string
+	Serial      string
+	Fingerprint string
+	NotBefore   time.Time
+	NotAfter    time.Time
+}
+
+// Service 负责 CA、客户端与服务端证书。
 type Service struct {
 	store *store.Store
 	keyMu sync.RWMutex
@@ -146,7 +167,7 @@ func (s *Service) BuildClientCertificate(ctx context.Context, profileID, commonN
 		SerialNumber:          serial,
 		Subject:               pkix.Name{CommonName: commonName, Organization: []string{"OVPanel"}},
 		NotBefore:             now.Add(-5 * time.Minute),
-		NotAfter:              now.Add(clientValidity),
+		NotAfter:              certificateNotAfter(now, clientValidityYears, caCert),
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 		BasicConstraintsValid: true,
@@ -277,6 +298,49 @@ func (s *Service) ExportMaterial(ctx context.Context, profileID string) (caPEM, 
 	return caPEM, cert.CertPEM, string(keyDER), nil
 }
 
+// ServerCertificateInfo 返回当前服务端证书的公开信息；尚未签发时 Exists=false。
+func (s *Service) ServerCertificateInfo(ctx context.Context) (ServerCertInfo, error) {
+	record, ok, err := s.store.ServerCertificate(ctx)
+	if err != nil {
+		return ServerCertInfo{}, err
+	}
+	if !ok {
+		return ServerCertInfo{}, nil
+	}
+	cert, err := parseCertificate(record.CertPEM)
+	if err != nil {
+		return ServerCertInfo{}, fmt.Errorf("解析服务端证书: %w", err)
+	}
+	return ServerCertInfo{
+		Exists:      true,
+		Subject:     cert.Subject.String(),
+		Serial:      strings.ToUpper(cert.SerialNumber.Text(16)),
+		Fingerprint: fingerprint(cert),
+		NotBefore:   cert.NotBefore.UTC(),
+		NotAfter:    cert.NotAfter.UTC(),
+	}, nil
+}
+
+// RenewServerCertificate 用现有私钥重新签发服务端证书并更新有效期。
+// 客户端只信任 CA，续签后不需要重新下载 .ovpn。
+func (s *Service) RenewServerCertificate(ctx context.Context) (ServerCertInfo, error) {
+	var existingKey []byte
+	if record, ok, err := s.store.ServerCertificate(ctx); err != nil {
+		return ServerCertInfo{}, err
+	} else if ok {
+		if keyDER, err := s.open(record.KeyCiphertext, []byte(serverKeyAAD)); err == nil {
+			if _, parseErr := x509.ParsePKCS8PrivateKey(keyDER); parseErr == nil {
+				existingKey = keyDER
+			}
+		}
+		// 旧私钥无法解密或解析时生成新私钥，证书仍由同一个 CA 签发。
+	}
+	if _, _, err := s.issueServerCertificate(ctx, existingKey); err != nil {
+		return ServerCertInfo{}, err
+	}
+	return s.ServerCertificateInfo(ctx)
+}
+
 // EnsureServerCertificate 返回 OpenVPN 服务端证书与私钥明文。
 // 已有证书仍有效时复用；否则生成新的 serverAuth 证书。
 func (s *Service) EnsureServerCertificate(ctx context.Context) (certPEM, keyPEM string, err error) {
@@ -295,15 +359,34 @@ func (s *Service) EnsureServerCertificate(ctx context.Context) (certPEM, keyPEM 
 		}
 		// 旧材料无法解密或解析时生成新证书，避免静默使用坏材料。
 	}
+	return s.issueServerCertificate(ctx, nil)
+}
 
+func (s *Service) issueServerCertificate(ctx context.Context, existingKey []byte) (certPEM, keyPEM string, err error) {
 	caCert, signer, _, err := s.ensureCA(ctx)
 	if err != nil {
 		return "", "", err
 	}
 
-	key, err := rsa.GenerateKey(rand.Reader, rsaBits)
-	if err != nil {
-		return "", "", fmt.Errorf("生成服务端私钥: %w", err)
+	var key *rsa.PrivateKey
+	if len(existingKey) > 0 {
+		if parsed, err := x509.ParsePKCS8PrivateKey(existingKey); err == nil {
+			if rsaKey, ok := parsed.(*rsa.PrivateKey); ok {
+				key = rsaKey
+			}
+		}
+	}
+	if key == nil {
+		key, err = rsa.GenerateKey(rand.Reader, rsaBits)
+		if err != nil {
+			return "", "", fmt.Errorf("生成服务端私钥: %w", err)
+		}
+	}
+
+	now := s.now()
+	notAfter := certificateNotAfter(now, serverValidityYears, caCert)
+	if !notAfter.After(now) {
+		return "", "", errors.New("CA 已过期，无法签发服务端证书")
 	}
 	serial, err := randomSerial()
 	if err != nil {
@@ -313,7 +396,7 @@ func (s *Service) EnsureServerCertificate(ctx context.Context) (certPEM, keyPEM 
 		SerialNumber:          serial,
 		Subject:               pkix.Name{CommonName: "OVPanel Server", Organization: []string{"OVPanel"}},
 		NotBefore:             now.Add(-5 * time.Minute),
-		NotAfter:              now.Add(serverValidity),
+		NotAfter:              notAfter,
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
@@ -378,7 +461,7 @@ func (s *Service) ensureCA(ctx context.Context) (*x509.Certificate, crypto.Signe
 			Organization: []string{"OVPanel"},
 		},
 		NotBefore:             now.Add(-5 * time.Minute),
-		NotAfter:              now.Add(caValidity),
+		NotAfter:              now.AddDate(caValidityYears, 0, 0),
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature,
 		BasicConstraintsValid: true,
 		IsCA:                  true,

@@ -18,16 +18,17 @@ const Version = 4
 
 // Bundle 是一次完整应用所需的配置、材料与认证快照。
 type Bundle struct {
-	Version        int                `json:"version"`
-	ConfigRevision int64              `json:"configRevision"`
-	ConfigHash     string             `json:"configHash"`
-	Config         string             `json:"config"`
-	CAPEM          string             `json:"caPem"`
-	ServerCertPEM  string             `json:"serverCertPem"`
-	ServerKeyPEM   string             `json:"serverKeyPem"`
-	TLSCryptKey    string             `json:"tlsCryptKey"`
-	CRLPEM         string             `json:"crlPem"`
-	Policy         netpolicy.Policy   `json:"policy"`
-	Snapshot       admission.Snapshot `json:"snapshot"`
-	IssuedAt       time.Time          `json:"issuedAt"`
+	Version          int                `json:"version"`
+	ConfigRevision   int64              `json:"configRevision"`
+	ConfigHash       string             `json:"configHash"`
+	Config           string             `json:"config"`
+	CAPEM            string             `json:"caPem"`
+	ServerCertPEM    string             `json:"serverCertPem"`
+	ServerKeyPEM     string             `json:"serverKeyPem"`
+	ServerCertSerial string             `json:"serverCertSerial,omitempty"`
+	TLSCryptKey      string             `json:"tlsCryptKey"`
+	CRLPEM           string             `json:"crlPem"`
+	Policy           netpolicy.Policy   `json:"policy"`
+	Snapshot         admission.Snapshot `json:"snapshot"`
+	IssuedAt         time.Time          `json:"issuedAt"`
 }

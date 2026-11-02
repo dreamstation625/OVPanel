@@ -105,6 +105,7 @@ type Runtime struct {
 	snapshot            admission.Snapshot
 	bundleHash          string
 	configHash          string
+	serverCertSerial    string
 	failedHash          string
 	lastGoodBundle      []byte
 	lastGoodHash        string
@@ -436,7 +437,8 @@ func (r *Runtime) applyBundle(ctx context.Context, bundle agentproto.Bundle, bun
 	r.mu.Lock()
 	r.snapshot = bundle.Snapshot
 	r.serverPolicy = base
-	needsRestart := r.configHash != bundle.ConfigHash || !r.openvpnRunning || !r.managementConnected
+	serverCertChanged := bundle.ServerCertSerial != "" && r.serverCertSerial != bundle.ServerCertSerial
+	needsRestart := serverCertChanged || r.configHash != bundle.ConfigHash || !r.openvpnRunning || !r.managementConnected
 	r.mu.Unlock()
 	// 面板手动重置额度会递增代次；账本把当时累计设为新基线。
 	r.usage.SyncEpochs(bundle.Snapshot)
@@ -460,6 +462,9 @@ func (r *Runtime) applyBundle(ctx context.Context, bundle agentproto.Bundle, bun
 	}
 
 	r.mu.Lock()
+	if bundle.ServerCertSerial != "" {
+		r.serverCertSerial = bundle.ServerCertSerial
+	}
 	r.bundleHash = bundleHash
 	r.mu.Unlock()
 	return nil
@@ -702,6 +707,18 @@ func (r *Runtime) refreshPolicy() error {
 	localNetworks := localProtectCIDRs(base.VPNPool)
 	if r.localNetsFn != nil {
 		localNetworks = r.localNetsFn(base.VPNPool)
+	} else {
+		localNetworks = append(localNetworks, hostRouteNetworks()...)
+	}
+	hostNetworks, err := netpolicy.LoadHostNetworks(filepath.Join(r.controlDir, netpolicy.HostNetworksFileName))
+	if err != nil {
+		return err
+	}
+	localNetworks = append(localNetworks, hostNetworks...)
+	for _, local := range localNetworks {
+		if netpolicy.NetworksOverlap(base.VPNPool, local) {
+			return fmt.Errorf("VPN 网段 %s 与服务端本地网络 %s 重叠", base.VPNPool, local)
+		}
 	}
 	for _, cidr := range networks {
 		for _, local := range localNetworks {
@@ -1729,6 +1746,42 @@ func localProtectCIDRs(vpnPool string) []string {
 			out = append(out, network.String())
 		}
 	}
+	return out
+}
+
+// hostRouteNetworks 读取宿主/当前网络命名空间的非默认路由，用于拦截
+// 会被路由通告覆盖的网段；tun/ifb 自身的路由由 OpenVPN 管理，需排除。
+func hostRouteNetworks() []string {
+	output, err := exec.Command("ip", "-4", "route", "show").Output()
+	if err != nil {
+		return nil
+	}
+	return parseHostRouteNetworks(string(output))
+}
+
+func parseHostRouteNetworks(output string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0)
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 || fields[0] == "default" || !strings.Contains(fields[0], "/") {
+			continue
+		}
+		if strings.Contains(line, " dev tun") || strings.Contains(line, " dev ifb") {
+			continue
+		}
+		_, network, err := net.ParseCIDR(fields[0])
+		if err != nil || network.IP.To4() == nil {
+			continue
+		}
+		cidr := network.String()
+		if _, ok := seen[cidr]; ok {
+			continue
+		}
+		seen[cidr] = struct{}{}
+		out = append(out, cidr)
+	}
+	sort.Strings(out)
 	return out
 }
 

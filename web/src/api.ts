@@ -156,6 +156,14 @@ export interface AddProfileResult {
   password?: string
 }
 
+export interface CertificateInfo {
+  subject: string
+  serial: string
+  fingerprint: string
+  notBefore: string
+  notAfter: string
+}
+
 export interface PKIStatus {
   caExists: boolean
   activeCertificates: number
@@ -163,13 +171,14 @@ export interface PKIStatus {
   expiredCertificates: number
   users: number
   profiles: number
-  ca?: {
-    subject: string
-    serial: string
-    fingerprint: string
-    notBefore: string
-    notAfter: string
-  }
+  ca?: CertificateInfo
+  serverCertificate?: CertificateInfo
+}
+
+export interface RenewServerCertificateResult {
+  serverCertificate: CertificateInfo
+  applied: boolean
+  applyError?: string
 }
 
 export interface ExportSettings {
@@ -657,6 +666,8 @@ export const api = {
     post<{ ok: boolean; action: string }>('/api/server/command', { action }),
 
   pkiStatus: () => request<PKIStatus>('/api/pki'),
+  renewServerCertificate: () =>
+    post<RenewServerCertificateResult>('/api/pki/server/renew', {}),
   getExportSettings: () => request<ExportSettings>('/api/settings/export'),
   saveExportSettings: (settings: { host: string; port: number; proto: string }) =>
     request<ExportSettings>('/api/settings/export', {

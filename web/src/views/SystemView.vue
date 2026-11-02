@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { Activity, Copy, Database, KeyRound, Network, RefreshCw, Settings } from '@lucide/vue'
-import { NAlert, NButton, NForm, NFormItem, NInput, NInputNumber, NSelect } from 'naive-ui'
+import { Activity, Copy, Database, KeyRound, Network, RefreshCw, Settings, ShieldCheck } from '@lucide/vue'
+import { NAlert, NButton, NForm, NFormItem, NInput, NInputNumber, NPopconfirm, NSelect } from 'naive-ui'
 import {
   api,
   ApiError,
@@ -32,6 +32,7 @@ const exportHost = ref('')
 const exportPort = ref<number | null>(1194)
 const exportProto = ref<'udp' | 'tcp'>('udp')
 const exportBusy = ref(false)
+const renewBusy = ref(false)
 const copied = ref(false)
 
 const protoOptions = [
@@ -143,6 +144,28 @@ async function copyFingerprint() {
   copied.value = await copyText(pki.value.ca.fingerprint)
 }
 
+async function renewServerCertificate() {
+  if (renewBusy.value) {
+    return
+  }
+  renewBusy.value = true
+  try {
+    const result = await api.renewServerCertificate()
+    pki.value = await api.pkiStatus()
+    if (result.applied) {
+      notify.success('服务端证书已续签，运行中的 OpenVPN 会自动重启。')
+    } else if (result.applyError) {
+      notify.warning('服务端证书已续签，但运行配置更新失败，请稍后重试。')
+    } else {
+      notify.info('服务端证书已签发，应用服务端配置后生效。')
+    }
+  } catch (err) {
+    notify.error(errorMessage(err))
+  } finally {
+    renewBusy.value = false
+  }
+}
+
 function stateLabel(state: Operation['state']) {
   switch (state) {
     case 'pending':
@@ -249,6 +272,45 @@ onMounted(load)
         <NAlert v-else-if="pki" type="info" :bordered="false">
           暂无证书。创建证书配置或导出仅密码配置时自动创建。
         </NAlert>
+        <div v-if="pki" class="cert-block">
+          <div class="cert-block-head">
+            <div>
+              <strong>服务端证书</strong>
+              <span>OpenVPN 服务端使用；续签保留私钥，客户端配置不需要重新下载。</span>
+            </div>
+            <NPopconfirm
+              positive-text="确认续签"
+              negative-text="取消"
+              @positive-click="renewServerCertificate"
+            >
+              <template #trigger>
+                <NButton size="small" :loading="renewBusy">
+                  <template #icon><ShieldCheck :size="14" /></template>
+                  {{ pki.serverCertificate ? '续签服务端证书' : '签发服务端证书' }}
+                </NButton>
+              </template>
+              续签会更换服务端证书并重启 OpenVPN，在线连接会短暂中断。确认继续？
+            </NPopconfirm>
+          </div>
+          <dl v-if="pki.serverCertificate" class="fact-list">
+            <div>
+              <dt>证书主题</dt>
+              <dd>{{ pki.serverCertificate.subject }}</dd>
+            </div>
+            <div>
+              <dt>证书编号</dt>
+              <dd class="is-code">{{ pki.serverCertificate.serial }}</dd>
+            </div>
+            <div>
+              <dt>有效期</dt>
+              <dd>
+                {{ formatDate(pki.serverCertificate.notBefore) }} 至
+                {{ formatDate(pki.serverCertificate.notAfter) }}
+              </dd>
+            </div>
+          </dl>
+          <p v-else class="cert-hint">尚未签发；应用服务端配置时自动创建。</p>
+        </div>
       </section>
 
       <section class="surface">
@@ -498,6 +560,45 @@ onMounted(load)
   white-space: nowrap;
 }
 
+.cert-block {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.cert-block-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.cert-block-head > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.cert-block-head strong {
+  font-size: 13px;
+  font-weight: 640;
+}
+
+.cert-block-head span {
+  color: var(--text-3);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.cert-hint {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
 .operation-list {
   margin: 0;
   padding: 0;
@@ -586,6 +687,9 @@ onMounted(load)
     gap: 4px;
   }
 
+  .cert-block-head {
+    flex-direction: column;
+  }
 
   .fingerprint {
     align-items: flex-start;

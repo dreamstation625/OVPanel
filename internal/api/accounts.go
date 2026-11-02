@@ -497,11 +497,34 @@ func exportContentDisposition(filename string) string {
 
 // ---------- PKI 与导出设置 ----------
 
+type certificateInfoDTO struct {
+	Subject     string `json:"subject"`
+	Serial      string `json:"serial"`
+	Fingerprint string `json:"fingerprint"`
+	NotBefore   string `json:"notBefore"`
+	NotAfter    string `json:"notAfter"`
+}
+
+func serverCertificateDTO(info pki.ServerCertInfo) certificateInfoDTO {
+	return certificateInfoDTO{
+		Subject:     info.Subject,
+		Serial:      info.Serial,
+		Fingerprint: info.Fingerprint,
+		NotBefore:   info.NotBefore.Format(time.RFC3339),
+		NotAfter:    info.NotAfter.Format(time.RFC3339),
+	}
+}
+
 func (s *Server) handlePKIStatus(w http.ResponseWriter, r *http.Request) {
 	info, err := s.pki.CAInfo(r.Context())
 	if err != nil {
 		s.internalError(w, r, err)
 		return
+	}
+	serverInfo, serverErr := s.pki.ServerCertificateInfo(r.Context())
+	if serverErr != nil {
+		// 证书损坏时仍返回其余状态，页面才能提供重新签发入口。
+		s.log.Warn("read server certificate info failed", "error", serverErr)
 	}
 	active, revoked, expired, err := s.store.CertificateStats(r.Context(), s.now())
 	if err != nil {
@@ -523,13 +546,34 @@ func (s *Server) handlePKIStatus(w http.ResponseWriter, r *http.Request) {
 		"profiles":            profiles,
 	}
 	if info.Exists {
-		resp["ca"] = map[string]any{
-			"subject":     info.Subject,
-			"serial":      info.Serial,
-			"fingerprint": info.Fingerprint,
-			"notBefore":   info.NotBefore.Format(time.RFC3339),
-			"notAfter":    info.NotAfter.Format(time.RFC3339),
+		resp["ca"] = certificateInfoDTO{
+			Subject:     info.Subject,
+			Serial:      info.Serial,
+			Fingerprint: info.Fingerprint,
+			NotBefore:   info.NotBefore.Format(time.RFC3339),
+			NotAfter:    info.NotAfter.Format(time.RFC3339),
 		}
+	}
+	if serverErr == nil && serverInfo.Exists {
+		resp["serverCertificate"] = serverCertificateDTO(serverInfo)
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleRenewServerCertificate(w http.ResponseWriter, r *http.Request) {
+	info, err := s.pki.RenewServerCertificate(r.Context())
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	applied, applyErr := s.runtime.RefreshServerCertificate(r.Context())
+	resp := map[string]any{
+		"serverCertificate": serverCertificateDTO(info),
+		"applied":           applied,
+	}
+	if applyErr != nil {
+		s.log.Error("refresh server certificate in runtime bundle", "error", applyErr)
+		resp["applyError"] = "运行配置更新失败"
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

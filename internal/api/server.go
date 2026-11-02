@@ -150,6 +150,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/profiles/{id}/export", s.requireSession(http.HandlerFunc(s.handleExportProfile)))
 
 	mux.Handle("GET /api/pki", s.requireSession(http.HandlerFunc(s.handlePKIStatus)))
+	mux.Handle("POST /api/pki/server/renew", s.requireSession(http.HandlerFunc(s.handleRenewServerCertificate)))
 	mux.Handle("GET /api/settings/export", s.requireSession(http.HandlerFunc(s.handleGetExportSettings)))
 	mux.Handle("PUT /api/settings/export", s.requireSession(http.HandlerFunc(s.handleSaveExportSettings)))
 	mux.Handle("POST /api/admin/password", s.requireSession(http.HandlerFunc(s.handleChangeAdminPassword)))

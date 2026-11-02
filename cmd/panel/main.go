@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -29,6 +30,7 @@ import (
 	"github.com/dreamstation625/ovpanel/internal/logging"
 	"github.com/dreamstation625/ovpanel/internal/maintapi"
 	"github.com/dreamstation625/ovpanel/internal/maintclient"
+	"github.com/dreamstation625/ovpanel/internal/netpolicy"
 	"github.com/dreamstation625/ovpanel/internal/pki"
 	"github.com/dreamstation625/ovpanel/internal/secretbox"
 	"github.com/dreamstation625/ovpanel/internal/statistics"
@@ -102,6 +104,7 @@ func run() error {
 		return fmt.Errorf("检查 PKI: %w", err)
 	}
 	accountsService := accounts.New(st, pkiService, masterKey)
+	accountsService.SetHostNetworksPath(filepath.Join(cfg.ControlDir, netpolicy.HostNetworksFileName))
 	runtimeService := vpnruntime.New(st, pkiService, accountsService, cfg.ControlDir)
 	statisticsService := statistics.New(st, cfg.ControlDir, log)
 	maintenanceSocket := strings.TrimSpace(os.Getenv("OVPANEL_MAINTENANCE_SOCKET"))

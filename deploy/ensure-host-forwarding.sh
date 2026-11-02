@@ -10,9 +10,28 @@ set -eu
 PORT="${OVPANEL_VPN_PORT:-1194}"
 PROTO="$(printf '%s' "${OVPANEL_VPN_PROTO:-udp}" | tr '[:upper:]' '[:lower:]')"
 SUBNET=""
+HOST_NETWORKS_FILE="${OVPANEL_HOST_NETWORKS_FILE:-/control/host-networks.txt}"
 
 log() { printf '[host-forward] %s\n' "$*"; }
 warn() { printf '[host-forward][warn] %s\n' "$*" >&2; }
+
+# 写入宿主接口和路由网段清单，供面板/代理拦截与宿主网段重叠的路由通告。
+write_host_networks() {
+  command -v ip >/dev/null 2>&1 || { warn "缺少 ip，跳过宿主网段清单"; return 0; }
+  mkdir -p "$(dirname "$HOST_NETWORKS_FILE")" 2>/dev/null ||
+    { warn "无法创建宿主网段目录：$(dirname "$HOST_NETWORKS_FILE")"; return 0; }
+  tmp="$(mktemp "${HOST_NETWORKS_FILE}.tmp.XXXXXX" 2>/dev/null)" ||
+    { warn "无法创建宿主网段临时文件"; return 0; }
+  {
+    ip -o -4 addr show | awk '$2 != "lo" && $2 !~ /^(tun|ifb)/ {print $4}'
+    ip -4 route show | awk '$1 != "default" && $1 ~ "/" && $0 !~ / dev (tun|ifb)/ {print $1}'
+  } | sed '/^$/d' | sort -u > "$tmp" ||
+    { rm -f "$tmp"; warn "读取宿主网段失败"; return 0; }
+  chmod 0644 "$tmp" 2>/dev/null || true
+  mv "$tmp" "$HOST_NETWORKS_FILE" 2>/dev/null ||
+    { rm -f "$tmp"; warn "写入宿主网段清单失败：$HOST_NETWORKS_FILE"; return 0; }
+  log "已更新宿主网段清单：$HOST_NETWORKS_FILE"
+}
 
 refresh_pool() {
   if [ -r /control/bundle.json ]; then
@@ -20,6 +39,8 @@ refresh_pool() {
     [ -n "$found" ] && SUBNET="$found"
   fi
 }
+
+write_host_networks
 
 while [ -z "$SUBNET" ]; do
   refresh_pool
@@ -62,5 +83,6 @@ apply() {
 apply || warn "应用 host-network 转发规则失败，稍后重试"
 while :; do
   sleep 30
+  write_host_networks
   apply || warn "应用 host-network 转发规则失败，稍后重试"
 done
