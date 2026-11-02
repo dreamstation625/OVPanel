@@ -95,6 +95,13 @@ jobs:
         uses: docker/setup-qemu-action@v3
       - name: 准备 Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          # Docker Hub 对 manifest 请求限流（429 Too Many Requests），CI 连续构建
+          # 很容易撞上。基础镜像改从 Google 的公共只读镜像拉取；镜像推送仍直连
+          # Docker Hub，不受影响。镜像不可用时 BuildKit 会回退到 Docker Hub。
+          config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
       - name: 生成镜像标签
         id: meta
         shell: bash
