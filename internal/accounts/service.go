@@ -88,16 +88,22 @@ type ExportResult struct {
 
 // Service 编排账号、证书与导出操作。
 type Service struct {
-	store *store.Store
-	pki   *pki.Service
-	keyMu sync.RWMutex
-	key   secretbox.Key
-	now   func() time.Time
+	store            *store.Store
+	pki              *pki.Service
+	keyMu            sync.RWMutex
+	key              secretbox.Key
+	now              func() time.Time
+	hostNetworksPath string
 }
 
 // New 创建账号服务。
 func New(st *store.Store, pkiService *pki.Service, key secretbox.Key) *Service {
 	return &Service{store: st, pki: pkiService, key: key, now: func() time.Time { return time.Now().UTC() }}
+}
+
+// SetHostNetworksPath 设置宿主机网段清单路径；为空时跳过宿主网段校验。
+func (s *Service) SetHostNetworksPath(path string) {
+	s.hostNetworksPath = path
 }
 
 // SetKey 在恢复备份后替换内存中的主密钥。
@@ -309,6 +315,9 @@ func (s *Service) UpdateProfilePolicy(ctx context.Context, id, routeMode, access
 	if err != nil {
 		return store.ProfileDetail{}, validation(err.Error())
 	}
+	if err := s.validateAgainstHostNetworks(vpnNetwork, clientNetworks); err != nil {
+		return store.ProfileDetail{}, err
+	}
 	if err := s.validateClientNetworkOwnership(ctx, id, clientNetworks); err != nil {
 		return store.ProfileDetail{}, err
 	}
@@ -323,6 +332,28 @@ func (s *Service) UpdateProfilePolicy(ctx context.Context, id, routeMode, access
 		return store.ProfileDetail{}, err
 	}
 	return s.profileDetail(ctx, id)
+}
+
+// validateAgainstHostNetworks 防止 VPN 网段或路由通告覆盖宿主机自身网段。
+func (s *Service) validateAgainstHostNetworks(vpnNetwork string, networks []string) error {
+	if s.hostNetworksPath == "" {
+		return nil
+	}
+	hostNetworks, err := netpolicy.LoadHostNetworks(s.hostNetworksPath)
+	if err != nil {
+		return err
+	}
+	for _, host := range hostNetworks {
+		if netpolicy.NetworksOverlap(vpnNetwork, host) {
+			return validation(fmt.Sprintf("VPN 网段不能与宿主机网段 %s 重叠", host))
+		}
+		for _, network := range networks {
+			if netpolicy.NetworksOverlap(network, host) {
+				return validation(fmt.Sprintf("路由通告不能使用宿主机网段：%s", host))
+			}
+		}
+	}
+	return nil
 }
 
 // validateClientNetworkOwnership 检查共享内网是否与其他配置重叠并限制总数。

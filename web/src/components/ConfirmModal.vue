@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { onBeforeUnmount, ref, watch } from 'vue'
 import { NButton, NModal } from 'naive-ui'
 
 const props = withDefaults(
@@ -9,14 +10,45 @@ const props = withDefaults(
     actionLabel?: string
     loading?: boolean
     danger?: boolean
+    countdown?: number
   }>(),
-  { description: '', actionLabel: '确认', loading: false, danger: false },
+  { description: '', actionLabel: '确认', loading: false, danger: false, countdown: 0 },
 )
 
 const emit = defineEmits<{
   'update:show': [value: boolean]
   confirm: []
 }>()
+
+const remaining = ref(0)
+let timer: number | undefined
+
+function stopCountdown() {
+  if (timer !== undefined) {
+    window.clearInterval(timer)
+    timer = undefined
+  }
+}
+
+function startCountdown() {
+  stopCountdown()
+  if (!props.show || props.countdown <= 0) {
+    remaining.value = 0
+    return
+  }
+  remaining.value = props.countdown
+  timer = window.setInterval(() => {
+    if (remaining.value <= 1) {
+      remaining.value = 0
+      stopCountdown()
+      return
+    }
+    remaining.value -= 1
+  }, 1000)
+}
+
+watch([() => props.show, () => props.countdown], startCountdown, { immediate: true })
+onBeforeUnmount(stopCountdown)
 
 function close() {
   if (!props.loading) {
@@ -38,8 +70,13 @@ function close() {
     <template #footer>
       <div class="modal-actions">
         <NButton :disabled="loading" @click="close">取消</NButton>
-        <NButton :type="danger ? 'error' : 'primary'" :loading="loading" @click="emit('confirm')">
-          {{ actionLabel }}
+        <NButton
+          :type="danger ? 'error' : 'primary'"
+          :loading="loading"
+          :disabled="loading || remaining > 0"
+          @click="emit('confirm')"
+        >
+          {{ remaining > 0 ? `${actionLabel}（${remaining} 秒）` : actionLabel }}
         </NButton>
       </div>
     </template>

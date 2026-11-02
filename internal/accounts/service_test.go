@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -415,5 +416,38 @@ func TestExportUsesActiveServerCrypto(t *testing.T) {
 		if !strings.Contains(content, want) {
 			t.Fatalf("导出配置缺少 %q：\n%s", want, content)
 		}
+	}
+}
+
+func TestUpdateProfileRejectsHostNetworkOverlap(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+	hostFile := filepath.Join(t.TempDir(), "host-networks.txt")
+	if err := os.WriteFile(hostFile, []byte("192.168.31.0/24\n"), 0o644); err != nil {
+		t.Fatalf("写入宿主网段失败：%v", err)
+	}
+	svc.SetHostNetworksPath(hostFile)
+
+	created, err := svc.CreateUserWithProfile(ctx,
+		UserInput{DisplayName: "宿主网段测试"},
+		ProfileInput{Name: "配置", AuthType: store.AuthCertificate})
+	if err != nil {
+		t.Fatalf("创建配置失败：%v", err)
+	}
+	if _, err := svc.UpdateProfilePolicy(ctx, created.Profile.ID, store.RouteInherit, store.AccessInherit,
+		nil, []string{"192.168.31.0/24"}, store.ClientLANInherit, ""); !errors.Is(err, ErrValidation) {
+		t.Fatalf("通告宿主网段应被拒绝：%v", err)
+	}
+	if _, err := svc.UpdateProfilePolicy(ctx, created.Profile.ID, store.RouteInherit, store.AccessInherit,
+		nil, []string{"192.168.50.0/24"}, store.ClientLANInherit, ""); err != nil {
+		t.Fatalf("非宿主网段应被接受：%v", err)
+	}
+
+	if err := os.WriteFile(hostFile, []byte("10.8.0.0/16\n"), 0o644); err != nil {
+		t.Fatalf("更新宿主网段失败：%v", err)
+	}
+	if _, err := svc.UpdateProfilePolicy(ctx, created.Profile.ID, store.RouteInherit, store.AccessInherit,
+		nil, []string{"192.168.50.0/24"}, store.ClientLANInherit, ""); !errors.Is(err, ErrValidation) {
+		t.Fatalf("VPN 网段与宿主网段重叠应被拒绝：%v", err)
 	}
 }

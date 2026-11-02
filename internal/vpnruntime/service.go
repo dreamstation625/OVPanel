@@ -169,6 +169,15 @@ func (s *Service) ApplyConfig(ctx context.Context, config serverconfig.Config, r
 	if err != nil {
 		return Result{}, err
 	}
+	hostNetworks, err := netpolicy.LoadHostNetworks(filepath.Join(s.controlDir, netpolicy.HostNetworksFileName))
+	if err != nil {
+		return Result{}, err
+	}
+	for _, host := range hostNetworks {
+		if netpolicy.NetworksOverlap(prepared.VPNNetwork, host) {
+			return Result{}, fmt.Errorf("%w：VPN 网段 %s 与宿主机网段 %s 重叠", accounts.ErrValidation, prepared.VPNNetwork, host)
+		}
+	}
 	rendered, configHash, err := serverconfig.Render(prepared)
 	if err != nil {
 		return Result{}, err
@@ -187,6 +196,10 @@ func (s *Service) ApplyConfig(ctx context.Context, config serverconfig.Config, r
 	}
 
 	serverCert, serverKey, err := s.pki.EnsureServerCertificate(ctx)
+	if err != nil {
+		return Result{}, err
+	}
+	serverInfo, err := s.pki.ServerCertificateInfo(ctx)
 	if err != nil {
 		return Result{}, err
 	}
@@ -218,21 +231,30 @@ func (s *Service) ApplyConfig(ctx context.Context, config serverconfig.Config, r
 		if len(profile.ClientNetworks) == 0 {
 			continue
 		}
-		if _, err := netpolicy.PrepareClientNetworks(prepared.VPNNetwork, profile.ClientNetworks); err != nil {
+		networks, err := netpolicy.PrepareClientNetworks(prepared.VPNNetwork, profile.ClientNetworks)
+		if err != nil {
 			return Result{}, fmt.Errorf("%w：配置 %s 的共享内网不可用：%v", accounts.ErrValidation, profile.ID, err)
+		}
+		for _, host := range hostNetworks {
+			for _, network := range networks {
+				if netpolicy.NetworksOverlap(network, host) {
+					return Result{}, fmt.Errorf("%w：配置 %s 的路由通告不能使用宿主机网段 %s", accounts.ErrValidation, profile.ID, host)
+				}
+			}
 		}
 	}
 
 	bundle := agentproto.Bundle{
-		Version:        agentproto.Version,
-		ConfigRevision: revision,
-		ConfigHash:     configHash,
-		Config:         rendered,
-		CAPEM:          caPEM,
-		ServerCertPEM:  serverCert,
-		ServerKeyPEM:   serverKey,
-		TLSCryptKey:    tlsKey,
-		CRLPEM:         crlPEM,
+		Version:          agentproto.Version,
+		ConfigRevision:   revision,
+		ConfigHash:       configHash,
+		Config:           rendered,
+		CAPEM:            caPEM,
+		ServerCertPEM:    serverCert,
+		ServerKeyPEM:     serverKey,
+		ServerCertSerial: serverInfo.Serial,
+		TLSCryptKey:      tlsKey,
+		CRLPEM:           crlPEM,
 		Policy: netpolicy.Policy{
 			VPNPool:             prepared.VPNNetwork,
 			TunDevice:           "tun0",
@@ -257,6 +279,45 @@ func (s *Service) ApplyConfig(ctx context.Context, config serverconfig.Config, r
 		BundlePath:     target,
 		AgentPending:   true,
 	}, nil
+}
+
+// RefreshServerCertificate 更新已有控制包中的服务端证书材料。
+// 没有控制包时返回 false，避免续签操作意外用默认配置启动 VPN。
+func (s *Service) RefreshServerCertificate(ctx context.Context) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	data, err := os.ReadFile(filepath.Join(s.controlDir, BundleFileName))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	var bundle agentproto.Bundle
+	if err := json.Unmarshal(data, &bundle); err != nil {
+		return false, fmt.Errorf("读取当前运行配置: %w", err)
+	}
+	certPEM, keyPEM, err := s.pki.EnsureServerCertificate(ctx)
+	if err != nil {
+		return false, err
+	}
+	info, err := s.pki.ServerCertificateInfo(ctx)
+	if err != nil {
+		return false, err
+	}
+	caPEM, err := s.pki.CAPEM(ctx)
+	if err != nil {
+		return false, err
+	}
+	bundle.CAPEM = caPEM
+	bundle.ServerCertPEM = certPEM
+	bundle.ServerKeyPEM = keyPEM
+	bundle.ServerCertSerial = info.Serial
+	bundle.IssuedAt = s.now()
+	if _, err := s.writeBundle(bundle); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // SyncAccounts 只更新已有运行配置的认证快照与 CRL，不依赖尚在编辑的导出地址。

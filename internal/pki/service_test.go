@@ -63,6 +63,10 @@ func TestBuildClientCertificateIsSignedByCA(t *testing.T) {
 	if info.NotAfter.Before(time.Now()) {
 		t.Fatal("CA 已过期")
 	}
+	expectedExpiry := record.IssuedAt.AddDate(15, 0, 0)
+	if diff := record.ExpiresAt.Sub(expectedExpiry); diff < -24*time.Hour || diff > 24*time.Hour {
+		t.Fatalf("客户端证书默认有效期异常：expires=%v expected≈%v", record.ExpiresAt, expectedExpiry)
+	}
 
 	caCert := parseTestCert(t, caPEM)
 	leaf := parseTestCert(t, record.CertPEM)
@@ -221,6 +225,88 @@ func TestEnsureServerCertificateReturnsPEMOnReuse(t *testing.T) {
 		t.Fatal("复用时应返回同一份私钥")
 	}
 	assertPrivateKeyPEM(t, reusedKey)
+}
+
+func TestRenewServerCertificateReusesKeyAndChangesSerial(t *testing.T) {
+	svc, st, _ := newTestService(t)
+	ctx := context.Background()
+
+	_, originalKeyPEM, err := svc.EnsureServerCertificate(ctx)
+	if err != nil {
+		t.Fatalf("首次生成失败：%v", err)
+	}
+	before, err := svc.ServerCertificateInfo(ctx)
+	if err != nil || !before.Exists {
+		t.Fatalf("读取服务端证书失败：%+v %v", before, err)
+	}
+
+	renewed, err := svc.RenewServerCertificate(ctx)
+	if err != nil {
+		t.Fatalf("续签失败：%v", err)
+	}
+	if !renewed.Exists || renewed.Serial == before.Serial {
+		t.Fatalf("续签应更换序列号：before=%s after=%s", before.Serial, renewed.Serial)
+	}
+	if renewed.Fingerprint == before.Fingerprint {
+		t.Fatal("续签应产生新的证书指纹")
+	}
+	expectedExpiry := time.Now().UTC().AddDate(15, 0, 0)
+	if diff := renewed.NotAfter.Sub(expectedExpiry); diff < -24*time.Hour || diff > 24*time.Hour {
+		t.Fatalf("续签后有效期异常：%v", renewed.NotAfter)
+	}
+
+	record, ok, err := st.ServerCertificate(ctx)
+	if err != nil || !ok {
+		t.Fatalf("读取保存的服务端证书失败：%v", err)
+	}
+	leaf := parseTestCert(t, record.CertPEM)
+	originalBlock, _ := pem.Decode([]byte(originalKeyPEM))
+	originalKey, err := x509.ParsePKCS8PrivateKey(originalBlock.Bytes)
+	if err != nil {
+		t.Fatalf("解析原私钥失败：%v", err)
+	}
+	originalRSA, ok := originalKey.(*rsa.PrivateKey)
+	if !ok {
+		t.Fatal("原私钥不是 RSA")
+	}
+	publicKey, ok := leaf.PublicKey.(*rsa.PublicKey)
+	if !ok || !originalRSA.PublicKey.Equal(publicKey) {
+		t.Fatal("续签应保留原有私钥")
+	}
+
+	caPEM, err := svc.CAPEM(ctx)
+	if err != nil {
+		t.Fatalf("读取 CA 失败：%v", err)
+	}
+	if err := leaf.CheckSignatureFrom(parseTestCert(t, caPEM)); err != nil {
+		t.Fatalf("续签证书不是由同一 CA 签发：%v", err)
+	}
+
+	// 续签后运行侧应复用新证书，不再重新生成。
+	ensuredCert, ensuredKey, err := svc.EnsureServerCertificate(ctx)
+	if err != nil {
+		t.Fatalf("复用续签证书失败：%v", err)
+	}
+	if ensuredCert != record.CertPEM || ensuredKey != originalKeyPEM {
+		t.Fatal("续签后应复用新证书与保留的私钥")
+	}
+}
+
+func TestRenewServerCertificateCreatesWhenMissing(t *testing.T) {
+	svc, _, _ := newTestService(t)
+	ctx := context.Background()
+
+	info, err := svc.ServerCertificateInfo(ctx)
+	if err != nil || info.Exists {
+		t.Fatalf("初始不应有服务端证书：%+v %v", info, err)
+	}
+	renewed, err := svc.RenewServerCertificate(ctx)
+	if err != nil {
+		t.Fatalf("首次签发失败：%v", err)
+	}
+	if !renewed.Exists || renewed.Serial == "" || renewed.Fingerprint == "" {
+		t.Fatalf("首次签发结果异常：%+v", renewed)
+	}
 }
 
 func assertPrivateKeyPEM(t *testing.T, keyPEM string) {

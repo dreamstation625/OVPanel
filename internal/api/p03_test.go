@@ -211,6 +211,83 @@ func TestP03UserProfileCertificateFlow(t *testing.T) {
 	}
 }
 
+func TestP03ServerCertificateRenew(t *testing.T) {
+	srv := newTestServer(t)
+	h, cookies := setupAndLogin(t, srv)
+
+	settings := doJSON(t, h, http.MethodPut, "/api/settings/export", "127.0.0.1:5000", map[string]any{
+		"host": "vpn.example.com", "port": 1194, "proto": "udp",
+	}, cookies...)
+	if settings.Code != http.StatusOK {
+		t.Fatalf("保存导出设置失败：%d %s", settings.Code, settings.Body.String())
+	}
+	config := map[string]any{
+		"vpnNetwork":        "10.8.0.0/16",
+		"protocol":          "udp",
+		"port":              1194,
+		"dns":               []string{"119.29.29.29"},
+		"dataCiphers":       []string{"AES-256-GCM"},
+		"authDigest":        "SHA256",
+		"tlsMinVersion":     "1.2",
+		"keepaliveInterval": 10,
+		"keepaliveTimeout":  60,
+		"maxClients":        0,
+		"routeMode":         "split",
+		"allowedInternal":   []string{},
+		"blockIpv6":         true,
+	}
+	if draft := doJSON(t, h, http.MethodPut, "/api/server/config/draft", "127.0.0.1:5000", config, cookies...); draft.Code != http.StatusOK {
+		t.Fatalf("保存服务端配置失败：%d %s", draft.Code, draft.Body.String())
+	}
+	if apply := doJSON(t, h, http.MethodPost, "/api/server/config/apply", "127.0.0.1:5000", map[string]any{}, cookies...); apply.Code != http.StatusOK {
+		t.Fatalf("应用服务端配置失败：%d %s", apply.Code, apply.Body.String())
+	}
+
+	status := doJSON(t, h, http.MethodGet, "/api/pki", "127.0.0.1:5000", nil, cookies...)
+	if status.Code != http.StatusOK {
+		t.Fatalf("读取 PKI 状态失败：%d %s", status.Code, status.Body.String())
+	}
+	var before struct {
+		ServerCertificate certificateInfoDTO `json:"serverCertificate"`
+	}
+	if err := json.Unmarshal(status.Body.Bytes(), &before); err != nil {
+		t.Fatalf("解析 PKI 状态失败：%v", err)
+	}
+	if before.ServerCertificate.Serial == "" {
+		t.Fatal("应用服务端配置后应生成服务端证书")
+	}
+
+	renew := doJSON(t, h, http.MethodPost, "/api/pki/server/renew", "127.0.0.1:5000", map[string]any{}, cookies...)
+	if renew.Code != http.StatusOK {
+		t.Fatalf("续签服务端证书失败：%d %s", renew.Code, renew.Body.String())
+	}
+	var result struct {
+		ServerCertificate certificateInfoDTO `json:"serverCertificate"`
+		Applied           bool               `json:"applied"`
+		ApplyError        string             `json:"applyError"`
+	}
+	if err := json.Unmarshal(renew.Body.Bytes(), &result); err != nil {
+		t.Fatalf("解析续签结果失败：%v", err)
+	}
+	if result.ServerCertificate.Serial == "" || result.ServerCertificate.Serial == before.ServerCertificate.Serial {
+		t.Fatalf("续签应更换序列号：before=%s after=%s", before.ServerCertificate.Serial, result.ServerCertificate.Serial)
+	}
+	if !result.Applied || result.ApplyError != "" {
+		t.Fatalf("已有控制包时应更新运行配置：%+v", result)
+	}
+
+	status = doJSON(t, h, http.MethodGet, "/api/pki", "127.0.0.1:5000", nil, cookies...)
+	var after struct {
+		ServerCertificate certificateInfoDTO `json:"serverCertificate"`
+	}
+	if err := json.Unmarshal(status.Body.Bytes(), &after); err != nil {
+		t.Fatalf("解析续签后 PKI 状态失败：%v", err)
+	}
+	if after.ServerCertificate.Serial != result.ServerCertificate.Serial {
+		t.Fatalf("续签后状态未更新：%s", after.ServerCertificate.Serial)
+	}
+}
+
 func TestP03CSRFAndAdminPassword(t *testing.T) {
 	srv := newTestServer(t)
 	h, cookies := setupAndLogin(t, srv)

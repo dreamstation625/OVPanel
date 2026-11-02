@@ -11,19 +11,46 @@ set -eu
 
 NETWORK="${OVPANEL_NETWORK:-ovpanel}"
 AUTO="${OVPANEL_AUTO_FORWARD:-1}"
+HOST_NETWORKS_FILE="${OVPANEL_HOST_NETWORKS_FILE:-}"
 
 log() { printf '[forward] %s\n' "$*"; }
 warn() { printf '[forward][warn] %s\n' "$*" >&2; }
 fail() { printf '[forward][fail] %s\n' "$*" >&2; exit 1; }
 
-[ "$AUTO" = "0" ] && { log "OVPANEL_AUTO_FORWARD=0，跳过"; exit 0; }
+# 写入宿主接口和路由网段清单，供面板/代理拦截与宿主网段重叠的路由通告。
+write_host_networks() {
+  [ -n "$HOST_NETWORKS_FILE" ] || return 0
+  command -v ip >/dev/null 2>&1 || { warn "缺少 ip，跳过宿主网段清单"; return 0; }
+  mkdir -p "$(dirname "$HOST_NETWORKS_FILE")" 2>/dev/null ||
+    { warn "无法创建宿主网段目录：$(dirname "$HOST_NETWORKS_FILE")"; return 0; }
+  tmp="$(mktemp "${HOST_NETWORKS_FILE}.tmp.XXXXXX" 2>/dev/null)" ||
+    { warn "无法创建宿主网段临时文件"; return 0; }
+  {
+    ip -o -4 addr show | awk '$2 != "lo" && $2 !~ /^(tun|ifb)/ {print $4}'
+    ip -4 route show | awk '$1 != "default" && $1 ~ "/" && $0 !~ / dev (tun|ifb)/ {print $1}'
+  } | sed '/^$/d' | sort -u > "$tmp" ||
+    { rm -f "$tmp"; warn "读取宿主网段失败"; return 0; }
+  chmod 0644 "$tmp" 2>/dev/null || true
+  mv "$tmp" "$HOST_NETWORKS_FILE" 2>/dev/null ||
+    { rm -f "$tmp"; warn "写入宿主网段清单失败：$HOST_NETWORKS_FILE"; return 0; }
+  log "已更新宿主网段清单：$HOST_NETWORKS_FILE"
+}
+
+if [ "$AUTO" = "0" ]; then
+  write_host_networks
+  log "OVPANEL_AUTO_FORWARD=0，跳过转发配置"
+  exit 0
+fi
 
 if [ "$(id -u)" -ne 0 ]; then
   if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
-    exec sudo -n env OVPANEL_NETWORK="$NETWORK" OVPANEL_AUTO_FORWARD="$AUTO" "$0" "$@"
+    exec sudo -n env OVPANEL_NETWORK="$NETWORK" OVPANEL_AUTO_FORWARD="$AUTO" \
+      OVPANEL_HOST_NETWORKS_FILE="$HOST_NETWORKS_FILE" "$0" "$@"
   fi
   fail "修改防火墙需要 root 或免密 sudo"
 fi
+
+write_host_networks
 
 command -v docker >/dev/null 2>&1 || fail "缺少 docker 命令"
 docker network inspect "$NETWORK" >/dev/null 2>&1 || fail "找不到 Docker 网络 $NETWORK；请先启动 Compose"
