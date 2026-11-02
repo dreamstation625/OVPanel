@@ -230,3 +230,22 @@ func TestSharedNetworksRoutesAndPolicy(t *testing.T) {
 		t.Fatalf("nft 策略缺少共享网段：%+v", last.SharedNetworks)
 	}
 }
+
+func TestHostAddressFromManagement(t *testing.T) {
+	cases := map[string]string{
+		"10.8.0.2":                    "10.8.0.2",
+		"10.8.0.2/255.255.0.0":        "10.8.0.2",
+		"10.8.0.0/255.255.0.0":        "",
+		"192.168.31.64/255.255.255.0": "192.168.31.64",
+		"192.168.31.0/255.255.255.0":  "",
+		"10.8.0.2/16":                 "10.8.0.2",
+		"10.8.0.0/16":                 "",
+		"":                            "",
+		"not-an-address":              "",
+	}
+	for raw, want := range cases {
+		if got := hostAddressFromManagement(raw); got != want {
+			t.Fatalf("hostAddressFromManagement(%q)=%q, want %q", raw, got, want)
+		}
+	}
+}

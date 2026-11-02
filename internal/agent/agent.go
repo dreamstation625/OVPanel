@@ -1046,7 +1046,12 @@ type pendingAuth struct {
 
 // setSessionAddress 记录会话取得的 VPN 地址并立即重建逐连接规则。
 func (r *Runtime) setSessionAddress(cid, address string) {
-	address = strings.TrimSpace(address)
+	address = hostAddressFromManagement(address)
+	if address == "" {
+		// OpenVPN 2.7 的 CLIENT:ADDRESS 可能带子网/掩码；子网地址不是客户端
+		// 地址，主机地址以 client-connect 环境中的 ifconfig_pool_remote_ip 为准。
+		return
+	}
 	now := r.now()
 	var (
 		info      sessionInfo
@@ -1107,6 +1112,47 @@ func (r *Runtime) setSessionAddress(cid, address string) {
 	}
 }
 
+// hostAddressFromManagement 从 management 地址中取客户端主机地址。
+// OpenVPN 2.7 的 CLIENT:ADDRESS 可能使用 MAPF_SUBNET 上报子网/掩码；
+// 子网地址不是客户端地址，返回空字符串，由 ifconfig_pool_remote_ip 兜底。
+func hostAddressFromManagement(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if !strings.Contains(raw, "/") {
+		ip := net.ParseIP(raw)
+		if ip == nil || ip.To4() == nil {
+			return ""
+		}
+		return ip.To4().String()
+	}
+	ipPart, maskPart, _ := strings.Cut(raw, "/")
+	ip := net.ParseIP(strings.TrimSpace(ipPart))
+	if ip == nil || ip.To4() == nil {
+		return ""
+	}
+	var network *net.IPNet
+	if strings.Contains(maskPart, ".") {
+		maskIP := net.ParseIP(strings.TrimSpace(maskPart))
+		if maskIP == nil || maskIP.To4() == nil {
+			return ""
+		}
+		mask := net.IPMask(maskIP.To4())
+		network = &net.IPNet{IP: ip.To4().Mask(mask), Mask: mask}
+	} else {
+		_, parsed, err := net.ParseCIDR(raw)
+		if err != nil {
+			return ""
+		}
+		network = parsed
+	}
+	if ip.To4().Equal(network.IP) {
+		return ""
+	}
+	return ip.To4().String()
+}
+
 func (r *Runtime) evaluate(pending *pendingAuth) {
 	r.mu.Lock()
 	snapshot := r.snapshot
@@ -1114,6 +1160,7 @@ func (r *Runtime) evaluate(pending *pendingAuth) {
 	r.mu.Unlock()
 
 	incoming := incomingFromEnv(pending.env)
+	vpnIP := hostAddressFromManagement(pending.env["ifconfig_pool_remote_ip"])
 	now := r.now()
 	decision := admission.Decide(snapshot, incoming, now)
 	if !decision.Allow {
@@ -1160,7 +1207,6 @@ func (r *Runtime) evaluate(pending *pendingAuth) {
 
 	sessionID := r.usage.Generation() + ":" + pending.cid
 	var (
-		vpnIP     string
 		reusedCID string
 		reused    sessionInfo
 	)
@@ -1170,10 +1216,15 @@ func (r *Runtime) evaluate(pending *pendingAuth) {
 			current.profileID = profile.ID
 			current.certSerial = incoming.CertSerial
 			current.sourceIP = incoming.SourceIP
+			if vpnIP != "" {
+				current.vpnIP = vpnIP
+			}
 			r.sessions[pending.cid] = current
 		}
 	} else {
-		vpnIP = r.pendingAddr[pending.cid]
+		if vpnIP == "" {
+			vpnIP = hostAddressFromManagement(r.pendingAddr[pending.cid])
+		}
 		delete(r.pendingAddr, pending.cid)
 		if vpnIP != "" {
 			for otherCID, other := range r.sessions {
