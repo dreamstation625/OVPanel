@@ -628,6 +628,8 @@ func (r *Runtime) writeMaterials(bundle agentproto.Bundle) error {
 		filepath.Join(r.configDir, "server.conf"): bundle.Config,
 	}
 	for path, content := range files {
+		// 证书与配置统一使用实例目录，避免隔离运行或测试时写入默认宿主路径。
+		path = filepath.Join(r.configDir, filepath.Base(path))
 		if err := writeSecure(path, []byte(content)); err != nil {
 			return err
 		}
