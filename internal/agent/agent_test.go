@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"github.com/dreamstation625/ovpanel/internal/agentproto"
 )
 
 func TestIncomingFromEnv(t *testing.T) {
@@ -56,6 +58,27 @@ func TestWriteSecure(t *testing.T) {
 		}
 		if info.Mode().Perm() != 0o600 {
 			t.Fatalf("权限 = %o", info.Mode().Perm())
+		}
+	}
+}
+
+func TestWriteMaterialsUsesConfigDir(t *testing.T) {
+	rt := New(t.TempDir(), t.TempDir(), testLogger())
+	rt.configDir = filepath.Join(t.TempDir(), "config")
+	bundle := agentproto.Bundle{
+		CAPEM: "ca", ServerCertPEM: "cert", ServerKeyPEM: "key",
+		TLSCryptKey: "tls-crypt", CRLPEM: "crl", Config: "server config",
+	}
+	if err := rt.writeMaterials(bundle); err != nil {
+		t.Fatalf("写入配置材料失败：%v", err)
+	}
+	for name, want := range map[string]string{
+		"ca.crt": "ca", "server.crt": "cert", "server.key": "key",
+		"ta.key": "tls-crypt", "crl.pem": "crl", "server.conf": "server config",
+	} {
+		got, err := os.ReadFile(filepath.Join(rt.configDir, name))
+		if err != nil || string(got) != want {
+			t.Errorf("实例目录中的 %s = %q，期望 %q；错误：%v", name, got, want, err)
 		}
 	}
 }
