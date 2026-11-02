@@ -70,6 +70,18 @@ func Render(p Policy) (string, error) {
 		return "", fmt.Errorf("VPN 地址池不是合法 IPv4 CIDR：%q", p.VPNPool)
 	}
 	poolText := pool.String()
+	tun := strings.TrimSpace(p.TunDevice)
+	if tun == "" {
+		tun = "tun0"
+	}
+	if len(tun) > 15 {
+		return "", fmt.Errorf("TUN 设备名过长")
+	}
+	for _, ch := range tun {
+		if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_' || ch == '-' || ch == '.') {
+			return "", fmt.Errorf("TUN 设备名非法：%q", tun)
+		}
+	}
 
 	shared, err := PrepareClientNetworks(poolText, p.SharedNetworks)
 	if err != nil {
@@ -123,8 +135,15 @@ func Render(p Policy) (string, error) {
 		fmt.Fprintf(&b, "\t\telements = { %s }\n", strings.Join(shared, ", "))
 		b.WriteString("\t}\n")
 	}
+	// 本机地址走 input，不经过 forward；VPN 只提供转发，不开放宿主服务。
+	b.WriteString("\tchain input {\n")
+	b.WriteString("\t\ttype filter hook input priority filter; policy accept;\n")
+	fmt.Fprintf(&b, "\t\tiifname %q counter drop\n", tun)
+	b.WriteString("\t}\n\n")
 	b.WriteString("\tchain forward {\n")
 	b.WriteString("\t\ttype filter hook forward priority filter; policy accept;\n")
+	// host 模式与其他服务共用网络命名空间，非隧道流量必须直接返回。
+	fmt.Fprintf(&b, "\t\tiifname != %q oifname != %q return\n", tun, tun)
 
 	b.WriteString("\n\t\t# 1) 控制面、元数据与链路本地保护\n")
 	for _, cidr := range protectCIDRs {
@@ -167,15 +186,17 @@ func Render(p Policy) (string, error) {
 	}
 	b.WriteString("\n\t\t# 8) 回程流量：放在所有收紧规则之后\n")
 	b.WriteString("\t\tct state established,related counter accept\n")
+	// 共享内网只允许回程；未登记来源也不能借默认 accept 获得转发权限。
+	fmt.Fprintf(&b, "\t\tiifname %q counter drop\n", tun)
 	b.WriteString("\t}\n")
 
 	b.WriteString("\n\tchain postrouting {\n")
 	b.WriteString("\t\ttype nat hook postrouting priority srcnat; policy accept;\n")
 	if len(shared) > 0 {
 		// 共享内网保留 VPN 客户端来源；否则 A 侧只能看到服务端 tun 地址。
-		fmt.Fprintf(&b, "\t\tip saddr %s ip daddr != %s ip daddr != @shared counter masquerade\n", poolText, poolText)
+		fmt.Fprintf(&b, "\t\tiifname %q ip saddr %s ip daddr != %s ip daddr != @shared counter masquerade\n", tun, poolText, poolText)
 	} else {
-		fmt.Fprintf(&b, "\t\tip saddr %s ip daddr != %s counter masquerade\n", poolText, poolText)
+		fmt.Fprintf(&b, "\t\tiifname %q ip saddr %s ip daddr != %s counter masquerade\n", tun, poolText, poolText)
 	}
 	b.WriteString("\t}\n")
 	b.WriteString("}\n")

@@ -229,7 +229,7 @@ data/
     master.key           加密 CA/客户端私钥与 tls-crypt 的主密钥
     bootstrap-token      一次性初始化口令（初始化成功后删除）
     backups/             加密备份包与恢复临时目录
-    maintenance/         维护任务状态与 OpenVPN 镜像固定值
+  maintenance/           独立挂载的维护任务状态与 OpenVPN 镜像固定值（仅维护进程可写）
   openvpn/               运行代理账本与会话状态
   openvpn-config/        OpenVPN 配置与 PKI 运行材料
   control/              面板与代理共享控制包/状态/事件
@@ -242,6 +242,34 @@ data/
 - 加密备份与恢复通过面板「备份」页面完成；**不要**在运行中直接复制 `panel.db`。
   备份包包含数据库一致性快照、代理账本与主密钥，恢复密码需单独保管。
 - 面板与 OpenVPN 不共享可写 SQLite 文件。
+
+### 从旧维护目录升级
+
+更新镜像时同时更新 Compose：面板新增 `data/maintenance` 到
+`/var/lib/ovpanel-maintenance` 的独立挂载，不能继续把维护状态放在 Web 可写的
+`/data/maintenance` 内。维护进程会拒绝可被其他用户替换的目录或任务文件。
+执行升级前先确认没有正在进行的 OpenVPN 更新或恢复任务。
+
+旧的 `data/panel/maintenance/task.json` 不自动迁移或执行。旧镜像固定值也不自动
+信任：先核对当前 OpenVPN 容器实际镜像，将确认的版本填写到 `.env` 的
+`OVPANEL_OPENVPN_IMAGE`，再按原部署方式重建。旧目录保留供人工核对，不需要删除。
+`deploy/compose.sh` 此后从新的 `data/maintenance/openvpn-image.env` 加载固定值。
+
+### 凭据与权限变更的生效状态
+
+用户停用、证书吊销、密码和权限变更保存后，面板只更新已有运行配置中的认证快照
+与 CRL，不依赖尚在编辑的客户端导出端口。VPN 尚未确认时接口返回 `202`，保留
+一次性密码等返回数据，页面显示“VPN 尚未确认生效”；后台每 5 秒核对并重试。
+升级时同时更新两个镜像，运行代理需支持控制包哈希确认。
+
+同一服务端配置下，凭据或权限更新若在代理应用阶段失败，VPN 会停止，避免回退
+成已撤销的旧授权。排除磁盘、证书或网络规则错误后，后台重试可恢复服务。
+仅服务端配置的候选变更仍保留原有失败回退流程；候选同时携带凭据变更时，
+同样不能回退为旧授权。
+
+VPN 隧道不开放宿主本机服务，包括服务端 VPN 地址上的 DNS/SSH/管理端口；DNS
+请使用可转发访问的服务器。host 模式的 ACL、IPv6 阻断和 NAT 仅作用于 VPN 接口，
+不接管其他容器的流量。
 
 ## 网络能力检查
 

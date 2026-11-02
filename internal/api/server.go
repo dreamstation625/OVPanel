@@ -154,6 +154,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/settings/export", s.requireSession(http.HandlerFunc(s.handleSaveExportSettings)))
 	mux.Handle("POST /api/admin/password", s.requireSession(http.HandlerFunc(s.handleChangeAdminPassword)))
 	mux.Handle("POST /api/runtime/apply", s.requireSession(http.HandlerFunc(s.handleRuntimeApply)))
+	mux.Handle("GET /api/runtime/sync", s.requireSession(http.HandlerFunc(s.handleRuntimeSync)))
 	mux.Handle("GET /api/server/config", s.requireSession(http.HandlerFunc(s.handleServerConfig)))
 	mux.Handle("POST /api/server/config/preview", s.requireSession(http.HandlerFunc(s.handleServerConfigPreview)))
 	mux.Handle("PUT /api/server/config/draft", s.requireSession(http.HandlerFunc(s.handleSaveServerDraft)))

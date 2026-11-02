@@ -1,7 +1,7 @@
 #!/bin/sh
 # 统一 Compose 入口：优先加载网页更新的 OpenVPN 镜像固定值。
 #
-# 网页维护成功后写入 <data>/panel/maintenance/openvpn-image.env；
+# 网页维护成功后写入 <data>/maintenance/openvpn-image.env；
 # 直接执行 docker compose up 会回到 .env 的旧镜像，因此手工操作请使用本脚本。
 #
 # up -d 成功后会自动调用 ensure-forwarding.sh，为当前 ovpanel 网络补齐
@@ -12,7 +12,7 @@ set -eu
 cd "$(dirname "$0")/.."
 
 DATA_ROOT="${OVPANEL_DATA_ROOT:-./data}"
-PIN="$DATA_ROOT/panel/maintenance/openvpn-image.env"
+PIN="$DATA_ROOT/maintenance/openvpn-image.env"
 
 compose() {
   if [ -f .env ] && [ -f "$PIN" ]; then

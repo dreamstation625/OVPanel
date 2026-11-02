@@ -1,4 +1,5 @@
 import { notifyUnauthorized } from './session'
+import { runtimeSyncState } from './runtime-sync'
 
 export interface SetupStatus {
   initialized: boolean
@@ -490,6 +491,11 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw await parseError(response)
   }
 
+  if (response.headers.has('X-OVPanel-Runtime-State')) {
+    runtimeSyncState.pending = true
+    runtimeSyncState.revision++
+  }
+
   const text = await response.text()
   if (!text) {
     return null as T
@@ -514,6 +520,7 @@ function put<T>(path: string, body: unknown): Promise<T> {
 }
 
 export const api = {
+  runtimeSync: () => request<{ pending: boolean }>('/api/runtime/sync'),
   health: () => request<Health>('/api/health'),
   setupStatus: () => request<SetupStatus>('/api/setup'),
   setup: (username: string, password: string, token: string) =>

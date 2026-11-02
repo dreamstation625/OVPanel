@@ -69,8 +69,65 @@ func imageConfig(entrypoint []string, labels map[string]string) struct {
 		Env        []string          `json:"Env"`
 	}
 	cfg.Entrypoint = entrypoint
-	cfg.Labels = labels
+	cfg.Labels = map[string]string{"com.ovpanel.role": "openvpn", "com.ovpanel.agent-protocol": AgentProtocol}
+	for key, value := range labels {
+		cfg.Labels[key] = value
+	}
 	return cfg
+}
+
+func TestValidateCurrentAndLegacyImageEntrypoints(t *testing.T) {
+	data, err := os.ReadFile("../../deploy/Dockerfile.openvpn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var official []string
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "ENTRYPOINT ") {
+			if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "ENTRYPOINT ")), &official); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for _, entrypoint := range [][]string{official, {"/usr/local/bin/vpn-agent"}} {
+		if err := validateImage(imageInspect{Config: imageConfig(entrypoint, nil)}); err != nil {
+			t.Fatalf("项目镜像入口应可升级：%v", err)
+		}
+	}
+	for _, entrypoint := range [][]string{{"/bin/sh", "-c", "vpn-agent"}, {"/tmp/vpn-agent"}, {"/usr/local/bin/entrypoint-openvpn", "extra"}} {
+		if err := validateImage(imageInspect{Config: imageConfig(entrypoint, nil)}); err == nil {
+			t.Fatalf("不应接受非托管入口：%v", entrypoint)
+		}
+	}
+	image := imageInspect{Config: imageConfig(official, nil)}
+	delete(image.Config.Labels, "com.ovpanel.agent-protocol")
+	if err := validateImage(image); err == nil {
+		t.Fatal("缺少协议标签时应拒绝")
+	}
+}
+
+func TestRecoveryRejectsUnmanagedOrPrivilegedSpecs(t *testing.T) {
+	for _, kind := range []string{"image", "privileged", "labels"} {
+		t.Run(kind, func(t *testing.T) {
+			fake := newFakeDocker()
+			service, _ := newFakeService(t, fake)
+			old := *fake.snapshot()
+			switch kind {
+			case "image":
+				old.Config = map[string]any{"Image": "outside-allowlist:v1"}
+			case "privileged":
+				old.HostConfig = map[string]any{"Privileged": true, "Binds": []string{"/:/host"}}
+			case "labels":
+				old.Config = map[string]any{"Image": "ovpanel-p07-openvpn:v1"}
+			}
+			raw, _ := json.Marshal(old)
+			service.task = &maintapi.Task{ID: "unsafe", State: maintapi.TaskRunning}
+			service.rollback(t.Context(), raw, "中断恢复")
+			if service.task.State != maintapi.TaskFailed || fake.snapshot().ID != "old-id" {
+				t.Fatal("不安全规格必须在停止或替换当前容器之前拒绝")
+			}
+		})
+	}
 }
 
 func (f *fakeDocker) healthFor(image string) string {

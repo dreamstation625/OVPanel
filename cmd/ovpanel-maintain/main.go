@@ -31,7 +31,7 @@ func run() error {
 	service := dockermaint.New(dockermaint.Config{
 		SocketPath:      getenv("OVPANEL_MAINTENANCE_SOCKET", "/run/ovpanel/maintain.sock"),
 		DockerSocket:    getenv("OVPANEL_DOCKER_SOCKET", "/var/run/docker.sock"),
-		StateDir:        getenv("OVPANEL_MAINTENANCE_STATE_DIR", "/data/maintenance"),
+		StateDir:        getenv("OVPANEL_MAINTENANCE_STATE_DIR", "/var/lib/ovpanel-maintenance"),
 		ContainerName:   getenv("OVPANEL_OPENVPN_CONTAINER", "ovpanel-openvpn"),
 		ImageRepository: getenv("OVPANEL_OPENVPN_IMAGE_REPOSITORY", "dreamstation625/ovpanel-openvpn"),
 		Log:             log,

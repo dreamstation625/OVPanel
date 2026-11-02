@@ -46,13 +46,14 @@ services:
       OVPANEL_OPENVPN_IMAGE_REF: ${OVPANEL_OPENVPN_IMAGE:-dreamstation625/ovpanel-openvpn:dev}
       OVPANEL_MAINTENANCE_SOCKET: /run/ovpanel/maintain.sock
       OVPANEL_DOCKER_SOCKET: /var/run/docker.sock
-      OVPANEL_MAINTENANCE_STATE_DIR: /data/maintenance
+      OVPANEL_MAINTENANCE_STATE_DIR: /var/lib/ovpanel-maintenance
       OVPANEL_OPENVPN_CONTAINER: ovpanel-openvpn
       OVPANEL_OPENVPN_IMAGE_REPOSITORY: ${OVPANEL_OPENVPN_REPOSITORY:-dreamstation625/ovpanel-openvpn}
     ports:
       - "${OVPANEL_ADMIN_BIND:-127.0.0.1}:${OVPANEL_ADMIN_PORT:-8080}:8080"
     volumes:
       - "${OVPANEL_DATA_ROOT:-/opt/ovpanel/data}/panel:/data"
+      - "${OVPANEL_DATA_ROOT:-/opt/ovpanel/data}/maintenance:/var/lib/ovpanel-maintenance"
       - "${OVPANEL_DATA_ROOT:-/opt/ovpanel/data}/control:/control"
       - "${OVPANEL_CERT_DIR:-/opt/ovpanel/certs}:/certs:ro"
       # 仅容器内的受限维护进程使用；Web 进程不直接打开 Docker Socket。

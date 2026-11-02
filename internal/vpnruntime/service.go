@@ -6,11 +6,16 @@
 package vpnruntime
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/dreamstation625/ovpanel/internal/accounts"
@@ -28,6 +33,7 @@ const BundleFileName = "bundle.json"
 
 // Service 生成并下发运行控制包。
 type Service struct {
+	mu         sync.Mutex
 	store      *store.Store
 	pki        *pki.Service
 	accounts   *accounts.Service
@@ -157,6 +163,8 @@ func (s *Service) Apply(ctx context.Context) (Result, error) {
 
 // ApplyConfig 用指定配置生成控制包并原子写入控制目录。
 func (s *Service) ApplyConfig(ctx context.Context, config serverconfig.Config, revision int64) (Result, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	prepared, err := serverconfig.Prepare(config)
 	if err != nil {
 		return Result{}, err
@@ -237,48 +245,10 @@ func (s *Service) ApplyConfig(ctx context.Context, config serverconfig.Config, r
 		Snapshot: snapshot,
 		IssuedAt: s.now(),
 	}
-	payload, err := json.MarshalIndent(bundle, "", "  ")
+	target, err := s.writeBundle(bundle)
 	if err != nil {
-		return Result{}, fmt.Errorf("编码控制包: %w", err)
+		return Result{}, err
 	}
-
-	if err := os.MkdirAll(s.controlDir, 0o700); err != nil {
-		return Result{}, fmt.Errorf("创建控制目录: %w", err)
-	}
-	if err := os.Chmod(s.controlDir, 0o700); err != nil {
-		return Result{}, fmt.Errorf("收紧控制目录权限: %w", err)
-	}
-
-	tmp, err := os.CreateTemp(s.controlDir, ".bundle-*.tmp")
-	if err != nil {
-		return Result{}, fmt.Errorf("创建控制包临时文件: %w", err)
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return Result{}, fmt.Errorf("设置控制包权限: %w", err)
-	}
-	if _, err := tmp.Write(payload); err != nil {
-		tmp.Close()
-		return Result{}, fmt.Errorf("写入控制包: %w", err)
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return Result{}, fmt.Errorf("同步控制包: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return Result{}, fmt.Errorf("关闭控制包: %w", err)
-	}
-
-	target := filepath.Join(s.controlDir, BundleFileName)
-	if err := os.Rename(tmpName, target); err != nil {
-		return Result{}, fmt.Errorf("替换控制包: %w", err)
-	}
-	if err := os.Chmod(target, 0o600); err != nil {
-		return Result{}, fmt.Errorf("控制包权限: %w", err)
-	}
-
 	return Result{
 		ConfigRevision: revision,
 		ConfigHash:     configHash,
@@ -287,4 +257,137 @@ func (s *Service) ApplyConfig(ctx context.Context, config serverconfig.Config, r
 		BundlePath:     target,
 		AgentPending:   true,
 	}, nil
+}
+
+// SyncAccounts 只更新已有运行配置的认证快照与 CRL，不依赖尚在编辑的导出地址。
+// 每次从数据库重新构建，后台重试和并发请求不会用旧快照覆盖最新的撤销操作。
+func (s *Service) SyncAccounts(ctx context.Context) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	data, err := os.ReadFile(filepath.Join(s.controlDir, BundleFileName))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil // 尚未应用服务端配置，无运行凭据需要更新。
+	}
+	if err != nil {
+		return true, err
+	}
+	var bundle agentproto.Bundle
+	if err := json.Unmarshal(data, &bundle); err != nil {
+		return true, fmt.Errorf("读取当前运行配置: %w", err)
+	}
+	snapshot, err := runtimeauth.Build(ctx, s.store)
+	if err != nil {
+		return true, err
+	}
+	current, err := json.Marshal(bundle.Snapshot)
+	if err != nil {
+		return true, err
+	}
+	desired, err := json.Marshal(snapshot)
+	if err != nil {
+		return true, err
+	}
+	status, _ := s.AgentStatus()
+	retryFailed := !s.bundleConfirmed(data) && status["lastError"] != nil && status["lastError"] != ""
+	if !bytes.Equal(current, desired) || retryFailed {
+		bundle.Snapshot = snapshot
+		bundle.CRLPEM, err = s.pki.CRLPEM(ctx)
+		if err != nil {
+			return true, err
+		}
+		bundle.IssuedAt = s.now()
+		if _, err := s.writeBundle(bundle); err != nil {
+			return true, err
+		}
+		data, err = json.MarshalIndent(bundle, "", "  ")
+		if err != nil {
+			return true, err
+		}
+	}
+	return !s.bundleConfirmed(data), nil
+}
+
+// AccountsPending 是只读的生效状态；重启后的页面也能看到尚未下发或确认的变更。
+func (s *Service) AccountsPending(ctx context.Context) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	data, err := os.ReadFile(filepath.Join(s.controlDir, BundleFileName))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return true, err
+	}
+	var bundle agentproto.Bundle
+	if err := json.Unmarshal(data, &bundle); err != nil {
+		return true, err
+	}
+	snapshot, err := runtimeauth.Build(ctx, s.store)
+	if err != nil {
+		return true, err
+	}
+	current, err := json.Marshal(bundle.Snapshot)
+	if err != nil {
+		return true, err
+	}
+	desired, err := json.Marshal(snapshot)
+	if err != nil {
+		return true, err
+	}
+	return !bytes.Equal(current, desired) || !s.bundleConfirmed(data), nil
+}
+
+func (s *Service) bundleConfirmed(data []byte) bool {
+	status, ok := s.AgentStatus()
+	if !ok {
+		return false
+	}
+	sum := sha256.Sum256(data)
+	return status["bundleHash"] == hex.EncodeToString(sum[:])
+}
+
+func (s *Service) writeBundle(bundle agentproto.Bundle) (string, error) {
+	payload, err := json.MarshalIndent(bundle, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("编码控制包: %w", err)
+	}
+
+	if err := os.MkdirAll(s.controlDir, 0o700); err != nil {
+		return "", fmt.Errorf("创建控制目录: %w", err)
+	}
+	if err := os.Chmod(s.controlDir, 0o700); err != nil {
+		return "", fmt.Errorf("收紧控制目录权限: %w", err)
+	}
+
+	tmp, err := os.CreateTemp(s.controlDir, ".bundle-*.tmp")
+	if err != nil {
+		return "", fmt.Errorf("创建控制包临时文件: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return "", fmt.Errorf("设置控制包权限: %w", err)
+	}
+	if _, err := tmp.Write(payload); err != nil {
+		tmp.Close()
+		return "", fmt.Errorf("写入控制包: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return "", fmt.Errorf("同步控制包: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return "", fmt.Errorf("关闭控制包: %w", err)
+	}
+
+	target := filepath.Join(s.controlDir, BundleFileName)
+	if err := os.Rename(tmpName, target); err != nil {
+		return "", fmt.Errorf("替换控制包: %w", err)
+	}
+	if err := os.Chmod(target, 0o600); err != nil {
+		return "", fmt.Errorf("控制包权限: %w", err)
+	}
+
+	return target, nil
 }

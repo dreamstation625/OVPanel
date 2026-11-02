@@ -183,7 +183,7 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	if result.Profile != nil {
 		dto := profileToDTO(*result.Profile, s.now())
 		resp["profile"] = dto
-		s.applyRuntimeBundle(r.Context(), "user and profile created")
+		s.applyRuntimeBundle(w, r, "user and profile created")
 	}
 	if result.Password != "" {
 		resp["password"] = result.Password
@@ -261,7 +261,7 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 			s.writeAccountError(w, r, err)
 			return
 		}
-		s.applyRuntimeBundle(r.Context(), "user status updated")
+		s.applyRuntimeBundle(w, r, "user status updated")
 	}
 
 	user, ok, err := s.store.User(r.Context(), id)
@@ -304,7 +304,7 @@ func (s *Server) handleAddProfile(w http.ResponseWriter, r *http.Request) {
 	if result.Password != "" {
 		resp["password"] = result.Password
 	}
-	s.applyRuntimeBundle(r.Context(), "profile created")
+	s.applyRuntimeBundle(w, r, "profile created")
 	s.log.Info("profile created",
 		"user_id", userID, "profile_id", result.Profile.ID, "auth_type", result.Profile.AuthType)
 	writeJSON(w, http.StatusCreated, resp)
@@ -364,7 +364,7 @@ func (s *Server) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// 停用必须尽快断开现有连接，不等连接自然结束。
-		s.applyRuntimeBundle(r.Context(), "profile status updated")
+		s.applyRuntimeBundle(w, r, "profile status updated")
 	}
 	if req.RouteMode != nil || req.AccessMode != nil || req.AllowedInternal != nil || req.ClientLANAccess != nil || req.ClientNetworks != nil || req.FixedVPNIP != nil {
 		current, ok, err := s.store.Profile(r.Context(), id)
@@ -405,7 +405,7 @@ func (s *Server) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// 立即把新策略同步到运行代理；尚未配置导出地址时没有运行配置可下发。
-		s.applyRuntimeBundle(r.Context(), "profile policy updated")
+		s.applyRuntimeBundle(w, r, "profile policy updated")
 	}
 	s.log.Info("profile updated", "profile_id", id)
 	dto := profileToDTO(detail, s.now())
@@ -427,7 +427,7 @@ func (s *Server) handleResetProfilePassword(w http.ResponseWriter, r *http.Reque
 		s.writeAccountError(w, r, err)
 		return
 	}
-	s.applyRuntimeBundle(r.Context(), "profile password reset")
+	s.applyRuntimeBundle(w, r, "profile password reset")
 	s.log.Info("profile password reset", "profile_id", profileID)
 	dto := profileToDTO(result.Profile, s.now())
 	s.enrichProfileDTO(r.Context(), result.Profile, &dto)
@@ -444,7 +444,7 @@ func (s *Server) handleRotateCertificate(w http.ResponseWriter, r *http.Request)
 		s.writeAccountError(w, r, err)
 		return
 	}
-	s.applyRuntimeBundle(r.Context(), "certificate rotated")
+	s.applyRuntimeBundle(w, r, "certificate rotated")
 	s.log.Info("profile certificate rotated", "profile_id", profileID)
 	dto := profileToDTO(detail, s.now())
 	s.enrichProfileDTO(r.Context(), detail, &dto)
@@ -464,7 +464,7 @@ func (s *Server) handleRevokeCertificate(w http.ResponseWriter, r *http.Request)
 		s.writeAccountError(w, r, err)
 		return
 	}
-	s.applyRuntimeBundle(r.Context(), "certificate revoked")
+	s.applyRuntimeBundle(w, r, "certificate revoked")
 	s.log.Warn("profile certificate revoked", "profile_id", profileID)
 	dto := profileToDTO(detail, s.now())
 	s.enrichProfileDTO(r.Context(), detail, &dto)

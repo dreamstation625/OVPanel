@@ -48,7 +48,7 @@ services:
       # 受限维护进程：只允许更新受管 OpenVPN 容器到该仓库的合法标签。
       OVPANEL_MAINTENANCE_SOCKET: /run/ovpanel/maintain.sock
       OVPANEL_DOCKER_SOCKET: /var/run/docker.sock
-      OVPANEL_MAINTENANCE_STATE_DIR: /data/maintenance
+      OVPANEL_MAINTENANCE_STATE_DIR: /var/lib/ovpanel-maintenance
       OVPANEL_OPENVPN_CONTAINER: ovpanel-openvpn
       OVPANEL_OPENVPN_IMAGE_REPOSITORY: ${OVPANEL_OPENVPN_REPOSITORY:-dreamstation625/ovpanel-openvpn}
     ports:
@@ -56,6 +56,7 @@ services:
       - "${OVPANEL_ADMIN_BIND:-127.0.0.1}:${OVPANEL_ADMIN_PORT:-8080}:8080"
     volumes:
       - "${OVPANEL_DATA_ROOT:-./data}/panel:/data"
+      - "${OVPANEL_DATA_ROOT:-./data}/maintenance:/var/lib/ovpanel-maintenance"
       - "${OVPANEL_DATA_ROOT:-./data}/control:/control"
       - "${OVPANEL_CERT_DIR:-./certs}:/certs:ro"
       # 仅维护进程使用；Web 进程不直接打开 Docker Socket。

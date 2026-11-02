@@ -13,11 +13,12 @@ import {
   Users,
   X,
 } from '@lucide/vue'
-import { NButton, NModal } from 'naive-ui'
+import { NAlert, NButton, NModal } from 'naive-ui'
 import BrandMark from './BrandMark.vue'
 import ThemeToggle from './ThemeToggle.vue'
 import { api, type UpdateCheck } from '../api'
 import { errorMessage, formatDate } from '../labels'
+import { runtimeSyncState } from '../runtime-sync'
 
 defineProps<{
   username: string
@@ -106,12 +107,37 @@ function onGlobalKeydown(event: KeyboardEvent) {
   }
 }
 
+let syncTimer: ReturnType<typeof setInterval> | undefined
+let checkingSync = false
+
+async function checkRuntimeSync() {
+  if (checkingSync) return
+  checkingSync = true
+  const revision = runtimeSyncState.revision
+  try {
+    const state = await api.runtimeSync()
+    // 在途查询不能清除它发起之后才提交的新变更。
+    if (revision === runtimeSyncState.revision) runtimeSyncState.pending = state.pending
+  } catch {
+    // 状态读取失败时保留未确认提示，不能把不可达当成已生效。
+  } finally {
+    checkingSync = false
+  }
+}
+
 onMounted(() => {
   window.addEventListener('keydown', onGlobalKeydown)
   void loadVersion()
   void checkUpdates(true)
+  void checkRuntimeSync()
+  syncTimer = setInterval(() => {
+    if (runtimeSyncState.pending) void checkRuntimeSync()
+  }, 5000)
 })
-onBeforeUnmount(() => window.removeEventListener('keydown', onGlobalKeydown))
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onGlobalKeydown)
+  clearInterval(syncTimer)
+})
 
 watch(
   () => route.path,
@@ -250,6 +276,9 @@ async function logout() {
     </aside>
 
     <main class="workspace">
+      <NAlert v-if="runtimeSyncState.pending" type="warning" class="runtime-sync-warning">
+        变更已保存，VPN 尚未确认生效。系统会自动重试，请检查服务端状态。
+      </NAlert>
       <slot />
     </main>
 

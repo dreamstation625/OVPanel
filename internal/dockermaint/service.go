@@ -70,7 +70,7 @@ func New(cfg Config) *Service {
 
 // Run 启动 Unix Socket HTTP 服务，直到 ctx 结束。
 func (s *Service) Run(ctx context.Context) error {
-	if err := os.MkdirAll(s.cfg.StateDir, 0o700); err != nil {
+	if err := secureStateDirectory(s.cfg.StateDir); err != nil {
 		return fmt.Errorf("创建维护目录: %w", err)
 	}
 	s.loadTask()
@@ -159,6 +159,9 @@ func (s *Service) validateManagedContainer(ctx context.Context) error {
 	image, _ := info.Config["Image"].(string)
 	if !strings.HasPrefix(image, s.cfg.ImageRepository+":") {
 		return fmt.Errorf("当前镜像 %q 不属于允许仓库 %q", image, s.cfg.ImageRepository)
+	}
+	if privileged, _ := info.HostConfig["Privileged"].(bool); privileged {
+		return errors.New("受管 OpenVPN 容器不能启用 privileged")
 	}
 	return nil
 }
@@ -399,14 +402,15 @@ func validateImage(image imageInspect) error {
 	if image.Architecture != "" && image.Architecture != runtime.GOARCH {
 		return fmt.Errorf("镜像架构 %s 与当前主机 %s 不兼容", image.Architecture, runtime.GOARCH)
 	}
-	entrypoint := strings.Join(image.Config.Entrypoint, " ")
-	if !strings.Contains(entrypoint, "vpn-agent") {
+	// 接受当前包装入口与旧版直接入口，不接受 shell 或包含相似名称的命令。
+	entrypoint := image.Config.Entrypoint
+	if len(entrypoint) != 1 || (entrypoint[0] != "/usr/local/bin/vpn-agent" && entrypoint[0] != "/usr/local/bin/entrypoint-openvpn") {
 		return fmt.Errorf("镜像不是有效的 OVPanel 更新版本：%q", entrypoint)
 	}
-	if role := image.Config.Labels["com.ovpanel.role"]; role != "" && role != "openvpn" {
+	if role := image.Config.Labels["com.ovpanel.role"]; role != "openvpn" {
 		return fmt.Errorf("镜像角色标签不是 openvpn：%q", role)
 	}
-	if protocol := image.Config.Labels["com.ovpanel.agent-protocol"]; protocol != "" && protocol != AgentProtocol {
+	if protocol := image.Config.Labels["com.ovpanel.agent-protocol"]; protocol != AgentProtocol {
 		return fmt.Errorf("镜像代理协议 %s 与当前面板要求的 %s 不兼容", protocol, AgentProtocol)
 	}
 	return nil
@@ -417,6 +421,15 @@ func (s *Service) rollback(ctx context.Context, oldRaw json.RawMessage, cause st
 	var old inspectContainer
 	if err := json.Unmarshal(oldRaw, &old); err != nil {
 		s.fail(ctx, cause+"；解析旧容器信息失败："+err.Error())
+		return
+	}
+	// 恢复状态不能成为绕过正常更新仓库与权限限制的第二个入口。
+	image := containerImage(old)
+	labels := containerLabels(old)
+	privileged, _ := old.HostConfig["Privileged"].(bool)
+	if !strings.HasPrefix(image, s.cfg.ImageRepository+":") || !tagPattern.MatchString(tagOf(image)) ||
+		labels["com.ovpanel.managed"] != "true" || labels["com.ovpanel.role"] != "openvpn" || privileged {
+		s.fail(ctx, cause+"；恢复规格不属于允许的受管 OpenVPN 容器")
 		return
 	}
 	if current, _, err := s.docker.inspectContainer(ctx, s.cfg.ContainerName); err == nil {
@@ -531,7 +544,14 @@ func (s *Service) writePin(image string) error {
 }
 
 func (s *Service) loadTask() {
-	data, err := os.ReadFile(filepath.Join(s.cfg.StateDir, "task.json"))
+	path := filepath.Join(s.cfg.StateDir, "task.json")
+	if err := validateStateFile(path); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			s.log.Warn("ignore unsafe maintenance state", "error", err)
+		}
+		return
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return
 	}
