@@ -138,6 +138,8 @@ OpenVPN 容器重启，避免旧客户端流量回落到默认路由。新增或
 - `main` 的 `VERSION` 必须是正式版本，不能带预发布后缀。
 - `dev` 分支使用 `<version>-dev`，始终只对应一个 `dev` 标签和一份预发布
   Release；每次推送覆盖重建，不会堆积多个版本号。
+- Release 更新内容按 Conventional Commits 类型分组（feat、fix、perf、docs、ci 等），
+  优先使用上一次发布标签到当前提交的范围。
 - 镜像内嵌的版本号来自 `VERSION`（例如 `0.0.1-dev`），Docker 标签仍按上表。
 - 每份 Release 都附带源代码归档（Source code zip/tar.gz），并由面板侧栏检查
   正式版本、展示该版本的更新说明；dev 和预发布 Release 不参与更新判断。面板

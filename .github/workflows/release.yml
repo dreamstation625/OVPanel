@@ -199,10 +199,31 @@ jobs:
           LATEST: ${{ needs.prepare.outputs.latest }}
         run: |
           set -euo pipefail
+
+          # 更新内容按 Conventional Commits 类型分组；优先使用上一次发布标签
+          # 到当前提交的范围，找不到可用基准时退回最近 20 条。
+          git fetch --tags --force >/dev/null 2>&1 || true
+          base=""
+          if [ "$TAG" = "dev" ]; then
+            base="$(git describe --tags --abbrev=0 --match 'dev' HEAD 2>/dev/null || true)"
+          elif [ "$PRERELEASE" = "true" ]; then
+            base="$(git describe --tags --abbrev=0 --exclude 'dev' HEAD 2>/dev/null || true)"
+          else
+            base="$(git describe --tags --abbrev=0 --exclude 'dev' --exclude '*-pre' HEAD 2>/dev/null || true)"
+          fi
+          range=""
+          if [ -n "$base" ] && [ "$base" != "$TAG" ] && [ "$(git rev-list --count "${base}..HEAD")" -gt 0 ]; then
+            range="${base}..HEAD"
+          fi
+          if [ -n "$range" ]; then
+            changes="$(bash "$GITHUB_WORKSPACE/.github/scripts/release-notes.sh" --range "$range" --limit 20)"
+          else
+            changes="$(bash "$GITHUB_WORKSPACE/.github/scripts/release-notes.sh" --limit 20)"
+          fi
+
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release delete "$TAG" --yes --cleanup-tag
           fi
-          changes="$(git log --pretty=format:'- %s' --no-merges -n 20)"
           notes="$(printf '## 更新内容\n\n%s\n\n## 交付\n\n- 源代码：GitHub Release 页面自动提供 Source code (zip/tar.gz)\n- 容器镜像：ovpanel 与 ovpanel-openvpn 对应版本镜像\n' "$changes")"
           args=(--target "$GITHUB_SHA" --title "$TAG" --notes "$notes")
           if [ "$PRERELEASE" = "true" ]; then
