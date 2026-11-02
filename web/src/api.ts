@@ -183,6 +183,12 @@ export interface ServerConfig {
   protocol: 'udp' | 'tcp'
   port: number
   dns: string[]
+  dataCiphers: string[]
+  authDigest: string
+  tlsMinVersion: string
+  keepaliveInterval: number
+  keepaliveTimeout: number
+  maxClients: number
   routeMode: 'split' | 'global'
   allowedInternal: string[]
   allowClientNetworks: boolean

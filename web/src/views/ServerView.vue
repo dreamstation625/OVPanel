@@ -14,6 +14,12 @@ const form = reactive<ServerConfig>({
   protocol: 'udp',
   port: 1194,
   dns: ['119.29.29.29'],
+  dataCiphers: ['AES-256-GCM', 'AES-128-GCM'],
+  authDigest: 'SHA256',
+  tlsMinVersion: '1.2',
+  keepaliveInterval: 10,
+  keepaliveTimeout: 60,
+  maxClients: 0,
   routeMode: 'split',
   allowedInternal: [],
   allowClientNetworks: false,
@@ -91,9 +97,30 @@ const routeOptions = [
   { label: '仅指定网段经过 VPN', value: 'split' },
   { label: '全部 IPv4 流量经过 VPN', value: 'global' },
 ]
+const cipherOptions = [
+  { label: 'AES-256-GCM', value: 'AES-256-GCM' },
+  { label: 'AES-128-GCM', value: 'AES-128-GCM' },
+  { label: 'CHACHA20-POLY1305', value: 'CHACHA20-POLY1305' },
+  { label: 'AES-256-CBC', value: 'AES-256-CBC' },
+  { label: 'AES-128-CBC', value: 'AES-128-CBC' },
+]
+const authOptions = [
+  { label: 'SHA256', value: 'SHA256' },
+  { label: 'SHA512', value: 'SHA512' },
+]
+const tlsOptions = [
+  { label: 'TLS 1.2', value: '1.2' },
+  { label: 'TLS 1.3', value: '1.3' },
+]
 
 function applyToForm(config: ServerConfig) {
   Object.assign(form, config)
+  form.dataCiphers = config.dataCiphers?.length ? [...config.dataCiphers] : ['AES-256-GCM', 'AES-128-GCM']
+  form.authDigest = config.authDigest || 'SHA256'
+  form.tlsMinVersion = config.tlsMinVersion || '1.2'
+  form.keepaliveInterval = config.keepaliveInterval || 10
+  form.keepaliveTimeout = config.keepaliveTimeout || 60
+  form.maxClients = config.maxClients ?? 0
   dnsText.value = config.dns.join(', ')
   internalText.value = config.allowedInternal.join(', ')
   extrasText.value = config.extraDirectives.join('\n')
@@ -276,6 +303,42 @@ onMounted(load)
             </div>
             <NSwitch v-model:value="form.blockIpv6" aria-label="阻断 IPv6" />
           </div>
+          <h3 class="form-section-title">加密与连接</h3>
+          <div class="two-col">
+            <NFormItem label="数据加密算法" required>
+              <NSelect
+                v-model:value="form.dataCiphers"
+                multiple
+                :options="cipherOptions"
+                :max-tag-count="3"
+              />
+            </NFormItem>
+            <NFormItem label="控制通道认证" required>
+              <NSelect v-model:value="form.authDigest" :options="authOptions" />
+            </NFormItem>
+          </div>
+          <div class="two-col">
+            <NFormItem label="TLS 最低版本" required>
+              <NSelect v-model:value="form.tlsMinVersion" :options="tlsOptions" />
+            </NFormItem>
+            <NFormItem label="最大客户端数">
+              <NInputNumber v-model:value="form.maxClients" :min="0" :max="10000" />
+            </NFormItem>
+          </div>
+          <div class="two-col">
+            <NFormItem label="keepalive 间隔（秒）" required>
+              <NInputNumber v-model:value="form.keepaliveInterval" :min="1" :max="3600" />
+            </NFormItem>
+            <NFormItem label="keepalive 超时（秒）" required>
+              <NInputNumber v-model:value="form.keepaliveTimeout" :min="1" :max="86400" />
+            </NFormItem>
+          </div>
+          <p class="hint">
+            数据加密算法按 AES-256-GCM、AES-128-GCM、CHACHA20-POLY1305、AES-256-CBC、AES-128-CBC 的顺序协商，与勾选顺序无关。
+          </p>
+          <p class="hint">
+            优先使用 GCM/CHACHA20；CBC 仅用于兼容旧客户端。修改后需重新下载客户端 .ovpn 并重连；最大客户端数为 0 表示不额外限制。
+          </p>
           <NFormItem label="额外指令">
             <NInput
               v-model:value="extrasText"
@@ -443,6 +506,15 @@ onMounted(load)
 .surface-meta {
   color: var(--text-3);
   font-size: 11.5px;
+}
+
+.form-section-title {
+  margin: 18px 0 12px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 640;
 }
 
 .two-col {

@@ -23,12 +23,18 @@ const (
 
 // Config 是一份完整的服务端期望配置。
 type Config struct {
-	VPNNetwork      string    `json:"vpnNetwork"`
-	Protocol        string    `json:"protocol"`
-	Port            int       `json:"port"`
-	DNS             []string  `json:"dns"`
-	RouteMode       RouteMode `json:"routeMode"`
-	AllowedInternal []string  `json:"allowedInternal"` // 字段名保留兼容；值为任意 IPv4 目标网段
+	VPNNetwork        string    `json:"vpnNetwork"`
+	Protocol          string    `json:"protocol"`
+	Port              int       `json:"port"`
+	DNS               []string  `json:"dns"`
+	DataCiphers       []string  `json:"dataCiphers"`
+	AuthDigest        string    `json:"authDigest"`
+	TLSMinVersion     string    `json:"tlsMinVersion"`
+	KeepaliveInterval int       `json:"keepaliveInterval"`
+	KeepaliveTimeout  int       `json:"keepaliveTimeout"`
+	MaxClients        int       `json:"maxClients"`
+	RouteMode         RouteMode `json:"routeMode"`
+	AllowedInternal   []string  `json:"allowedInternal"` // 字段名保留兼容；值为任意 IPv4 目标网段
 	// AllowClientNetworks 是能否访问其他客户端共享内网的默认值。
 	AllowClientNetworks bool     `json:"allowClientNetworks"`
 	AllowInterClient    bool     `json:"allowInterClient"`
@@ -43,6 +49,12 @@ func Defaults() Config {
 		Protocol:            "udp",
 		Port:                1194,
 		DNS:                 []string{"119.29.29.29"},
+		DataCiphers:         []string{"AES-256-GCM", "AES-128-GCM"},
+		AuthDigest:          "SHA256",
+		TLSMinVersion:       "1.2",
+		KeepaliveInterval:   10,
+		KeepaliveTimeout:    60,
+		MaxClients:          0,
 		RouteMode:           RouteSplit,
 		AllowedInternal:     []string{},
 		AllowClientNetworks: false,
@@ -93,6 +105,45 @@ func Prepare(input Config) (Config, error) {
 		if ip == nil || ip.To4() == nil {
 			return Config{}, fmt.Errorf("DNS 必须是 IPv4 地址：%q", entry)
 		}
+	}
+
+	dataCiphers, err := normalizeDataCiphers(cfg.DataCiphers)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.DataCiphers = dataCiphers
+	cfg.AuthDigest = strings.ToUpper(strings.TrimSpace(cfg.AuthDigest))
+	if cfg.AuthDigest == "" {
+		cfg.AuthDigest = "SHA256"
+	}
+	switch cfg.AuthDigest {
+	case "SHA256", "SHA512":
+	default:
+		return Config{}, fmt.Errorf("控制通道认证只能是 SHA256 或 SHA512")
+	}
+	cfg.TLSMinVersion = strings.TrimSpace(cfg.TLSMinVersion)
+	if cfg.TLSMinVersion == "" {
+		cfg.TLSMinVersion = "1.2"
+	}
+	switch cfg.TLSMinVersion {
+	case "1.2", "1.3":
+	default:
+		return Config{}, fmt.Errorf("TLS 最低版本只能是 1.2 或 1.3")
+	}
+	if cfg.KeepaliveInterval == 0 {
+		cfg.KeepaliveInterval = 10
+	}
+	if cfg.KeepaliveTimeout == 0 {
+		cfg.KeepaliveTimeout = 60
+	}
+	if cfg.KeepaliveInterval < 1 || cfg.KeepaliveInterval > 3600 {
+		return Config{}, fmt.Errorf("keepalive 间隔需在 1 到 3600 秒之间")
+	}
+	if cfg.KeepaliveTimeout < 1 || cfg.KeepaliveTimeout > 86400 {
+		return Config{}, fmt.Errorf("keepalive 超时需在 1 到 86400 秒之间")
+	}
+	if cfg.MaxClients < 0 || cfg.MaxClients > 10000 {
+		return Config{}, fmt.Errorf("最大客户端数需在 0 到 10000 之间")
 	}
 
 	normalizedAllowed, err := netpolicy.PrepareTargets(cfg.VPNNetwork, cfg.AllowedInternal)
@@ -154,4 +205,48 @@ func uniqueStrings(values []string) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+var dataCipherOrder = []string{
+	"AES-256-GCM",
+	"AES-128-GCM",
+	"CHACHA20-POLY1305",
+	"AES-256-CBC",
+	"AES-128-CBC",
+}
+
+func normalizeDataCiphers(values []string) ([]string, error) {
+	if values == nil {
+		return append([]string(nil), dataCipherOrder[:2]...), nil
+	}
+	allowed := make(map[string]struct{}, len(dataCipherOrder))
+	for _, name := range dataCipherOrder {
+		allowed[name] = struct{}{}
+	}
+	selected := map[string]struct{}{}
+	for _, raw := range values {
+		name := strings.ToUpper(strings.TrimSpace(raw))
+		if name == "" {
+			continue
+		}
+		if _, ok := allowed[name]; !ok {
+			return nil, fmt.Errorf("数据加密算法不合法：%q", raw)
+		}
+		selected[name] = struct{}{}
+	}
+	if len(selected) == 0 {
+		return nil, fmt.Errorf("至少选择一个数据加密算法")
+	}
+	out := make([]string, 0, len(selected))
+	for _, name := range dataCipherOrder {
+		if _, ok := selected[name]; ok {
+			out = append(out, name)
+		}
+	}
+	return out, nil
+}
+
+// JoinDataCiphers 返回 OpenVPN data-ciphers 使用的冒号分隔列表。
+func JoinDataCiphers(values []string) string {
+	return strings.Join(values, ":")
 }

@@ -69,15 +69,21 @@ func TestServerConfigDraftAndApply(t *testing.T) {
 	}
 
 	config := map[string]any{
-		"vpnNetwork":       "10.9.0.0/16",
-		"protocol":         "udp",
-		"port":             1194,
-		"dns":              []string{"1.1.1.1"},
-		"routeMode":        "split",
-		"allowedInternal":  []string{"192.168.99.0/24"},
-		"allowInterClient": false,
-		"blockIpv6":        true,
-		"extraDirectives":  []string{"tun-mtu 1500"},
+		"vpnNetwork":        "10.9.0.0/16",
+		"protocol":          "udp",
+		"port":              1194,
+		"dns":               []string{"1.1.1.1"},
+		"dataCiphers":       []string{"AES-256-GCM", "CHACHA20-POLY1305"},
+		"authDigest":        "SHA512",
+		"tlsMinVersion":     "1.3",
+		"keepaliveInterval": 15,
+		"keepaliveTimeout":  90,
+		"maxClients":        100,
+		"routeMode":         "split",
+		"allowedInternal":   []string{"192.168.99.0/24"},
+		"allowInterClient":  false,
+		"blockIpv6":         true,
+		"extraDirectives":   []string{"tun-mtu 1500"},
 	}
 	preview := doJSON(t, h, http.MethodPost, "/api/server/config/preview", "127.0.0.1:5000", config, cookies...)
 	if preview.Code != http.StatusOK || !strings.Contains(preview.Body.String(), `crl-verify`) {
@@ -94,7 +100,11 @@ func TestServerConfigDraftAndApply(t *testing.T) {
 	if err := json.Unmarshal(draft.Body.Bytes(), &draftBody); err != nil {
 		t.Fatalf("解析草稿失败：%v", err)
 	}
-	if draftBody.Draft.Config.VPNNetwork != "10.9.0.0/16" {
+	if draftBody.Draft.Config.VPNNetwork != "10.9.0.0/16" ||
+		draftBody.Draft.Config.AuthDigest != "SHA512" ||
+		draftBody.Draft.Config.TLSMinVersion != "1.3" ||
+		draftBody.Draft.Config.KeepaliveInterval != 15 ||
+		draftBody.Draft.Config.MaxClients != 100 {
 		t.Fatalf("草稿内容异常：%+v", draftBody.Draft.Config)
 	}
 

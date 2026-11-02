@@ -171,3 +171,94 @@ func TestSupportedDirectivesIsStable(t *testing.T) {
 		}
 	}
 }
+
+func TestCryptoAndLimitsRender(t *testing.T) {
+	cfg := Defaults()
+	cfg.DataCiphers = []string{"CHACHA20-POLY1305", "AES-128-GCM"}
+	cfg.AuthDigest = "sha512"
+	cfg.TLSMinVersion = "1.3"
+	cfg.KeepaliveInterval = 20
+	cfg.KeepaliveTimeout = 120
+	cfg.MaxClients = 50
+	prepared, err := Prepare(cfg)
+	if err != nil {
+		t.Fatalf("加密配置被拒绝：%v", err)
+	}
+	if !reflect.DeepEqual(prepared.DataCiphers, []string{"AES-128-GCM", "CHACHA20-POLY1305"}) {
+		t.Fatalf("加密算法顺序异常：%v", prepared.DataCiphers)
+	}
+	if prepared.AuthDigest != "SHA512" {
+		t.Fatalf("认证算法未规范化：%q", prepared.AuthDigest)
+	}
+	text, _, err := Render(cfg)
+	if err != nil {
+		t.Fatalf("渲染失败：%v", err)
+	}
+	for _, want := range []string{
+		"data-ciphers AES-128-GCM:CHACHA20-POLY1305",
+		"auth SHA512",
+		"tls-version-min 1.3",
+		"keepalive 20 120",
+		"max-clients 50",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("缺少 %q：\n%s", want, text)
+		}
+	}
+}
+
+func TestCryptoAndLimitsValidation(t *testing.T) {
+	cases := []Config{
+		func() Config { c := Defaults(); c.DataCiphers = []string{}; return c }(),
+		func() Config { c := Defaults(); c.DataCiphers = []string{"RC4"}; return c }(),
+		func() Config { c := Defaults(); c.AuthDigest = "MD5"; return c }(),
+		func() Config { c := Defaults(); c.TLSMinVersion = "1.1"; return c }(),
+		func() Config { c := Defaults(); c.KeepaliveInterval = -1; return c }(),
+		func() Config { c := Defaults(); c.KeepaliveTimeout = 90000; return c }(),
+		func() Config { c := Defaults(); c.MaxClients = 10001; return c }(),
+	}
+	for _, cfg := range cases {
+		if _, err := Prepare(cfg); err == nil {
+			t.Fatalf("非法加密/连接配置应被拒绝：%+v", cfg)
+		}
+	}
+}
+
+func TestDefaultCryptoValues(t *testing.T) {
+	input := Defaults()
+	input.DataCiphers = nil
+	input.AuthDigest = ""
+	input.TLSMinVersion = ""
+	input.KeepaliveInterval = 0
+	input.KeepaliveTimeout = 0
+	cfg, err := Prepare(input)
+	if err != nil {
+		t.Fatalf("旧配置补齐默认值失败：%v", err)
+	}
+	if !reflect.DeepEqual(cfg.DataCiphers, []string{"AES-256-GCM", "AES-128-GCM"}) ||
+		cfg.AuthDigest != "SHA256" || cfg.TLSMinVersion != "1.2" ||
+		cfg.KeepaliveInterval != 10 || cfg.KeepaliveTimeout != 60 ||
+		cfg.MaxClients != 0 {
+		t.Fatalf("默认加密/连接值异常：%+v", cfg)
+	}
+}
+
+func TestCBCCompatibilityCiphers(t *testing.T) {
+	cfg := Defaults()
+	cfg.DataCiphers = []string{"AES-128-CBC", "AES-256-CBC"}
+	prepared, err := Prepare(cfg)
+	if err != nil {
+		t.Fatalf("CBC 兼容算法被拒绝：%v", err)
+	}
+	want := []string{"AES-256-CBC", "AES-128-CBC"}
+	if !reflect.DeepEqual(prepared.DataCiphers, want) {
+		t.Fatalf("CBC 顺序异常：got=%v want=%v", prepared.DataCiphers, want)
+	}
+	text, _, err := Render(cfg)
+	if err != nil {
+		t.Fatalf("渲染失败：%v", err)
+	}
+	if !strings.Contains(text, "data-ciphers AES-256-CBC:AES-128-CBC") {
+		t.Fatalf("CBC 配置未渲染：\n%s", text)
+	}
+}

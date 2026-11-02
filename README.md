@@ -72,6 +72,19 @@ docker compose -f compose.yaml -f compose.hostnet.yaml up -d --build
 数据目录和升级方式见 [deploy/README.md](deploy/README.md)。不提供独立二进制启动
 或发布方式。
 
+## OpenVPN 加密与连接
+
+服务端页面可以选择数据加密算法、控制通道认证、TLS 最低版本、keepalive 间隔/超时
+和最大客户端数。可选的数据加密算法包括 `AES-256-GCM`、`AES-128-GCM`、
+`CHACHA20-POLY1305`、`AES-256-CBC`、`AES-128-CBC`；服务端按上述固定顺序协商，
+与勾选顺序无关，优先使用 GCM/CHACHA20，CBC 仅用于兼容旧客户端。默认值与旧版本一致：`AES-256-GCM:AES-128-GCM`、
+`SHA256`、TLS 1.2、keepalive `10 60`，最大客户端数不额外限制。
+
+导出的客户端 `.ovpn` 会使用当前生效服务端的加密设置。修改加密算法、认证或
+TLS 最低版本并应用后，需要重新下载客户端配置并重连；只支持旧算法或旧 TLS
+版本的客户端可能无法连接。选择 `CHACHA20-POLY1305` 或 TLS 1.3 前，请确认
+客户端版本支持。
+
 ## 客户端内网共享
 
 除了服务端自己能访问的目标网段，还可以让一台客户端把它后面的内网共享给其他

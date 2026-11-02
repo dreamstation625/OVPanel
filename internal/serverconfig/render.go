@@ -67,15 +67,18 @@ func Render(input Config) (string, string, error) {
 	fmt.Fprintf(&b, "crl-verify %s\n", PathCRL)
 	b.WriteString("dh none\n")
 	b.WriteString("ecdh-curve prime256v1\n")
-	b.WriteString("tls-version-min 1.2\n")
-	b.WriteString("data-ciphers AES-256-GCM:AES-128-GCM\n")
-	b.WriteString("auth SHA256\n")
+	fmt.Fprintf(&b, "tls-version-min %s\n", cfg.TLSMinVersion)
+	fmt.Fprintf(&b, "data-ciphers %s\n", JoinDataCiphers(cfg.DataCiphers))
+	fmt.Fprintf(&b, "auth %s\n", cfg.AuthDigest)
 	b.WriteString("verify-client-cert optional\n")
 	b.WriteString("auth-user-pass-optional\n")
 	b.WriteString("duplicate-cn\n")
+	if cfg.MaxClients > 0 {
+		fmt.Fprintf(&b, "max-clients %d\n", cfg.MaxClients)
+	}
 	fmt.Fprintf(&b, "management %s unix\n", ManagementSocket)
 	b.WriteString("management-client-auth\n")
-	b.WriteString("keepalive 10 60\n")
+	fmt.Fprintf(&b, "keepalive %d %d\n", cfg.KeepaliveInterval, cfg.KeepaliveTimeout)
 	b.WriteString("persist-key\n")
 	b.WriteString("persist-tun\n")
 

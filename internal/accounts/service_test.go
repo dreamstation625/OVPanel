@@ -2,6 +2,7 @@ package accounts
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/dreamstation625/ovpanel/internal/auth"
 	"github.com/dreamstation625/ovpanel/internal/pki"
 	"github.com/dreamstation625/ovpanel/internal/secretbox"
+	"github.com/dreamstation625/ovpanel/internal/serverconfig"
 	"github.com/dreamstation625/ovpanel/internal/store"
 )
 
@@ -365,6 +367,53 @@ func TestUpdateProfileClientNetworks(t *testing.T) {
 		if _, err := svc.UpdateProfilePolicy(ctx, second.Profile.ID, store.RouteInherit, store.AccessInherit,
 			nil, bad, store.ClientLANInherit, ""); !errors.Is(err, ErrValidation) {
 			t.Fatalf("非法共享内网应被拒绝 %v：%v", bad, err)
+		}
+	}
+}
+
+func TestExportUsesActiveServerCrypto(t *testing.T) {
+	svc, st := newTestService(t)
+	ctx := context.Background()
+	if _, err := svc.SaveExportSettings(ctx, ExportSettings{Host: "vpn.example.com", Port: 1194, Proto: "udp"}); err != nil {
+		t.Fatalf("保存导出设置失败：%v", err)
+	}
+	created, err := svc.CreateUserWithProfile(ctx,
+		UserInput{DisplayName: "导出用户"},
+		ProfileInput{Name: "导出配置", AuthType: store.AuthCertificate})
+	if err != nil {
+		t.Fatalf("创建配置失败：%v", err)
+	}
+	cfg := serverconfig.Defaults()
+	cfg.DataCiphers = []string{"CHACHA20-POLY1305"}
+	cfg.AuthDigest = "SHA512"
+	cfg.TLSMinVersion = "1.3"
+	prepared, err := serverconfig.Prepare(cfg)
+	if err != nil {
+		t.Fatalf("准备服务端配置失败：%v", err)
+	}
+	payload, err := json.Marshal(prepared)
+	if err != nil {
+		t.Fatalf("编码服务端配置失败：%v", err)
+	}
+	_, hash, err := serverconfig.Render(prepared)
+	if err != nil {
+		t.Fatalf("渲染服务端配置失败：%v", err)
+	}
+	revision, err := st.SaveServerConfigDraft(ctx, string(payload), hash, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("保存服务端草稿失败：%v", err)
+	}
+	if _, err := st.ActivateServerConfig(ctx, revision.Revision, time.Now().UTC()); err != nil {
+		t.Fatalf("激活服务端配置失败：%v", err)
+	}
+	result, err := svc.Export(ctx, created.Profile.ID)
+	if err != nil {
+		t.Fatalf("导出失败：%v", err)
+	}
+	content := string(result.Content)
+	for _, want := range []string{"data-ciphers CHACHA20-POLY1305", "auth SHA512", "tls-version-min 1.3"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("导出配置缺少 %q：\n%s", want, content)
 		}
 	}
 }

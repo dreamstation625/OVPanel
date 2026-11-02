@@ -372,22 +372,25 @@ func (s *Service) FixedIPRange(ctx context.Context) (serverconfig.AddressPlan, e
 }
 
 func (s *Service) activeVPNNetwork(ctx context.Context) (string, error) {
+	cfg, err := s.activeServerConfig(ctx)
+	if err != nil {
+		return "", err
+	}
+	return cfg.VPNNetwork, nil
+}
+
+func (s *Service) activeServerConfig(ctx context.Context) (serverconfig.Config, error) {
 	state, err := s.store.ServerConfigState(ctx)
 	if err != nil {
-		return "", err
+		return serverconfig.Config{}, err
 	}
-	if state.Active == nil {
-		return serverconfig.Defaults().VPNNetwork, nil
+	cfg := serverconfig.Defaults()
+	if state.Active != nil {
+		if err := json.Unmarshal([]byte(state.Active.ConfigJSON), &cfg); err != nil {
+			return serverconfig.Config{}, fmt.Errorf("解析生效服务端配置: %w", err)
+		}
 	}
-	var cfg serverconfig.Config
-	if err := json.Unmarshal([]byte(state.Active.ConfigJSON), &cfg); err != nil {
-		return "", fmt.Errorf("解析生效服务端配置: %w", err)
-	}
-	prepared, err := serverconfig.Prepare(cfg)
-	if err != nil {
-		return "", err
-	}
-	return prepared.VPNNetwork, nil
+	return serverconfig.Prepare(cfg)
 }
 
 // ResetPassword 为证书+密码或仅密码配置生成新密码，只返回一次。
@@ -495,11 +498,18 @@ func (s *Service) Export(ctx context.Context, profileID string) (ExportResult, e
 	if err != nil {
 		return ExportResult{}, fmt.Errorf("解密 tls-crypt 密钥: %w", err)
 	}
+	serverCfg, err := s.activeServerConfig(ctx)
+	if err != nil {
+		return ExportResult{}, err
+	}
 
 	config := openvpnprofile.ClientConfig{
 		Host:            setting.Host,
 		Port:            setting.Port,
 		Proto:           setting.Proto,
+		DataCiphers:     serverconfig.JoinDataCiphers(serverCfg.DataCiphers),
+		AuthDigest:      serverCfg.AuthDigest,
+		TLSMinVersion:   serverCfg.TLSMinVersion,
 		TLSCryptKey:     string(tlsKey),
 		RequireUserPass: profile.AuthType != store.AuthCertificate,
 	}
