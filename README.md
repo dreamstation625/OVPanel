@@ -1,190 +1,217 @@
+<div align="center">
+
 # OVPanel
 
-OpenVPN 服务端管理面板。单实例部署，面向少量管理员与 20 条以内并发连接；
-Go 提供 HTTP 服务并内嵌 Vue 3 前端，SQLite 持久化。
-支持 Linux amd64 与 arm64。
+**OpenVPN 服务端管理面板**
 
-## 架构
+用户与客户端管理 · 网络策略 · 流量统计 · 加密备份
 
-严格两个容器：
+![Go](https://img.shields.io/badge/Go-00ADD8?style=flat-square&logo=go&logoColor=white)
+![Vue 3](https://img.shields.io/badge/Vue_3-42B883?style=flat-square&logo=vuedotjs&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat-square&logo=docker&logoColor=white)
+![Linux amd64 / arm64](https://img.shields.io/badge/Linux-amd64%20%7C%20arm64-007F73?style=flat-square&logo=linux&logoColor=white)
 
-- `panel`：面板 Web、内嵌前端与 SQLite 数据，唯一发布管理端口的容器。
-- `openvpn`：OpenVPN 与运行代理，不发布管理端口，不挂载 Docker Socket。
+**[界面预览](#界面预览)** · **[快速部署](#快速部署)** · **[使用指南](#开始使用)** · **[部署手册](deploy/README.md)** · **[Releases](https://github.com/dreamstation625/OVPanel/releases)**
 
-面板前后端一体，运行期不需要 Node.js。侧栏显示当前版本，并会检查 GitHub 正式
-Release：有新的正式版本时提示并展示更新说明，但网页不执行自更新；面板与 OpenVPN
-的升级都按 Release 说明在宿主机用 Docker 命令完成。面板容器内的受限维护进程单独
-持有 Docker Socket，Web 进程不直接访问 Docker。初始化为一次性口令，无默认管理员密码。
+</div>
 
-## 部署方式
+---
 
-只通过 Docker 部署。交付物是 panel 与 openvpn 两个 Docker 镜像，不单独构建、
-发布或提供 Go 二进制包；部署、升级和回退都使用仓库的 Compose 文件与部署脚本。
+## 功能特性
 
-运行参数通过 Compose 环境变量传入：
+| 能力 | 功能 |
+| --- | --- |
+| **用户与客户端** | 多配置管理，证书 / 证书加密码 / 仅密码认证，导出 `.ovpn` |
+| **访问控制** | 到期时间、并发上限、流量额度、每条连接独立上传 / 下载限速 |
+| **网络策略** | 内网分流、IPv4 全局出口、网段权限、客户端互访、固定 IP、内网共享 |
+| **服务端管理** | 网段、UDP / TCP、端口、DNS、加密与 TLS 参数、额外指令检查、启停与重启 |
+| **连接与统计** | 在线连接、来源地址、实时速率、历史流量、操作记录、手动断开连接 |
+| **备份与恢复** | 手动 / 每日自动加密备份、保留策略、下载与恢复前检查 |
+| **界面与管理** | 浅色 / 深色 / 跟随系统，手机适配，HTTPS，正式版本更新提示 |
 
-| 变量 | 默认值 | 说明 |
+## 界面预览
+
+![OVPanel 概览：在线连接、流量趋势与系统信息](img/01.webp)
+
+<p align="center"><sub>在线连接 · 实时速率 · 流量趋势 · 服务状态</sub></p>
+
+<details>
+<summary><strong>展开更多界面</strong> · 连接管理 / 用户 / 客户端 / 服务端</summary>
+
+| 连接管理 | 用户列表 |
+| :---: | :---: |
+| [![连接管理：在线连接、来源地址、实时速率与断开操作](img/02.webp)](img/02.webp) | [![用户列表：用户状态、配置数量、在线连接与累计流量](img/03-1.webp)](img/03-1.webp) |
+| **客户端配置** | **服务端设置** |
+| [![客户端配置：认证状态、路由策略、路由通告与固定 VPN 地址](img/03-2.webp)](img/03-2.webp) | [![服务端设置：VPN 网段、协议、端口、DNS 与网络策略](img/04.webp)](img/04.webp) |
+
+点击截图可查看原图。
+
+</details>
+
+---
+
+## 快速部署
+
+> **推荐 host 网络**：OpenVPN 直接监听宿主数据端口，避免 Docker bridge 转发影响客户端来源地址的记录。面板仍使用 bridge，默认仅绑定 `127.0.0.1:8080`。
+
+### 1. 准备环境
+
+- Linux amd64 / arm64，使用 rootful Docker Engine。
+- Docker Compose v2，需支持 host 覆盖文件中的 `!reset` 标签。
+- 宿主具备 `/dev/net/tun`，可加载 `ifb`、`sch_htb`、`act_mirred` 内核模块。
+- VPN 数据端口（默认 `1194/udp`）和本机管理端口 `9443/tcp` 未被占用。
+
+Windows / macOS Docker Desktop 和 rootless Docker 不作为生产部署环境。
+
+以下命令均在 Linux 宿主执行：
+
+```bash
+git clone https://github.com/dreamstation625/OVPanel.git
+cd OVPanel
+cp .env.example .env
+./deploy/check-host.sh --data-dir ./data
+```
+
+处理检查中的 `[fail]` 项。host 模式需在宿主开启 IPv4 转发并持久化：
+
+```bash
+printf 'net.ipv4.ip_forward=1\n' | sudo tee /etc/sysctl.d/90-ovpanel.conf
+sudo sysctl -p /etc/sysctl.d/90-ovpanel.conf
+```
+
+### 2. 选择镜像并启动
+
+编辑 `.env`，设置两个镜像使用相同的发布标签。例如使用最新正式版：
+
+```dotenv
+OVPANEL_PANEL_IMAGE=dreamstation625/ovpanel:latest
+OVPANEL_OPENVPN_IMAGE=dreamstation625/ovpanel-openvpn:latest
+```
+
+建议生产环境按 [Release](https://github.com/dreamstation625/OVPanel/releases) 固定具体版本。`dev` 为开发预发布标签；复制开发分支的 `.env.example` 后，请确认是否需要切换。
+
+```bash
+docker compose -f compose.yaml -f compose.hostnet.yaml pull
+docker compose -f compose.yaml -f compose.hostnet.yaml up -d --no-build
+docker compose -f compose.yaml -f compose.hostnet.yaml ps
+```
+
+host 模式下，OpenVPN 的 nftables 规则作用于宿主网络；入口脚本维护 VPN 地址池转发及 UFW 数据端口规则。云服务器还需在安全组放行 VPN 数据端口，`9443` 管理端口仅监听回环地址，不要对外开放。
+
+后续启动、重建和升级均保留 `-f compose.yaml -f compose.hostnet.yaml`。此模式不使用 `deploy/compose.sh` 或 `deploy/ensure-forwarding.sh`，这两个脚本用于 bridge 部署。
+
+### 3. 初始化管理员
+
+读取一次性初始化口令：
+
+```bash
+docker compose -f compose.yaml -f compose.hostnet.yaml exec panel cat /data/bootstrap-token
+```
+
+在服务器本机打开 `http://127.0.0.1:8080`，输入口令并创建管理员。远程部署时可先在自己的电脑建立 SSH 隧道，再访问同一地址：
+
+```bash
+ssh -L 8080:127.0.0.1:8080 <SSH用户>@<服务器地址>
+```
+
+没有默认管理员密码。初始化成功后口令文件自动删除，初始化接口关闭。需要公网或局域网管理时，先按[部署手册的 HTTPS 说明](deploy/README.md#https)配置证书，再调整绑定地址。
+
+<details>
+<summary><strong>可选：使用 bridge 网络部署</strong></summary>
+
+需要将 OpenVPN 网络与宿主隔离时，使用基础 Compose 文件和部署脚本：
+
+```bash
+./deploy/compose.sh pull
+./deploy/compose.sh up -d --no-build
+```
+
+`compose.sh up -d` 会检查并补齐项目 bridge 网络的宿主转发和 NAT，需要 root 或免密 sudo。使用裸 `docker compose` 或 1Panel 部署时，见[宿主转发与 NAT](deploy/README.md#宿主转发与-nat)。
+
+</details>
+
+## 开始使用
+
+1. 在「服务端」设置 VPN 网段、协议、端口、DNS 和路由策略，保存并应用。
+2. 在「系统 → VPN 连接地址」填写客户端可访问的服务器 IP / 域名与端口。
+3. 在「用户与客户端」添加用户和客户端配置，选择认证方式、权限及使用限制。
+4. 下载 `.ovpn` 文件，导入 OpenVPN 客户端连接；在「在线连接」查看结果。
+5. 在「备份」设置恢复密码和每日备份计划，将备份包下载到其他设备保存。
+
+`.env` 中的 `OVPANEL_VPN_PORT` / `OVPANEL_VPN_PROTO`、服务端配置和客户端连接地址须对应。修改端口或协议后重建 OpenVPN 容器，并检查宿主防火墙与云安全组。
+
+固定 VPN 地址需在 VPN 网段内并避开动态池，设置后该配置并发上限为 1。客户端内网共享的路由与回程要求见[客户端内网共享](deploy/README.md#客户端内网共享)；调整加密参数后的客户端兼容要求见[OpenVPN 加密与连接](deploy/README.md#openvpn-加密与连接)。
+
+## 常用配置
+
+在根目录 `.env` 中修改，完整示例见 [`.env.example`](.env.example)。
+
+<details>
+<summary><strong>展开环境变量说明</strong></summary>
+
+| 变量 | 默认值 / 示例 | 说明 |
 | --- | --- | --- |
-| `OVPANEL_DATA_DIR` | `data` | 数据目录（SQLite、主密钥、引导口令） |
-| `OVPANEL_LISTEN` | `:8080` | 监听地址 |
-| `OVPANEL_TLS_CERT` / `OVPANEL_TLS_KEY` | 空 | 同时设置时启用 HTTPS |
-| `OVPANEL_DEV_SELF_SIGNED` | `false` | 仅本机调试的短期自签名证书 |
-| `OVPANEL_BOOTSTRAP_TOKEN` | 空 | 可选的初始化口令（至少 16 字符） |
-| `OVPANEL_MASTER_KEY` | 空 | 可选主密钥（32 字节 base64/hex）；留空生成 `master.key` |
+| `OVPANEL_PANEL_IMAGE` | `dreamstation625/ovpanel:<tag>` | 面板镜像 |
+| `OVPANEL_OPENVPN_IMAGE` | `dreamstation625/ovpanel-openvpn:<tag>` | OpenVPN 镜像，与面板版本配套 |
+| `OVPANEL_ADMIN_BIND` | `127.0.0.1` | 面板宿主绑定地址 |
+| `OVPANEL_ADMIN_PORT` | `8080` | 面板宿主端口 |
+| `OVPANEL_VPN_PORT` / `OVPANEL_VPN_PROTO` | `1194` / `udp` | VPN 数据端口和协议 |
+| `OVPANEL_VPN_BIND` | `0.0.0.0` | 仅用于 bridge 模式的端口映射绑定 |
+| `OVPANEL_DATA_ROOT` | `./data` | 宿主持久化目录 |
+| `OVPANEL_CERT_DIR` | `./certs` | 宿主 HTTPS 证书目录 |
+| `OVPANEL_TLS_CERT` / `OVPANEL_TLS_KEY` | 空 | 容器内证书 / 私钥路径，同时设置以启用 HTTPS |
 | `OVPANEL_SESSION_TTL` | `12h` | 管理员会话时长，最大 7 天 |
 | `OVPANEL_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 
-`master.key` 与数据库同等敏感：丢失后无法解密已有证书私钥与 tls-crypt 密钥。
-加密备份包会包含主密钥；恢复密码仍需单独保管，二者不要放在同一位置。
+`OVPANEL_BOOTSTRAP_TOKEN` 可指定至少 16 字符的初始化口令，留空自动生成。`OVPANEL_MASTER_KEY` 可注入 32 字节主密钥（base64 / hex），留空生成 `master.key`。`OVPANEL_DEV_SELF_SIGNED` 仅用于本机调试。
 
-## Docker 部署
+</details>
 
-```bash
-cp .env.example .env
-./deploy/check-host.sh --data-dir ./data
-./deploy/compose.sh up -d --build
-```
+## 数据与升级
 
-`compose.sh up -d` 会在启动后自动检查并补齐 `ovpanel` 网络的宿主转发和 NAT；
-需要 root 或免密 sudo，可用 `OVPANEL_AUTO_FORWARD=0` 关闭。若使用裸
-`docker compose` 或 1Panel Compose，首次启动后手动执行一次
-`sudo ./deploy/ensure-forwarding.sh`；规则持久化后不需要每次执行。详见
-[deploy/README.md](deploy/README.md)。
+运行数据保存在 `data/`，HTTPS 证书保存在 `certs/`，重建容器不会删除这些目录。
 
-### host-network 模式
+**请同时保护数据库、`master.key` 和客户端 `.ovpn` 文件。** 丢失主密钥将无法解密已有证书私钥及 tls-crypt 密钥。加密备份包含主密钥，恢复密码需单独保管；运行中请通过面板创建一致性备份。
 
-如果希望 OpenVPN 不经过 Docker bridge、由容器自身自动配置宿主转发，可以使用
-host-network 覆盖文件：
+面板可检查正式 Release 并展示更新说明，升级由管理员在宿主执行 Docker 命令。先创建并验证备份，再在 `.env` 中将两个镜像改为目标版本，按部署时相同的网络模式操作。host 模式示例：
 
 ```bash
-docker compose -f compose.yaml -f compose.hostnet.yaml up -d --build
+docker compose -f compose.yaml -f compose.hostnet.yaml pull
+docker compose -f compose.yaml -f compose.hostnet.yaml up -d --no-build --no-deps --force-recreate panel
+docker compose -f compose.yaml -f compose.hostnet.yaml up -d --no-build --no-deps --force-recreate openvpn
+docker compose -f compose.yaml -f compose.hostnet.yaml ps
 ```
 
-该模式仍只有 panel 与 openvpn 两个容器，但 OpenVPN 直接使用宿主网络，管理端口
-只监听 `127.0.0.1:9443`；entrypoint 会为 VPN 地址池维护宿主转发规则和 UFW 数据
-端口放行。需要 Compose v2.24+（用于 `!reset`）和宿主
-`net.ipv4.ip_forward=1`。OpenVPN 的 nft 规则会作用在宿主网络命名空间，适合希望
-像 ovpn-admin 一样开箱自动转发、且能接受该网络边界的部署。
+重建 OpenVPN 会断开现有连接，请安排维护窗口。版本兼容、恢复与升级细节见[部署手册](deploy/README.md)。
 
-两种模式详细介绍见 [deploy/README.md](deploy/README.md)。
-
-默认只绑定 `127.0.0.1:8080`，不会直接暴露到局域网。部署细节、HTTPS、容器边界、
-数据目录和升级方式见 [deploy/README.md](deploy/README.md)。不提供独立二进制启动
-或发布方式。
-
-## OpenVPN 加密与连接
-
-服务端页面可以选择数据加密算法、控制通道认证算法、TLS 最低版本、keepalive 间隔/超时
-和最大连接数。可选的数据加密算法包括 `AES-256-GCM`、`AES-128-GCM`、
-`CHACHA20-POLY1305`、`AES-256-CBC`、`AES-128-CBC`；服务端按上述固定顺序协商，
-与勾选顺序无关，优先使用 GCM/CHACHA20，CBC 仅用于兼容旧客户端。默认值与旧版本一致：`AES-256-GCM:AES-128-GCM`、
-`SHA256`、TLS 1.2、keepalive `10 60`，最大连接数不额外限制。
-
-导出的客户端 `.ovpn` 会使用当前生效服务端的加密设置。修改加密算法、认证或
-TLS 最低版本并应用后，需要重新下载客户端配置并重连；只支持旧算法或旧 TLS
-版本的客户端可能无法连接。选择 `CHACHA20-POLY1305` 或 TLS 1.3 前，请确认
-客户端版本支持。
-
-## 客户端内网共享
-
-除了服务端自己能访问的目标网段，还可以让一台客户端把它后面的内网共享给其他
-VPN 客户端。例如客户端 A 位于分支办公室，A 连接 VPN 后，其他有权限的客户端
-可以访问 A 后面的 `192.168.50.0/24`。
-
-配置方式：
-
-- 在 A 的配置详情中填写「路由通告」；
-- 服务端页面的「服务端设置」里打开「允许访问其他客户端内网」，或在配置的「访问其他客户端内网」
-  中单独设为允许；
-- 共享内网只支持私网/CGNAT IPv4（`10/8`、`172.16/12`、`192.168/16`、`100.64/10`），
-  不能与 VPN 地址池、服务端本地网络或其他配置共享的网段重叠；
-- 同一个网段只能由一个配置共享。建议共享配置使用固定 IP，并只保持一条连接。
-
-网络行为：
-
-- 其他 VPN 客户端访问共享内网时，服务端不做 SNAT，A 看到的是对方的 VPN 地址
-  （例如 `10.8.0.2`），可在面板「连接管理」中对应到具体用户和配置；
-- 如果 A 自己再做 NAT，共享内网里的设备最终看到的是 A 的地址。要端到端保留来源，
-  A 需要作为该内网的网关，或内网有回程路由，并且不做 NAT；
-- 默认是单向共享：其他客户端可以访问共享内网，共享内网里的设备不能主动访问
-  VPN 客户端，只能回包。若需要内网设备主动访问 VPN 客户端，需要让 A 把
-  LAN→VPN 流量 NAT 成自己的 VPN 地址，或后续启用双向模式；
-- 只支持 IPv4 单播，不支持广播、mDNS、NetBIOS、网络邻居发现；
-- 如果客户端本地已有同网段，本地路由优先，无法通过 VPN 访问该共享网段。
-
-A 侧要求：
-
-- A 必须开启 IPv4 转发，并让共享内网能回到 VPN 地址池：A 是内网网关时通常
-  不需要 NAT；否则一般需要在 A 上对 VPN 源段做 MASQUERADE；
-- Linux / OpenWrt 最容易配置；Windows、macOS 需要手工开启转发和 NAT；
-  手机客户端不支持作为共享网关。
-
-共享网段由运行代理动态维护路由，增删网段不会重启 VPN 服务。A 离线时共享网段
-会被丢弃，不会从服务端默认路由泄漏；已移除的共享网段会保留 blackhole 直到
-OpenVPN 容器重启，避免旧客户端流量回落到默认路由。新增或修改共享网段后，
-共享方需要重新连接以生成新的 `iroute`，需要访问新网段的客户端也需要重新连接
-以获取新的路由。
-
-## 版本与发布
-
-仓库根目录的 `VERSION` 是唯一版本来源，推送后由
-`.github/workflows/release.yml` 自动发布：
-
-| 分支 | 发布条件 | Release | Docker 标签 |
-| --- | --- | --- | --- |
-| `main` | `VERSION` 对应的 tag 不存在 | 正式版，tag 等于 `VERSION` | `<version>`、`latest` |
-| `dev` | 每次推送 | 预发布 | `VERSION` 含 `-dev` 时为 `dev`，否则 `<version>-pre` |
-
-- `main` 的 `VERSION` 必须是正式版本，不能带预发布后缀。
-- `dev` 分支使用 `<version>-dev`，始终只对应一个 `dev` 标签和一份预发布
-  Release；每次推送覆盖重建，不会堆积多个版本号。
-- Release 更新内容按 Conventional Commits 类型分组（feat、fix、perf、docs、ci 等），
-  优先使用上一次发布标签到当前提交的范围。
-- 镜像内嵌的版本号来自 `VERSION`（例如 `0.0.1-dev`），Docker 标签仍按上表。
-- 每份 Release 都附带源代码归档（Source code zip/tar.gz），并由面板侧栏检查
-  正式版本、展示该版本的更新说明；dev 和预发布 Release 不参与更新判断。面板
-  需要能访问 `api.github.com`；网络不通时只提示检查失败，不影响其他功能。
-- 两个镜像都是 `linux/amd64` + `linux/arm64`：
-  `dreamstation625/ovpanel`、`dreamstation625/ovpanel-openvpn`。
-- 工作流读取仓库环境 `DOCKERHUB` 的变量 `DOCKERHUB_USERNAME` 与保密值
-  `DOCKERHUB_TOKEN`。
-
-发布正式版本只需修改 `VERSION` 并推送 `main`：例如从 `0.0.1` 改为 `0.0.2`，
-工作流会创建 `0.0.2` 的 Release，并推送同名镜像与 `latest`。
-
-## 目录
+## 项目结构
 
 ```text
-compose.yaml       严格双容器部署入口（默认 bridge 模式）
-compose.hostnet.yaml host-network 模式覆盖文件
-.env.example       环境变量示例
-cmd/panel/         面板进程入口（Web + 内嵌前端）
-cmd/ovpanel-maintain/ 面板容器内的受限 OpenVPN 维护进程
-cmd/vpn-agent/     OpenVPN 容器进程（运行代理）
-internal/accounts/ 用户、配置、证书与导出编排
-internal/admission/ 三种认证的共享准入判定
-internal/agent/    OpenVPN 子进程、控制包应用与管理接口准入
-internal/agentproto/ 面板到运行代理的控制包格式
-internal/clientroutes/ 客户端共享内网的动态服务端路由
-internal/api/      路由、错误体、中间件、静态资源
-internal/auth/     Argon2id 密码、会话与 CSRF 令牌
-internal/backup/   加密备份包、保留策略与恢复编排
-internal/bootstrap/一次性初始化口令
-internal/config/   环境变量配置
-internal/devtls/   本机调试自签名证书
-internal/dockermaint/ 受限 Docker 维护服务（只更新受管 OpenVPN）
-internal/logging/  脱敏 JSON 日志
-internal/maintclient/ 面板到维护进程的本地客户端
-internal/maintapi/ 面板与维护进程的本地接口类型
-internal/openvpnprofile/ .ovpn 与 tls-crypt 生成
-internal/pki/      CA 与客户端证书生命周期
-internal/runtimeauth/数据库到认证快照的映射
-internal/runtimeenv/容器数据面能力探测
-internal/secretbox/主密钥与私密材料加密
-internal/serverconfig/服务端配置校验、指令兼容清单与渲染
-internal/store/    SQLite 与迁移
-internal/updatecheck/ GitHub Release 版本检查
-internal/vpnruntime/控制包组装与共享控制目录下发
-web/               Vue 3 + Vue Router 源码，构建产物内嵌
-deploy/            Dockerfile、环境变量示例、宿主检查、运行手册
+cmd/                   面板、VPN 运行代理与受限维护进程入口
+internal/              API、认证、用户、证书、策略、统计与备份
+web/                   Vue 3 + Naive UI 前端
+deploy/                Dockerfile、部署检查、网络脚本与运行手册
+img/                   README 界面截图
+compose.yaml           双容器基础配置（bridge）
+compose.hostnet.yaml   OpenVPN host 网络覆盖配置（推荐）
+.env.example           部署环境变量示例
+VERSION                版本号唯一来源
 ```
+
+`panel` 负责 Web、内嵌前端与 SQLite；`openvpn` 运行 OpenVPN 与代理，不挂载 Docker Socket。面板容器内的受限维护进程持有 Docker Socket，Web 进程不直接访问它。容器权限与数据目录说明见[容器边界](deploy/README.md#容器边界)。
+
+---
+
+<div align="center">
+
+**本项目由 ChatGPT + Qoder 完成。**
+
+[↑ 返回顶部](#ovpanel)
+
+</div>
+
+## 免责声明
+
+请仅在合法授权的环境中使用本项目，并遵守适用的法律法规，不得用于违法或未经授权的活动。
+
+本项目按“现状”提供，不对稳定性、安全性或特定用途的适用性作出保证。使用前请自行评估风险，妥善保护账号、密钥与备份。在适用法律允许的范围内，项目作者及贡献者不对使用或修改本项目造成的损失承担责任。
