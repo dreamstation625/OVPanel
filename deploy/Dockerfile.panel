@@ -38,25 +38,33 @@ ARG TARGETARCH=amd64
 RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
       -trimpath -buildvcs=false \
       -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.buildTime=${BUILD_TIME}" \
-      -o /out/panel ./cmd/panel
+      -o /out/panel ./cmd/panel \
+ && GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
+      -trimpath -buildvcs=false \
+      -ldflags "-s -w" \
+      -o /out/ovpanel-maintain ./cmd/ovpanel-maintain
 
 FROM ${RUNTIME_IMAGE}
 
 RUN apk add --no-cache ca-certificates tzdata su-exec \
  && addgroup -S -g 10001 ovpanel \
  && adduser -S -D -H -u 10001 -G ovpanel ovpanel \
- && mkdir -p /data /certs \
+ && mkdir -p /data /certs /run/ovpanel \
  && chown -R 10001:10001 /data
 
 COPY --from=build /out/panel /usr/local/bin/panel
+COPY --from=build /out/ovpanel-maintain /usr/local/bin/ovpanel-maintain
 COPY deploy/entrypoint-panel.sh /usr/local/bin/entrypoint-panel
-RUN chmod 0755 /usr/local/bin/entrypoint-panel
+RUN chmod 0755 /usr/local/bin/entrypoint-panel /usr/local/bin/ovpanel-maintain
 
 LABEL org.opencontainers.image.title="OVPanel panel" \
-      org.opencontainers.image.description="OVPanel web process with embedded frontend" \
-      org.opencontainers.image.source="https://github.com/dreamstation625/OVPanel"
+      org.opencontainers.image.description="OVPanel web process with embedded frontend and restricted maintenance process" \
+      org.opencontainers.image.source="https://github.com/dreamstation625/OVPanel" \
+      com.ovpanel.agent-protocol="1"
 
 ENV OVPANEL_DATA_DIR=/data
+ENV OVPANEL_MAINTENANCE_SOCKET=/run/ovpanel/maintain.sock
+ENV OVPANEL_DOCKER_SOCKET=/var/run/docker.sock
 EXPOSE 8080
 VOLUME ["/data"]
 

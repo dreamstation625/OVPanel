@@ -35,7 +35,10 @@ ARG TARGETARCH=amd64
 RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
       -trimpath -buildvcs=false \
       -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.buildTime=${BUILD_TIME}" \
-      -o /out/vpn-agent ./cmd/vpn-agent
+      -o /out/vpn-agent ./cmd/vpn-agent \
+ && GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
+      -trimpath -buildvcs=false -ldflags "-s -w" \
+      -o /out/vpn-connect ./cmd/vpn-connect
 
 FROM ${RUNTIME_IMAGE} AS openvpn-build
 
@@ -79,6 +82,8 @@ RUN ./configure \
 FROM ${RUNTIME_IMAGE}
 
 ARG OPENVPN_VERSION
+ARG VERSION=dev
+ARG COMMIT=none
 
 RUN apk add --no-cache \
       libssl3 \
@@ -98,16 +103,26 @@ RUN apk add --no-cache \
 
 COPY --from=openvpn-build /out/usr/sbin/openvpn /usr/sbin/openvpn
 COPY --from=build /out/vpn-agent /usr/local/bin/vpn-agent
+COPY --from=build /out/vpn-connect /usr/local/bin/vpn-connect
+COPY deploy/entrypoint-openvpn.sh /usr/local/bin/entrypoint-openvpn
+COPY deploy/ensure-host-forwarding.sh /usr/local/bin/ensure-host-forwarding
+RUN chmod 0755 /usr/local/bin/vpn-agent /usr/local/bin/vpn-connect \
+      /usr/local/bin/entrypoint-openvpn /usr/local/bin/ensure-host-forwarding
 
 RUN test "$(openvpn --version | awk 'NR==1 {print $2}')" = "${OPENVPN_VERSION}"
 
 LABEL org.opencontainers.image.title="OVPanel OpenVPN runtime" \
       org.opencontainers.image.description="OVPanel OpenVPN container with runtime agent" \
-      org.opencontainers.image.source="https://github.com/dreamstation625/OVPanel"
+      org.opencontainers.image.source="https://github.com/dreamstation625/OVPanel" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${COMMIT}" \
+      com.ovpanel.role="openvpn" \
+      com.ovpanel.agent-protocol="1" \
+      com.ovpanel.openvpn.version="${VERSION}"
 
 ENV OVPANEL_AGENT_LISTEN=:9443 \
     OVPANEL_AGENT_STATE_DIR=/var/lib/ovpanel
 
 EXPOSE 9443/tcp 1194/udp
 
-ENTRYPOINT ["/usr/local/bin/vpn-agent"]
+ENTRYPOINT ["/usr/local/bin/entrypoint-openvpn"]

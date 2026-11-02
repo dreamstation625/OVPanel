@@ -2,10 +2,19 @@
 import { computed, onMounted, ref } from 'vue'
 import { Activity, Copy, Database, KeyRound, Network, RefreshCw, Settings } from '@lucide/vue'
 import { NAlert, NButton, NForm, NFormItem, NInput, NInputNumber, NSelect } from 'naive-ui'
-import { api, ApiError, type ExportSettings, type Operation, type PKIStatus, type SystemInfo } from '../api'
-import { errorMessage, formatDate } from '../labels'
+import {
+  api,
+  ApiError,
+  type ExportSettings,
+  type Operation,
+  type PKIStatus,
+  type SystemInfo,
+} from '../api'
+import { errorMessage, formatDate, operationKindLabel } from '../labels'
 import { copyText } from '../utils'
+import { useNotify } from '../notify'
 
+const notify = useNotify()
 const system = ref<SystemInfo | null>(null)
 const pki = ref<PKIStatus | null>(null)
 const operations = ref<Operation[]>([])
@@ -15,17 +24,14 @@ const error = ref('')
 
 const currentPassword = ref('')
 const newPassword = ref('')
-const confirmPassword = ref('')
+const confirmPasswordInput = ref('')
 const passwordBusy = ref(false)
 const passwordError = ref('')
-const passwordSuccess = ref('')
 
 const exportHost = ref('')
 const exportPort = ref<number | null>(1194)
 const exportProto = ref<'udp' | 'tcp'>('udp')
 const exportBusy = ref(false)
-const exportError = ref('')
-const exportSuccess = ref('')
 const copied = ref(false)
 
 const protoOptions = [
@@ -39,13 +45,13 @@ const facts = computed(() => {
     return []
   }
   return [
-    { label: '版本', value: info.version },
-    { label: '提交', value: info.commit === 'none' ? 'none' : info.commit.slice(0, 7), code: true },
-    { label: '构建时间', value: formatDate(info.buildTime) },
-    { label: 'Go 版本', value: info.goVersion },
-    { label: '数据库', value: `SQLite · schema v${info.schemaVersion}` },
-    { label: '直连 HTTPS', value: info.tlsEnabled ? '已启用' : '未启用' },
-    { label: '数据存储', value: info.dataStore },
+    {
+      label: '版本',
+      value: info.version === 'dev' ? '开发版' : `v${info.version.replace(/^v/, '')}`,
+    },
+    { label: '构建时间', value: info.buildTime === 'unknown' ? '未知' : formatDate(info.buildTime) },
+    { label: '数据存储', value: info.dataStore === 'sqlite' ? '本地数据库' : info.dataStore },
+    { label: 'HTTPS', value: info.tlsEnabled ? '已启用' : '未启用' },
   ]
 })
 
@@ -84,25 +90,24 @@ async function changePassword() {
     return
   }
   passwordError.value = ''
-  passwordSuccess.value = ''
-  if (newPassword.value.length < 12) {
-    passwordError.value = '新密码至少需要 12 个字符'
+  if (newPassword.value.length < 8) {
+    passwordError.value = '新密码至少需要 8 个字符'
     return
   }
-  if (newPassword.value !== confirmPassword.value) {
+  if (newPassword.value !== confirmPasswordInput.value) {
     passwordError.value = '两次输入的新密码不一致'
     return
   }
   passwordBusy.value = true
   try {
     await api.changeAdminPassword(currentPassword.value, newPassword.value)
-    passwordSuccess.value = '密码已更新，全部会话已失效，即将返回登录页。'
+    notify.success('密码已更新，即将返回登录页。')
     currentPassword.value = ''
     newPassword.value = ''
-    confirmPassword.value = ''
-    window.setTimeout(() => window.location.assign('/'), 1200)
+    confirmPasswordInput.value = ''
+    window.setTimeout(() => window.location.assign('/'), 1500)
   } catch (err) {
-    passwordError.value = errorMessage(err)
+    notify.error(errorMessage(err))
   } finally {
     passwordBusy.value = false
   }
@@ -112,10 +117,8 @@ async function saveExportSettings() {
   if (exportBusy.value) {
     return
   }
-  exportError.value = ''
-  exportSuccess.value = ''
   if (!exportHost.value.trim() || !exportPort.value) {
-    exportError.value = '请填写 VPN 地址和端口'
+    notify.warning('请填写 VPN 地址和端口')
     return
   }
   exportBusy.value = true
@@ -125,9 +128,9 @@ async function saveExportSettings() {
       port: exportPort.value,
       proto: exportProto.value,
     })
-    exportSuccess.value = '导出连接设置已保存。'
+    notify.success('VPN 连接地址已保存。')
   } catch (err) {
-    exportError.value = errorMessage(err)
+    notify.error(errorMessage(err))
   } finally {
     exportBusy.value = false
   }
@@ -181,19 +184,17 @@ onMounted(load)
     <div class="settings-grid">
       <section class="surface">
         <header class="surface-head">
-          <h2><Network :size="17" /> VPN 导出设置</h2>
+          <h2><Network :size="17" /> VPN 连接地址</h2>
           <span class="surface-meta">{{ exportSettings?.configured ? '已配置' : '未配置' }}</span>
         </header>
         <p class="section-description">
-          生成的 .ovpn 会写入这里的连接地址。修改地址不会更换 tls-crypt 密钥。
+          下载的 .ovpn 使用这里的地址和端口；修改地址不会更换密钥。
         </p>
         <NAlert v-if="exportSettings && !exportSettings.configured" type="info" :bordered="false" class="stack-gap">
-          下载客户端配置前需要先填写 VPN 地址与端口。
+          下载客户端配置前请先填写 VPN 地址或域名与端口。
         </NAlert>
-        <NAlert v-if="exportError" type="error" :bordered="false" class="stack-gap">{{ exportError }}</NAlert>
-        <NAlert v-if="exportSuccess" type="success" :bordered="false" class="stack-gap">{{ exportSuccess }}</NAlert>
         <NForm>
-          <NFormItem label="VPN 地址" required>
+          <NFormItem label="VPN 地址或域名" required>
             <NInput v-model:value="exportHost" placeholder="vpn.example.com 或 IP 地址" maxlength="255" />
           </NFormItem>
           <NFormItem label="端口" required>
@@ -205,30 +206,30 @@ onMounted(load)
               class="port-input"
             />
           </NFormItem>
-          <NFormItem label="协议" required>
+          <NFormItem label="传输协议" required>
             <NSelect v-model:value="exportProto" :options="protoOptions" />
           </NFormItem>
         </NForm>
-        <NButton type="primary" :loading="exportBusy" @click="saveExportSettings">保存连接设置</NButton>
+        <NButton type="primary" :loading="exportBusy" @click="saveExportSettings">保存连接地址</NButton>
       </section>
 
       <section class="surface">
         <header class="surface-head">
-          <h2><Database :size="17" /> 证书与 PKI</h2>
+          <h2><Database :size="17" /> 证书</h2>
         </header>
         <div v-if="pki" class="pki-counts">
-          <div><strong>{{ pki.activeCertificates }}</strong><span>生效证书</span></div>
-          <div><strong>{{ pki.revokedCertificates }}</strong><span>已吊销</span></div>
+          <div><strong>{{ pki.activeCertificates }}</strong><span>有效证书</span></div>
+          <div><strong>{{ pki.revokedCertificates }}</strong><span>已作废</span></div>
           <div><strong>{{ pki.expiredCertificates }}</strong><span>已过期</span></div>
         </div>
         <template v-if="pki?.ca">
           <dl class="fact-list">
             <div>
-              <dt>CA 主体</dt>
+              <dt>颁发机构</dt>
               <dd>{{ pki.ca.subject }}</dd>
             </div>
             <div>
-              <dt>序列号</dt>
+              <dt>证书编号</dt>
               <dd class="is-code">{{ pki.ca.serial }}</dd>
             </div>
             <div>
@@ -237,8 +238,8 @@ onMounted(load)
             </div>
           </dl>
           <div class="fingerprint">
-            <span>CA 指纹</span>
-            <code>{{ pki.ca.fingerprint }}</code>
+            <span>证书指纹</span>
+            <code tabindex="0">{{ pki.ca.fingerprint }}</code>
             <NButton size="tiny" @click="copyFingerprint">
               <template #icon><Copy :size="13" /></template>
               {{ copied ? '已复制' : '复制' }}
@@ -246,7 +247,7 @@ onMounted(load)
           </div>
         </template>
         <NAlert v-else-if="pki" type="info" :bordered="false">
-          尚未生成 CA。创建首份证书配置或导出仅密码配置时会生成。
+          暂无证书。创建证书配置或导出仅密码配置时自动创建。
         </NAlert>
       </section>
 
@@ -254,9 +255,8 @@ onMounted(load)
         <header class="surface-head">
           <h2><KeyRound :size="17" /> 管理员密码</h2>
         </header>
-        <p class="section-description">修改后所有管理员会话立即失效，需要重新登录。</p>
+        <p class="section-description">修改后需重新登录，其他设备登录会失效。</p>
         <NAlert v-if="passwordError" type="error" :bordered="false" class="stack-gap">{{ passwordError }}</NAlert>
-        <NAlert v-if="passwordSuccess" type="success" :bordered="false" class="stack-gap">{{ passwordSuccess }}</NAlert>
         <NForm>
           <NFormItem label="当前密码" required>
             <NInput
@@ -272,13 +272,13 @@ onMounted(load)
               v-model:value="newPassword"
               type="password"
               show-password-on="click"
-              placeholder="至少 12 个字符"
+              placeholder="至少 8 个字符"
               autocomplete="new-password"
             />
           </NFormItem>
           <NFormItem label="确认新密码" required>
             <NInput
-              v-model:value="confirmPassword"
+              v-model:value="confirmPasswordInput"
               type="password"
               show-password-on="click"
               placeholder="再次输入新密码"
@@ -292,12 +292,12 @@ onMounted(load)
       <section class="surface">
         <header class="surface-head">
           <h2><Activity :size="17" /> 系统信息</h2>
-          <span class="surface-meta">{{ system?.users ?? 0 }} 用户 · {{ system?.profiles ?? 0 }} 配置</span>
+          <span class="surface-meta">{{ system?.users ?? 0 }} 用户 · {{ system?.profiles ?? 0 }} 客户端配置</span>
         </header>
         <dl v-if="system" class="fact-list">
           <div v-for="fact in facts" :key="fact.label">
             <dt>{{ fact.label }}</dt>
-            <dd :class="{ 'is-code': fact.code }">{{ fact.value }}</dd>
+            <dd>{{ fact.value }}</dd>
           </div>
         </dl>
         <div v-else class="surface-empty">正在读取…</div>
@@ -305,14 +305,14 @@ onMounted(load)
 
       <section class="surface span-2">
         <header class="surface-head">
-          <h2>最近任务</h2>
+          <h2>最近操作</h2>
           <span class="surface-meta">{{ operations.length }} 条</span>
         </header>
         <ul v-if="operations.length" class="operation-list">
           <li v-for="operation in operations" :key="operation.id">
             <div>
-              <strong>{{ operation.kind }}</strong>
-              <span>{{ operation.message || '—' }}</span>
+              <strong>{{ operationKindLabel(operation.kind) }}</strong>
+              <span :title="operation.message">{{ operation.message || '—' }}</span>
             </div>
             <div class="operation-side">
               <span class="chip">{{ stateLabel(operation.state) }}</span>
@@ -320,9 +320,11 @@ onMounted(load)
             </div>
           </li>
         </ul>
-        <div v-else class="surface-empty">暂无任务记录</div>
+        <div v-else class="surface-empty">暂无操作记录</div>
       </section>
     </div>
+
+
   </div>
 </template>
 
@@ -577,6 +579,13 @@ onMounted(load)
   .fact-list > div {
     grid-template-columns: 88px minmax(0, 1fr);
   }
+
+  .surface-head {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+
 
   .fingerprint {
     align-items: flex-start;

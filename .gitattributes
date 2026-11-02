@@ -17,8 +17,10 @@ go.mod text eol=lf
 go.sum text eol=lf
 Dockerfile* text eol=lf
 deploy/entrypoint-panel.sh text eol=lf
+deploy/compose.sh text eol=lf
 VERSION text eol=lf
 .env.example text eol=lf
+.env.host.example text eol=lf
 
 *.png binary
 *.jpg binary

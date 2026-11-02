@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterView } from 'vue-router'
-import { NButton, NConfigProvider, darkTheme } from 'naive-ui'
+import { NButton, NConfigProvider, NMessageProvider, darkTheme } from 'naive-ui'
 import BrandMark from './components/BrandMark.vue'
 import ThemeToggle from './components/ThemeToggle.vue'
 import AppShell from './components/AppShell.vue'
@@ -69,47 +69,87 @@ function handleLogout() {
 
 function handleExpired() {
   username.value = ''
-  loginNotice.value = '会话已过期，请重新登录'
+  loginNotice.value = '登录已过期，请重新登录'
   phase.value = 'login'
 }
 
 registerUnauthorizedHandler(handleExpired)
 
-onMounted(bootstrap)
+// Naive UI 的密码可见性切换按钮没有可访问名称，按输入框类型补齐。
+// 组件在弹层中动态创建，因此用 MutationObserver 覆盖后续节点。
+function labelInputActions(root: ParentNode) {
+  root.querySelectorAll<HTMLButtonElement>('.n-input__suffix .n-button').forEach((button) => {
+    if (button.getAttribute('aria-label')) {
+      return
+    }
+    const input = button.closest('.n-input')?.querySelector('input')
+    button.setAttribute('aria-label', input?.type === 'password' ? '显示或隐藏密码' : '输入框操作')
+  })
+}
+
+let observer: MutationObserver | undefined
+
+onMounted(() => {
+  bootstrap()
+  labelInputActions(document)
+  observer = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      mutation.addedNodes.forEach((node) => {
+        if (node instanceof Element) {
+          labelInputActions(node)
+          if (node.parentElement) {
+            labelInputActions(node.parentElement)
+          }
+        }
+      })
+    }
+  })
+  observer.observe(document.body, { childList: true, subtree: true })
+})
+
+onBeforeUnmount(() => observer?.disconnect())
 </script>
 
 <template>
   <NConfigProvider :theme="naiveTheme" :theme-overrides="overrides">
-    <div class="app-root">
-      <ThemeToggle v-if="phase !== 'app'" class="corner-theme" />
+    <NMessageProvider
+      placement="top-right"
+      :max="5"
+      :duration="4000"
+      closable
+      keep-alive-on-hover
+    >
+      <div class="app-root">
+        <ThemeToggle v-if="phase !== 'app'" class="corner-theme" />
 
-      <main v-if="phase === 'boot'" class="auth-shell">
-        <section class="boot-card" aria-live="polite">
-          <BrandMark :size="44" />
-          <div v-if="!bootError" class="boot-loading">
-            <strong>正在连接面板</strong>
-            <span class="boot-bar" aria-hidden="true" />
-          </div>
-          <div v-else class="boot-error">
-            <h1>无法连接面板</h1>
-            <p>{{ bootError }}</p>
-            <NButton type="primary" @click="bootstrap">重试</NButton>
-          </div>
-        </section>
-      </main>
+        <main v-if="phase === 'boot'" class="auth-shell">
+          <section class="boot-card" aria-live="polite">
+            <BrandMark :size="44" />
+            <div v-if="!bootError" class="boot-loading">
+              <strong>正在连接面板</strong>
+              <span class="boot-bar" aria-hidden="true" />
+            </div>
+            <div v-else class="boot-error">
+              <h1>无法连接面板</h1>
+              <p>{{ bootError }}</p>
+              <NButton type="primary" @click="bootstrap">重试</NButton>
+            </div>
+          </section>
+        </main>
 
-      <SetupView
-        v-else-if="phase === 'setup' && setupStatus"
-        :status="setupStatus"
-        @done="handleSetupDone"
-      />
+        <SetupView
+          v-else-if="phase === 'setup' && setupStatus"
+          :status="setupStatus"
+          @done="handleSetupDone"
+        />
 
-      <LoginView v-else-if="phase === 'login'" :notice="loginNotice" @done="handleLoginDone" />
+        <LoginView v-else-if="phase === 'login'" :notice="loginNotice" @done="handleLoginDone" />
 
-      <AppShell v-else-if="phase === 'app'" :username="username" @logout="handleLogout">
-        <RouterView />
-      </AppShell>
-    </div>
+        <AppShell v-else-if="phase === 'app'" :username="username" @logout="handleLogout">
+          <RouterView />
+        </AppShell>
+      </div>
+    </NMessageProvider>
   </NConfigProvider>
 </template>
 

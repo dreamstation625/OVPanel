@@ -28,6 +28,7 @@ services:
     read_only: true
     tmpfs:
       - /tmp:size=16m
+      - /run/ovpanel:size=1m
     security_opt:
       - no-new-privileges:true
     environment:
@@ -40,12 +41,25 @@ services:
       OVPANEL_DEV_SELF_SIGNED: ${OVPANEL_DEV_SELF_SIGNED:-false}
       OVPANEL_BOOTSTRAP_TOKEN: ${OVPANEL_BOOTSTRAP_TOKEN:-}
       OVPANEL_MASTER_KEY: ${OVPANEL_MASTER_KEY:-}
+      OVPANEL_CONTROL_DIR: /control
+      # 备份清单记录部署镜像固定值；不参与运行逻辑。
+      OVPANEL_PANEL_IMAGE_REF: ${OVPANEL_PANEL_IMAGE:-ovpanel-panel:dev}
+      OVPANEL_OPENVPN_IMAGE_REF: ${OVPANEL_OPENVPN_IMAGE:-ovpanel-openvpn:dev}
+      # 受限维护进程：只允许更新受管 OpenVPN 容器到该仓库的合法标签。
+      OVPANEL_MAINTENANCE_SOCKET: /run/ovpanel/maintain.sock
+      OVPANEL_DOCKER_SOCKET: /var/run/docker.sock
+      OVPANEL_MAINTENANCE_STATE_DIR: /data/maintenance
+      OVPANEL_OPENVPN_CONTAINER: ovpanel-openvpn
+      OVPANEL_OPENVPN_IMAGE_REPOSITORY: ${OVPANEL_OPENVPN_REPOSITORY:-dreamstation625/ovpanel-openvpn}
     ports:
       # 默认只绑定回环地址。公网访问前必须配置 HTTPS 并显式修改绑定地址。
       - "${OVPANEL_ADMIN_BIND:-127.0.0.1}:${OVPANEL_ADMIN_PORT:-8080}:8080"
     volumes:
       - "${OVPANEL_DATA_ROOT:-./data}/panel:/data"
+      - "${OVPANEL_DATA_ROOT:-./data}/control:/control"
       - "${OVPANEL_CERT_DIR:-./certs}:/certs:ro"
+      # 仅维护进程使用；Web 进程不直接打开 Docker Socket。
+      - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:
       # 直接 HTTPS 与 HTTP 都可能出现；两次尝试任一成功即可。
       test:
@@ -79,6 +93,7 @@ services:
     labels:
       com.ovpanel.managed: "true"
       com.ovpanel.role: "openvpn"
+      com.ovpanel.openvpn.version: ${OVPANEL_VERSION:-dev}
     restart: unless-stopped
     init: true
     cap_add:
@@ -91,10 +106,16 @@ services:
     environment:
       OVPANEL_AGENT_LISTEN: ":9443"
       OVPANEL_AGENT_STATE_DIR: /var/lib/ovpanel
+      OVPANEL_CONTROL_DIR: /control
       OVPANEL_LOG_LEVEL: ${OVPANEL_LOG_LEVEL:-info}
+    ports:
+      # 数据面端口，必须与「服务端」页保存的协议/端口一致。
+      # 管理端口 9443 只在项目网络内可达，不发布。
+      - "${OVPANEL_VPN_BIND:-0.0.0.0}:${OVPANEL_VPN_PORT:-1194}:${OVPANEL_VPN_PORT:-1194}/${OVPANEL_VPN_PROTO:-udp}"
     volumes:
       - "${OVPANEL_DATA_ROOT:-./data}/openvpn:/var/lib/ovpanel"
       - "${OVPANEL_DATA_ROOT:-./data}/openvpn-config:/etc/openvpn/ovpanel"
+      - "${OVPANEL_DATA_ROOT:-./data}/control:/control"
     healthcheck:
       # 健康状态包含数据面环境检查；缺 TUN/模块时容器会显示 unhealthy。
       test:

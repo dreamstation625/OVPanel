@@ -118,6 +118,41 @@ func TestUsernameIsCaseInsensitiveUnique(t *testing.T) {
 	}
 }
 
+func TestUpdateProfileNetworkFixedIP(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+
+	if err := s.CreateUserWithProfile(ctx, testUser("u1"), testProfile("p1", "u1", AuthCertificate, ""), nil); err != nil {
+		t.Fatalf("创建首个配置失败：%v", err)
+	}
+	if err := s.CreateUserWithProfile(ctx, testUser("u2"), testProfile("p2", "u2", AuthCertificate, ""), nil); err != nil {
+		t.Fatalf("创建第二个配置失败：%v", err)
+	}
+	if err := s.UpdateProfileNetwork(ctx, "p1", RouteInherit, AccessInherit, nil, nil, ClientLANInherit, "10.8.255.200"); err != nil {
+		t.Fatalf("设置固定 IP 失败：%v", err)
+	}
+	detail, ok, err := s.Profile(ctx, "p1")
+	if err != nil || !ok || detail.FixedVPNIP != "10.8.255.200" {
+		t.Fatalf("固定 IP 未保存：%+v ok=%v err=%v", detail, ok, err)
+	}
+	if detail.ConcurrentLimit == nil || *detail.ConcurrentLimit != 1 {
+		t.Fatalf("设置固定 IP 应锁定并发为 1：%+v", detail.ConcurrentLimit)
+	}
+
+	err = s.UpdateProfileNetwork(ctx, "p2", RouteInherit, AccessInherit, nil, nil, ClientLANInherit, "10.8.255.200")
+	if !errors.Is(err, ErrFixedIPTaken) {
+		t.Fatalf("重复固定 IP 应返回 ErrFixedIPTaken：%v", err)
+	}
+
+	if err := s.UpdateProfileNetwork(ctx, "p1", RouteInherit, AccessInherit, nil, nil, ClientLANInherit, ""); err != nil {
+		t.Fatalf("清除固定 IP 失败：%v", err)
+	}
+	detail, _, _ = s.Profile(ctx, "p1")
+	if detail.FixedVPNIP != "" {
+		t.Fatalf("固定 IP 未清除：%+v", detail)
+	}
+}
+
 func TestCertificateRotationAndRevocation(t *testing.T) {
 	ctx := context.Background()
 	s := openTestStore(t)

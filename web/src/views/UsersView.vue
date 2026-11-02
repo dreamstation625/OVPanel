@@ -6,8 +6,10 @@ import { NAlert, NButton, NInput, NSelect } from 'naive-ui'
 import CreateUserModal from '../components/CreateUserModal.vue'
 import OneTimePasswordModal from '../components/OneTimePasswordModal.vue'
 import { api, ApiError, type CreateUserResult, type User } from '../api'
-import { errorMessage, formatDate } from '../labels'
+import { errorMessage, formatBytes, formatDate } from '../labels'
+import { useNotify } from '../notify'
 
+const notify = useNotify()
 const route = useRoute()
 const router = useRouter()
 const users = ref<User[]>([])
@@ -50,6 +52,7 @@ function openCreate() {
 }
 
 function handleCreated(result: CreateUserResult) {
+  notify.success('用户已创建。')
   load()
   if (result.password) {
     pendingUserId.value = result.user.id
@@ -123,7 +126,9 @@ onMounted(() => {
       <div class="list-head">
         <span>用户</span>
         <span>状态</span>
-        <span>配置</span>
+        <span>配置数</span>
+        <span>在线连接</span>
+        <span>累计流量</span>
         <span>创建时间</span>
         <span aria-hidden="true" />
       </div>
@@ -148,9 +153,17 @@ onMounted(() => {
           </span>
         </div>
         <div class="count-cell">
-          <span class="count-label">配置 </span>
+          <span class="count-label">配置数 </span>
           <strong>{{ user.activeProfileCount }}</strong>
           <span> / {{ user.profileCount }}</span>
+        </div>
+        <div class="online-cell">
+          <span class="count-label">在线连接 </span>
+          <strong>{{ user.onlineSessions }}</strong>
+        </div>
+        <div class="usage-cell">
+          <span class="count-label">流量 </span>
+          <span>{{ formatBytes(user.usageBytes) }}</span>
         </div>
         <time class="muted">{{ formatDate(user.createdAt) }}</time>
         <span class="row-action">查看</span>
@@ -158,7 +171,7 @@ onMounted(() => {
 
       <div v-if="!users.length && !loading" class="empty-state">
         <strong>暂无用户</strong>
-        <span>创建用户时可以直接生成第一份客户端配置。</span>
+        <span>添加用户时可同时生成首份配置。</span>
         <NButton type="primary" size="small" @click="openCreate">添加用户</NButton>
       </div>
       <div v-else-if="loading && !users.length" class="empty-state">正在读取…</div>
@@ -233,7 +246,7 @@ onMounted(() => {
 .list-head,
 .list-row {
   display: grid;
-  grid-template-columns: minmax(0, 2.2fr) 100px 100px 160px 56px;
+  grid-template-columns: minmax(0, 2.2fr) 90px 80px 64px 120px 150px 56px;
   gap: 16px;
   align-items: center;
   padding: 13px 18px;
@@ -322,7 +335,21 @@ onMounted(() => {
   font-size: 12px;
 }
 
+.online-cell,
+.usage-cell {
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.online-cell strong {
+  font-size: 14px;
+}
+
 .row-action {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
   color: var(--accent);
   font-size: 12.5px;
   font-weight: 600;
@@ -350,7 +377,7 @@ onMounted(() => {
   font-size: 15px;
 }
 
-@media (max-width: 760px) {
+@media (max-width: 960px) {
   .page-header {
     align-items: flex-start;
     flex-direction: column;
@@ -378,7 +405,8 @@ onMounted(() => {
     grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas:
       'user status'
-      'count created'
+      'count online'
+      'usage created'
       'action action';
     gap: 8px 12px;
     padding: 15px 16px;
@@ -402,6 +430,15 @@ onMounted(() => {
     display: inline;
   }
 
+  .online-cell {
+    grid-area: online;
+    justify-self: end;
+  }
+
+  .usage-cell {
+    grid-area: usage;
+  }
+
   .list-row time {
     grid-area: created;
     justify-self: end;
@@ -411,6 +448,15 @@ onMounted(() => {
   .row-action {
     grid-area: action;
     justify-self: start;
+  }
+}
+
+@media (min-width: 961px) and (max-width: 1200px) {
+  .list-head,
+  .list-row {
+    grid-template-columns: minmax(0, 2fr) 74px 62px 52px 100px 128px 44px;
+    gap: 10px;
+    padding: 12px 14px;
   }
 }
 </style>

@@ -15,11 +15,14 @@ import (
 
 	"github.com/dreamstation625/ovpanel/internal/accounts"
 	"github.com/dreamstation625/ovpanel/internal/auth"
+	"github.com/dreamstation625/ovpanel/internal/backup"
 	"github.com/dreamstation625/ovpanel/internal/config"
 	"github.com/dreamstation625/ovpanel/internal/logging"
 	"github.com/dreamstation625/ovpanel/internal/pki"
 	"github.com/dreamstation625/ovpanel/internal/secretbox"
+	"github.com/dreamstation625/ovpanel/internal/statistics"
 	"github.com/dreamstation625/ovpanel/internal/store"
+	"github.com/dreamstation625/ovpanel/internal/vpnruntime"
 )
 
 // weakParams 让测试里的密码哈希保持快速，不影响生产默认值。
@@ -52,6 +55,21 @@ func newTestServer(t *testing.T) *Server {
 	}
 	pkiService := pki.New(st, masterKey)
 	accountsService := accounts.New(st, pkiService, masterKey)
+	controlDir := filepath.Join(dir, "control")
+	runtimeService := vpnruntime.New(st, pkiService, accountsService, controlDir)
+	statisticsService := statistics.New(st, controlDir, logging.New(io.Discard, "error"))
+	backupService := backup.New(backup.Options{
+		Store:         st,
+		PKI:           pkiService,
+		Accounts:      accountsService,
+		Runtime:       runtimeService,
+		MasterKey:     masterKey,
+		MasterKeyPath: filepath.Join(dir, "master.key"),
+		DataDir:       dir,
+		ControlDir:    controlDir,
+		Version:       "test",
+		Log:           logging.New(io.Discard, "error"),
+	})
 
 	webFS := fstest.MapFS{
 		"index.html": {Data: []byte("<!doctype html><title>OVPanel</title>")},
@@ -64,10 +82,14 @@ func newTestServer(t *testing.T) *Server {
 			Listen:     ":0",
 			LogLevel:   "error",
 			SessionTTL: time.Hour,
+			ControlDir: controlDir,
 		},
 		Store:          st,
 		Accounts:       accountsService,
 		PKI:            pkiService,
+		Runtime:        runtimeService,
+		Statistics:     statisticsService,
+		Backups:        backupService,
 		Log:            logging.New(io.Discard, "error"),
 		Build:          BuildInfo{Version: "test"},
 		BootstrapToken: "test-bootstrap-token",

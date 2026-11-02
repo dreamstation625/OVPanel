@@ -16,6 +16,9 @@ type ClientConfig struct {
 	Host            string
 	Port            int
 	Proto           string
+	DataCiphers     string
+	AuthDigest      string
+	TLSMinVersion   string
 	CAPEM           string
 	CertPEM         string
 	KeyPEM          string
@@ -25,6 +28,19 @@ type ClientConfig struct {
 
 // Render 生成 .ovpn 内容。证书类字段为空时不写入对应块。
 func Render(c ClientConfig) []byte {
+	tlsMinVersion := c.TLSMinVersion
+	if tlsMinVersion == "" {
+		tlsMinVersion = "1.2"
+	}
+	dataCiphers := c.DataCiphers
+	if dataCiphers == "" {
+		dataCiphers = "AES-256-GCM:AES-128-GCM"
+	}
+	authDigest := c.AuthDigest
+	if authDigest == "" {
+		authDigest = "SHA256"
+	}
+
 	var b strings.Builder
 	b.WriteString("client\n")
 	b.WriteString("dev tun\n")
@@ -36,9 +52,9 @@ func Render(c ClientConfig) []byte {
 	b.WriteString("persist-key\n")
 	b.WriteString("persist-tun\n")
 	b.WriteString("remote-cert-tls server\n")
-	b.WriteString("tls-version-min 1.2\n")
-	b.WriteString("data-ciphers AES-256-GCM:AES-128-GCM\n")
-	b.WriteString("auth SHA256\n")
+	b.WriteString("tls-version-min " + tlsMinVersion + "\n")
+	b.WriteString("data-ciphers " + dataCiphers + "\n")
+	b.WriteString("auth " + authDigest + "\n")
 	b.WriteString("verb 3\n")
 	b.WriteString("mute-replay-warnings\n")
 	if c.RequireUserPass {

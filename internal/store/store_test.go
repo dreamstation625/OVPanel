@@ -237,6 +237,37 @@ func TestOperationLifecycle(t *testing.T) {
 	}
 }
 
+func TestFailStaleOperations(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+
+	if err := s.CreateOperation(ctx, "backup", "backup"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateOperation(ctx, Operation{ID: "backup", State: OperationRunning, Progress: 30}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateOperation(ctx, "done", "backup"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateOperation(ctx, Operation{ID: "done", State: OperationSucceeded, Progress: 100, FinishedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := s.FailStaleOperations(ctx, "面板重启前任务未完成")
+	if err != nil || n != 1 {
+		t.Fatalf("标记未完成任务失败：n=%d err=%v", n, err)
+	}
+	op, _, _ := s.Operation(ctx, "backup")
+	if op.State != OperationFailed || op.ErrorCode != "interrupted" || op.FinishedAt.IsZero() {
+		t.Fatalf("未完成任务未正确标记：%+v", op)
+	}
+	done, _, _ := s.Operation(ctx, "done")
+	if done.State != OperationSucceeded {
+		t.Fatalf("已完成任务不应被修改：%+v", done)
+	}
+}
+
 func TestUpdateMissingOperationFails(t *testing.T) {
 	ctx := context.Background()
 	s := openTestStore(t)

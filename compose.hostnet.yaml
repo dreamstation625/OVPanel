@@ -1,0 +1,22 @@
+# host-network 部署覆盖：OpenVPN 容器直接使用宿主网络，
+# entrypoint 会为 VPN 地址池添加宿主转发规则和 UFW 数据端口放行。
+#
+# 用法：
+#   docker compose -f compose.yaml -f compose.hostnet.yaml up -d --build
+#
+# 该模式需要 Compose v2.24+（使用 !reset 清除 bridge 网络和端口映射），
+# 并要求宿主已开启 net.ipv4.ip_forward。面板容器仍使用 ovpanel bridge 网络。
+
+services:
+  openvpn:
+    network_mode: host
+    ports: !reset []
+    networks: !reset []
+    sysctls: !reset []
+    environment:
+      OVPANEL_HOST_NETWORK: "1"
+      # 管理端口只监听宿主回环，避免暴露到公网。
+      OVPANEL_AGENT_LISTEN: "127.0.0.1:9443"
+      # 供 entrypoint 放行 UFW 数据端口，必须与服务端配置一致。
+      OVPANEL_VPN_PORT: "${OVPANEL_VPN_PORT:-1194}"
+      OVPANEL_VPN_PROTO: "${OVPANEL_VPN_PROTO:-udp}"

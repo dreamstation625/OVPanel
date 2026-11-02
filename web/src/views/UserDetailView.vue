@@ -6,8 +6,10 @@ import { NAlert, NButton, NForm, NFormItem, NInput, NModal, NPopconfirm } from '
 import AddProfileModal from '../components/AddProfileModal.vue'
 import OneTimePasswordModal from '../components/OneTimePasswordModal.vue'
 import { api, ApiError, type AddProfileResult, type UserDetail } from '../api'
-import { authLabel, errorMessage, formatDate, shortFingerprint, statusLabel, statusTone } from '../labels'
+import { authLabel, errorMessage, formatBytes, formatDate, shortFingerprint, statusLabel, statusTone } from '../labels'
+import { useNotify } from '../notify'
 
+const notify = useNotify()
 const route = useRoute()
 const detail = ref<UserDetail | null>(null)
 const loading = ref(false)
@@ -72,8 +74,9 @@ async function saveEdit() {
         .filter(Boolean),
     })
     editShow.value = false
+    notify.success('用户信息已更新。')
   } catch (err) {
-    editError.value = errorMessage(err)
+    notify.error(errorMessage(err))
   } finally {
     editBusy.value = false
   }
@@ -86,12 +89,14 @@ async function toggleStatus() {
   const next = detail.value.user.status === 'active' ? 'disabled' : 'active'
   try {
     detail.value = await api.updateUser(detail.value.user.id, { status: next })
+    notify.success(next === 'active' ? '用户已启用。' : '用户已停用。')
   } catch (err) {
-    error.value = errorMessage(err)
+    notify.error(errorMessage(err))
   }
 }
 
 function handleProfileCreated(result: AddProfileResult) {
+  notify.success('客户端配置已创建。')
   load()
   if (result.password) {
     oneTime.value = {
@@ -143,7 +148,7 @@ watch(() => route.params.id, load, { immediate: true })
       </header>
 
       <NAlert v-if="detail.user.status === 'disabled'" type="warning" :bordered="false" class="stack-gap">
-        该用户已停用，其全部客户端配置当前不可连接。运行代理的实际断开将在后续阶段接入。
+        该用户已停用，所有配置不可连接，已有连接会断开。
       </NAlert>
 
       <section class="surface">
@@ -158,7 +163,7 @@ watch(() => route.params.id, load, { immediate: true })
                 {{ detail.user.status === 'active' ? '停用用户' : '启用用户' }}
               </NButton>
             </template>
-            {{ detail.user.status === 'active' ? '停用后该用户的全部配置都不可连接，确认继续？' : '启用该用户及其配置？' }}
+            {{ detail.user.status === 'active' ? '停用后所有配置不可连接，确认继续？' : '启用该用户及其配置？' }}
           </NPopconfirm>
         </header>
         <dl class="fact-list">
@@ -171,12 +176,8 @@ watch(() => route.params.id, load, { immediate: true })
             <dd>{{ formatDate(detail.user.createdAt) }}</dd>
           </div>
           <div>
-            <dt>配置数量</dt>
+            <dt>客户端配置数</dt>
             <dd>{{ detail.profiles.length }} 份</dd>
-          </div>
-          <div>
-            <dt>用户 ID</dt>
-            <dd class="is-code">{{ detail.user.id }}</dd>
           </div>
         </dl>
       </section>
@@ -203,6 +204,9 @@ watch(() => route.params.id, load, { immediate: true })
               </span>
             </div>
             <div class="profile-side">
+              <span class="profile-stats">
+                在线 {{ profile.onlineSessions }} · {{ formatBytes(profile.usageBytes) }}
+              </span>
               <span class="chip" :class="`chip--${statusTone(profile.effectiveStatus)}`">
                 {{ statusLabel(profile.effectiveStatus) }}
               </span>
@@ -212,7 +216,7 @@ watch(() => route.params.id, load, { immediate: true })
         </div>
         <div v-else class="empty-state">
           <strong>暂无客户端配置</strong>
-          <span>添加配置后可以下载 .ovpn 并查看证书状态。</span>
+          <span>添加后可下载 .ovpn 并查看证书状态。</span>
           <NButton type="primary" size="small" @click="addProfileShow = true">添加配置</NButton>
         </div>
       </section>
@@ -266,6 +270,7 @@ watch(() => route.params.id, load, { immediate: true })
 .back-link {
   display: inline-flex;
   align-items: center;
+  min-height: 30px;
   gap: 5px;
   margin-bottom: 18px;
   color: var(--text-3);
@@ -435,6 +440,13 @@ watch(() => route.params.id, load, { immediate: true })
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.profile-stats {
+  color: var(--text-3);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .row-action {

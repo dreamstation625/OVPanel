@@ -1,8 +1,8 @@
-// Command vpn-agent 是 OpenVPN 容器内的运行代理骨架。
+// Command vpn-agent 是 OpenVPN 容器内的运行代理。
 //
-// P02 只提供进程、健康检查与数据面能力报告；OpenVPN 的启动、准入、
-// 限速和用量记录在 P04/P05 接入。当前进程不会把「环境可用」说成
-// 「VPN 已配置」，接口中用 configured 明确区分。
+// 代理读取共享控制目录中的配置包，应用网络策略、启动 OpenVPN 并执行
+// 客户端准入；限速和用量记录在后续阶段接入。进程不会把「环境可用」
+// 说成「VPN 已配置」，接口中用 configured 明确区分。
 package main
 
 import (
@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/dreamstation625/ovpanel/internal/agent"
 	"github.com/dreamstation625/ovpanel/internal/logging"
 	"github.com/dreamstation625/ovpanel/internal/runtimeenv"
 )
@@ -30,8 +31,9 @@ var (
 )
 
 const (
-	envListen   = "OVPANEL_AGENT_LISTEN"
-	envStateDir = "OVPANEL_AGENT_STATE_DIR"
+	envListen     = "OVPANEL_AGENT_LISTEN"
+	envStateDir   = "OVPANEL_AGENT_STATE_DIR"
+	envControlDir = "OVPANEL_CONTROL_DIR"
 )
 
 func main() {
@@ -44,6 +46,7 @@ func main() {
 func run() error {
 	listen := getenv(envListen, ":9443")
 	stateDir := getenv(envStateDir, "/var/lib/ovpanel")
+	controlDir := getenv(envControlDir, "/control")
 
 	log := logging.New(os.Stdout, getenv("OVPANEL_LOG_LEVEL", "info"))
 	slog.SetDefault(log)
@@ -57,7 +60,12 @@ func run() error {
 		log.Warn("runtime environment blocker", "reason", blocker)
 	}
 
-	handler := newHandler(report)
+	runtime := agent.New(controlDir, stateDir, log)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go runtime.Run(ctx)
+
+	handler := newHandler(report, runtime)
 	server := &http.Server{
 		Addr:              listen,
 		Handler:           handler,
@@ -67,14 +75,11 @@ func run() error {
 		ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelWarn),
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
 	log.Info("vpn-agent starting",
 		"version", version,
 		"listen", listen,
 		"environment_ready", report.EnvironmentReady,
-		"configured", false)
+		"control_dir", controlDir)
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- server.ListenAndServe() }()
@@ -94,43 +99,56 @@ func run() error {
 		server.Close()
 		return fmt.Errorf("优雅关闭超时: %w", err)
 	}
+	runtime.Stop()
 	log.Info("vpn-agent stopped")
 	return nil
 }
 
-// newHandler 组装代理的只读接口。P02 不提供任何配置或命令入口。
-func newHandler(report runtimeenv.Report) http.Handler {
+// newHandler 组装代理的只读接口；配置与命令只通过共享控制目录传递。
+func newHandler(report runtimeenv.Report, rt *agent.Runtime) http.Handler {
+	status := func() agent.Status {
+		if rt == nil {
+			return agent.Status{}
+		}
+		return rt.Status()
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"status":           "ok",
 			"version":          version,
 			"environmentReady": report.EnvironmentReady,
-			"configured":       false,
+			"configured":       status().Configured,
 			"blockers":         report.Blockers,
 		})
 	})
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
-		status := http.StatusOK
-		if !report.EnvironmentReady {
-			status = http.StatusServiceUnavailable
+		runtimeReady := rt == nil || rt.Ready()
+		code := http.StatusOK
+		if !report.EnvironmentReady || !runtimeReady {
+			code = http.StatusServiceUnavailable
 		}
-		writeJSON(w, status, map[string]any{
+		writeJSON(w, code, map[string]any{
 			"environmentReady": report.EnvironmentReady,
-			"configured":       false,
+			"configured":       status().Configured,
+			"openvpnRunning":   status().OpenVPNRunning,
+			"managementReady":  status().ManagementConnected,
 			"blockers":         report.Blockers,
 		})
 	})
 	mux.HandleFunc("GET /v1/environment", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"version":    version,
-			"commit":     commit,
-			"buildTime":  buildTime,
-			"goVersion":  runtime.Version(),
-			"configured": false,
-			"message":    "P02 运行骨架；OpenVPN 数据面在后续阶段启用",
-			"report":     report,
+			"version":   version,
+			"commit":    commit,
+			"buildTime": buildTime,
+			"goVersion": runtime.Version(),
+			"message":   "运行代理；OpenVPN 配置与准入由面板下发的控制包驱动",
+			"report":    report,
+			"runtime":   status(),
 		})
+	})
+	mux.HandleFunc("GET /v1/status", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, status())
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]any{

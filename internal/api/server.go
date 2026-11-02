@@ -15,9 +15,14 @@ import (
 
 	"github.com/dreamstation625/ovpanel/internal/accounts"
 	"github.com/dreamstation625/ovpanel/internal/auth"
+	"github.com/dreamstation625/ovpanel/internal/backup"
 	"github.com/dreamstation625/ovpanel/internal/config"
+	"github.com/dreamstation625/ovpanel/internal/maintclient"
 	"github.com/dreamstation625/ovpanel/internal/pki"
+	"github.com/dreamstation625/ovpanel/internal/statistics"
 	"github.com/dreamstation625/ovpanel/internal/store"
+	"github.com/dreamstation625/ovpanel/internal/updatecheck"
+	"github.com/dreamstation625/ovpanel/internal/vpnruntime"
 )
 
 // sessionCookie 是会话 Cookie 名。CSRF 令牌单独使用非 HttpOnly Cookie。
@@ -28,7 +33,7 @@ const (
 )
 
 // minPasswordLength 是管理员密码的最小长度。
-const minPasswordLength = 12
+const minPasswordLength = 8
 
 // BuildInfo 是构建信息，由链接期注入。
 type BuildInfo struct {
@@ -44,6 +49,10 @@ type Options struct {
 	Store          *store.Store
 	Accounts       *accounts.Service
 	PKI            *pki.Service
+	Runtime        *vpnruntime.Service
+	Statistics     *statistics.Service
+	Backups        *backup.Service
+	Maintenance    *maintclient.Client
 	Log            *slog.Logger
 	Build          BuildInfo
 	BootstrapToken string
@@ -59,6 +68,11 @@ type Server struct {
 	store           *store.Store
 	accounts        *accounts.Service
 	pki             *pki.Service
+	runtime         *vpnruntime.Service
+	statistics      *statistics.Service
+	backups         *backup.Service
+	maintenance     *maintclient.Client
+	updateChecker   *updatecheck.Checker
 	log             *slog.Logger
 	build           BuildInfo
 	bootstrapToken  string
@@ -79,6 +93,11 @@ func New(opts Options) *Server {
 		store:           opts.Store,
 		accounts:        opts.Accounts,
 		pki:             opts.PKI,
+		runtime:         opts.Runtime,
+		statistics:      opts.Statistics,
+		backups:         opts.Backups,
+		maintenance:     opts.Maintenance,
+		updateChecker:   updatecheck.New(),
 		log:             opts.Log,
 		build:           opts.Build,
 		bootstrapToken:  opts.BootstrapToken,
@@ -107,6 +126,12 @@ func (s *Server) Handler() http.Handler {
 
 	mux.Handle("GET /api/me", s.requireSession(http.HandlerFunc(s.handleMe)))
 	mux.Handle("GET /api/system", s.requireSession(http.HandlerFunc(s.handleSystem)))
+	mux.Handle("GET /api/update", s.requireSession(http.HandlerFunc(s.handleUpdateCheck)))
+	mux.Handle("GET /api/overview", s.requireSession(http.HandlerFunc(s.handleOverview)))
+	mux.Handle("GET /api/connections", s.requireSession(http.HandlerFunc(s.handleConnections)))
+	mux.Handle("GET /api/connections/history", s.requireSession(http.HandlerFunc(s.handleConnectionHistory)))
+	mux.Handle("POST /api/connections/{id}/disconnect", s.requireSession(http.HandlerFunc(s.handleDisconnect)))
+	mux.Handle("GET /api/usage/trend", s.requireSession(http.HandlerFunc(s.handleUsageTrend)))
 	mux.Handle("GET /api/operations", s.requireSession(http.HandlerFunc(s.handleOperations)))
 
 	mux.Handle("GET /api/users", s.requireSession(http.HandlerFunc(s.handleListUsers)))
@@ -117,6 +142,8 @@ func (s *Server) Handler() http.Handler {
 
 	mux.Handle("GET /api/profiles/{id}", s.requireSession(http.HandlerFunc(s.handleProfileDetail)))
 	mux.Handle("PATCH /api/profiles/{id}", s.requireSession(http.HandlerFunc(s.handleUpdateProfile)))
+	mux.Handle("PUT /api/profiles/{id}/limits", s.requireSession(http.HandlerFunc(s.handleUpdateProfileLimits)))
+	mux.Handle("POST /api/profiles/{id}/quota/reset", s.requireSession(http.HandlerFunc(s.handleResetQuota)))
 	mux.Handle("POST /api/profiles/{id}/password", s.requireSession(http.HandlerFunc(s.handleResetProfilePassword)))
 	mux.Handle("POST /api/profiles/{id}/certificate/rotate", s.requireSession(http.HandlerFunc(s.handleRotateCertificate)))
 	mux.Handle("POST /api/profiles/{id}/certificate/revoke", s.requireSession(http.HandlerFunc(s.handleRevokeCertificate)))
@@ -126,6 +153,23 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/settings/export", s.requireSession(http.HandlerFunc(s.handleGetExportSettings)))
 	mux.Handle("PUT /api/settings/export", s.requireSession(http.HandlerFunc(s.handleSaveExportSettings)))
 	mux.Handle("POST /api/admin/password", s.requireSession(http.HandlerFunc(s.handleChangeAdminPassword)))
+	mux.Handle("POST /api/runtime/apply", s.requireSession(http.HandlerFunc(s.handleRuntimeApply)))
+	mux.Handle("GET /api/server/config", s.requireSession(http.HandlerFunc(s.handleServerConfig)))
+	mux.Handle("POST /api/server/config/preview", s.requireSession(http.HandlerFunc(s.handleServerConfigPreview)))
+	mux.Handle("PUT /api/server/config/draft", s.requireSession(http.HandlerFunc(s.handleSaveServerDraft)))
+	mux.Handle("POST /api/server/config/apply", s.requireSession(http.HandlerFunc(s.handleApplyServerConfig)))
+	mux.Handle("POST /api/server/command", s.requireSession(http.HandlerFunc(s.handleServerCommand)))
+
+	mux.Handle("GET /api/backups", s.requireSession(http.HandlerFunc(s.handleListBackups)))
+	mux.Handle("PUT /api/backups/settings", s.requireSession(http.HandlerFunc(s.handleSaveBackupSettings)))
+	mux.Handle("POST /api/backups", s.requireSession(http.HandlerFunc(s.handleCreateBackup)))
+	mux.Handle("POST /api/backups/{id}/download", s.requireSession(http.HandlerFunc(s.handleDownloadBackup)))
+	mux.Handle("POST /api/backups/{id}/delete", s.requireSession(http.HandlerFunc(s.handleDeleteBackup)))
+	mux.Handle("POST /api/backups/restore/preview", s.requireSession(http.HandlerFunc(s.handleRestorePreview)))
+	mux.Handle("POST /api/backups/restore/execute", s.requireSession(http.HandlerFunc(s.handleRestoreExecute)))
+
+	mux.Handle("GET /api/maintenance/openvpn", s.requireSession(http.HandlerFunc(s.handleOpenVPNMaintenance)))
+	mux.Handle("POST /api/maintenance/openvpn/update", s.requireSession(http.HandlerFunc(s.handleOpenVPNUpdate)))
 
 	// 未匹配的 API 路径必须返回 JSON 404，不能落到单页应用回退。
 	mux.HandleFunc("/api/", s.handleAPINotFound)
@@ -636,7 +680,7 @@ func validateCredentials(username, password string) string {
 		return "用户名长度需在 3 到 64 个字符之间"
 	}
 	if len(password) < minPasswordLength {
-		return "密码至少需要 12 个字符"
+		return "密码至少需要 8 个字符"
 	}
 	if len(password) > 200 {
 		return "密码过长"

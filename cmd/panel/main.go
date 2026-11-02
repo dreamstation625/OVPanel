@@ -15,19 +15,25 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/dreamstation625/ovpanel/internal/accounts"
 	"github.com/dreamstation625/ovpanel/internal/api"
+	"github.com/dreamstation625/ovpanel/internal/backup"
 	"github.com/dreamstation625/ovpanel/internal/bootstrap"
 	"github.com/dreamstation625/ovpanel/internal/config"
 	"github.com/dreamstation625/ovpanel/internal/devtls"
 	"github.com/dreamstation625/ovpanel/internal/logging"
+	"github.com/dreamstation625/ovpanel/internal/maintapi"
+	"github.com/dreamstation625/ovpanel/internal/maintclient"
 	"github.com/dreamstation625/ovpanel/internal/pki"
 	"github.com/dreamstation625/ovpanel/internal/secretbox"
+	"github.com/dreamstation625/ovpanel/internal/statistics"
 	"github.com/dreamstation625/ovpanel/internal/store"
+	"github.com/dreamstation625/ovpanel/internal/vpnruntime"
 	"github.com/dreamstation625/ovpanel/web"
 )
 
@@ -76,6 +82,11 @@ func run() error {
 		return fmt.Errorf("应用数据库迁移: %w", err)
 	}
 	log.Info("database ready", "path", st.Path(), "schema", schema)
+	if n, err := st.FailStaleOperations(ctx, "面板重启前任务未完成，请检查数据后重试"); err != nil {
+		log.Warn("mark stale operations failed", "error", err)
+	} else if n > 0 {
+		log.Warn("stale operations marked failed", "count", n)
+	}
 
 	initialized, err := st.AdminExists(ctx)
 	if err != nil {
@@ -91,6 +102,39 @@ func run() error {
 		return fmt.Errorf("检查 PKI: %w", err)
 	}
 	accountsService := accounts.New(st, pkiService, masterKey)
+	runtimeService := vpnruntime.New(st, pkiService, accountsService, cfg.ControlDir)
+	statisticsService := statistics.New(st, cfg.ControlDir, log)
+	maintenanceSocket := strings.TrimSpace(os.Getenv("OVPANEL_MAINTENANCE_SOCKET"))
+	if maintenanceSocket == "" {
+		maintenanceSocket = "/run/ovpanel/maintain.sock"
+	}
+	maintenanceClient := maintclient.New(maintenanceSocket)
+	backupService := backup.New(backup.Options{
+		Store:         st,
+		PKI:           pkiService,
+		Accounts:      accountsService,
+		Runtime:       runtimeService,
+		MasterKey:     masterKey,
+		MasterKeyPath: cfg.MasterKeyPath(),
+		MasterKeyEnv:  cfg.MasterKey != "",
+		DataDir:       cfg.DataDir,
+		ControlDir:    cfg.ControlDir,
+		Version:       version,
+		Commit:        commit,
+		Log:           log,
+		MaintenanceBusy: func(ctx context.Context) error {
+			state, err := maintenanceClient.State(ctx)
+			if err != nil {
+				// 维护进程不可用时不会发生 OpenVPN 更新，不阻断备份。
+				return nil
+			}
+			if state.Task != nil && (state.Task.State == maintapi.TaskPending || state.Task.State == maintapi.TaskRunning) {
+				return backup.ErrMaintenanceBusy
+			}
+			return nil
+		},
+	})
+	log.Info("runtime control ready", "dir", cfg.ControlDir, "maintenance_socket", maintenanceSocket)
 	log.Info("master key ready",
 		"path", cfg.MasterKeyPath(),
 		"from_env", cfg.MasterKey != "")
@@ -119,11 +163,15 @@ func run() error {
 	}
 
 	srv := api.New(api.Options{
-		Config:   cfg,
-		Store:    st,
-		Accounts: accountsService,
-		PKI:      pkiService,
-		Log:      log,
+		Config:      cfg,
+		Store:       st,
+		Accounts:    accountsService,
+		PKI:         pkiService,
+		Runtime:     runtimeService,
+		Statistics:  statisticsService,
+		Backups:     backupService,
+		Maintenance: maintenanceClient,
+		Log:         log,
 		Build: api.BuildInfo{
 			Version:   version,
 			Commit:    commit,
@@ -144,6 +192,16 @@ func run() error {
 	go func() {
 		defer cleanupWG.Done()
 		cleanupSessions(ctx, st, log)
+	}()
+	cleanupWG.Add(1)
+	go func() {
+		defer cleanupWG.Done()
+		syncStatistics(ctx, statisticsService, log)
+	}()
+	cleanupWG.Add(1)
+	go func() {
+		defer cleanupWG.Done()
+		runBackupSchedule(ctx, backupService, log)
 	}()
 
 	httpServer := &http.Server{
@@ -211,6 +269,58 @@ func run() error {
 	}
 	log.Info("panel stopped")
 	return nil
+}
+
+// runBackupSchedule 每 30 秒检查一次定时备份；同一天最多执行一次。
+func runBackupSchedule(ctx context.Context, service *backup.Service, log *slog.Logger) {
+	runOnce := func() {
+		runCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		if err := service.RunScheduled(runCtx); err != nil {
+			log.Warn("scheduled backup failed", "error", err)
+		}
+	}
+
+	runOnce()
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			runOnce()
+		}
+	}
+}
+
+// syncStatistics 每 5 秒把运行代理的事件日志补传到面板数据库。
+// 面板离线期间的用量保留在代理本地，恢复后按序号去重补传。
+func syncStatistics(ctx context.Context, service *statistics.Service, log *slog.Logger) {
+	runOnce := func() {
+		syncCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		result, err := service.Sync(syncCtx)
+		if err != nil {
+			log.Warn("sync usage statistics failed", "error", err)
+			return
+		}
+		if result.Events > 0 || result.Closed > 0 {
+			log.Info("usage statistics synced", "events", result.Events, "closed", result.Closed)
+		}
+	}
+
+	runOnce()
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			runOnce()
+		}
+	}
 }
 
 // cleanupSessions 定期清理过期会话。启动时先执行一次，避免长期停机后

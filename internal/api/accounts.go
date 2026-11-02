@@ -1,9 +1,11 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -24,6 +26,8 @@ type userDTO struct {
 	Status             string   `json:"status"`
 	ProfileCount       int      `json:"profileCount"`
 	ActiveProfileCount int      `json:"activeProfileCount"`
+	UsageBytes         uint64   `json:"usageBytes"`
+	OnlineSessions     int      `json:"onlineSessions"`
 	CreatedAt          string   `json:"createdAt"`
 	UpdatedAt          string   `json:"updatedAt"`
 }
@@ -41,19 +45,40 @@ type certificateDTO struct {
 }
 
 type profileDTO struct {
-	ID              string          `json:"id"`
-	UserID          string          `json:"userId"`
-	UserDisplayName string          `json:"userDisplayName"`
-	Name            string          `json:"name"`
-	AuthType        string          `json:"authType"`
-	Username        string          `json:"username,omitempty"`
-	Status          string          `json:"status"`
-	EffectiveStatus string          `json:"effectiveStatus"`
-	StatusReason    string          `json:"statusReason"`
-	ExpiresAt       string          `json:"expiresAt,omitempty"`
-	Certificate     *certificateDTO `json:"certificate,omitempty"`
-	CreatedAt       string          `json:"createdAt"`
-	UpdatedAt       string          `json:"updatedAt"`
+	ID                string          `json:"id"`
+	UserID            string          `json:"userId"`
+	UserDisplayName   string          `json:"userDisplayName"`
+	Name              string          `json:"name"`
+	AuthType          string          `json:"authType"`
+	Username          string          `json:"username,omitempty"`
+	Status            string          `json:"status"`
+	EffectiveStatus   string          `json:"effectiveStatus"`
+	StatusReason      string          `json:"statusReason"`
+	ExpiresAt         string          `json:"expiresAt,omitempty"`
+	RouteMode         string          `json:"routeMode"`
+	AccessMode        string          `json:"accessMode"`
+	AllowedInternal   []string        `json:"allowedInternal"`
+	ClientLANAccess   string          `json:"clientLanAccess"`
+	ClientNetworks    []string        `json:"clientNetworks"`
+	FixedVPNIP        string          `json:"fixedVpnIp"`
+	FixedIPRangeStart string          `json:"fixedIpRangeStart,omitempty"`
+	FixedIPRangeEnd   string          `json:"fixedIpRangeEnd,omitempty"`
+	FixedIPPoolStart  string          `json:"fixedIpPoolStart,omitempty"`
+	FixedIPPoolEnd    string          `json:"fixedIpPoolEnd,omitempty"`
+	ConcurrentLimit   int64           `json:"concurrentLimit"`
+	QuotaBytes        int64           `json:"quotaBytes"`
+	UploadBps         int64           `json:"uploadBps"`
+	DownloadBps       int64           `json:"downloadBps"`
+	QuotaEpoch        int64           `json:"quotaEpoch"`
+	UsageBytes        uint64          `json:"usageBytes"`
+	UsagePercent      float64         `json:"usagePercent"`
+	UsageGaps         int             `json:"usageGaps"`
+	UsageKnown        bool            `json:"usageKnown"`
+	OnlineSessions    int             `json:"onlineSessions"`
+	QuotaResetAt      string          `json:"quotaResetAt,omitempty"`
+	Certificate       *certificateDTO `json:"certificate,omitempty"`
+	CreatedAt         string          `json:"createdAt"`
+	UpdatedAt         string          `json:"updatedAt"`
 }
 
 type userDetailDTO struct {
@@ -86,8 +111,14 @@ type updateUserRequest struct {
 }
 
 type updateProfileRequest struct {
-	Name   *string `json:"name"`
-	Status *string `json:"status"`
+	Name            *string   `json:"name"`
+	Status          *string   `json:"status"`
+	RouteMode       *string   `json:"routeMode"`
+	AccessMode      *string   `json:"accessMode"`
+	AllowedInternal *[]string `json:"allowedInternal"`
+	ClientLANAccess *string   `json:"clientLanAccess"`
+	ClientNetworks  *[]string `json:"clientNetworks"`
+	FixedVPNIP      *string   `json:"fixedVpnIp"`
 }
 
 // ---------- 用户 ----------
@@ -113,6 +144,7 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 	for _, u := range users {
 		out = append(out, userToDTO(u.User, u.ProfileCount, u.ActiveProfileCount))
 	}
+	s.enrichUserList(r.Context(), out)
 	writeJSON(w, http.StatusOK, map[string]any{"users": out})
 }
 
@@ -151,6 +183,7 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	if result.Profile != nil {
 		dto := profileToDTO(*result.Profile, s.now())
 		resp["profile"] = dto
+		s.applyRuntimeBundle(r.Context(), "user and profile created")
 	}
 	if result.Password != "" {
 		resp["password"] = result.Password
@@ -181,7 +214,9 @@ func (s *Server) handleUserDetail(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, buildUserDetail(user, profiles, s.now()))
+	detail := buildUserDetail(user, profiles, s.now())
+	s.enrichUserDetail(r.Context(), &detail)
+	writeJSON(w, http.StatusOK, detail)
 }
 
 func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
@@ -226,6 +261,7 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 			s.writeAccountError(w, r, err)
 			return
 		}
+		s.applyRuntimeBundle(r.Context(), "user status updated")
 	}
 
 	user, ok, err := s.store.User(r.Context(), id)
@@ -239,7 +275,9 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.log.Info("user updated", "user_id", id)
-	writeJSON(w, http.StatusOK, buildUserDetail(user, profiles, s.now()))
+	detail := buildUserDetail(user, profiles, s.now())
+	s.enrichUserDetail(r.Context(), &detail)
+	writeJSON(w, http.StatusOK, detail)
 }
 
 // ---------- 客户端配置 ----------
@@ -260,10 +298,13 @@ func (s *Server) handleAddProfile(w http.ResponseWriter, r *http.Request) {
 		s.writeAccountError(w, r, err)
 		return
 	}
-	resp := map[string]any{"profile": profileToDTO(result.Profile, s.now())}
+	dto := profileToDTO(result.Profile, s.now())
+	s.enrichProfileDTO(r.Context(), result.Profile, &dto)
+	resp := map[string]any{"profile": dto}
 	if result.Password != "" {
 		resp["password"] = result.Password
 	}
+	s.applyRuntimeBundle(r.Context(), "profile created")
 	s.log.Info("profile created",
 		"user_id", userID, "profile_id", result.Profile.ID, "auth_type", result.Profile.AuthType)
 	writeJSON(w, http.StatusCreated, resp)
@@ -279,7 +320,21 @@ func (s *Server) handleProfileDetail(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusNotFound, CodeNotFound, "客户端配置不存在")
 		return
 	}
-	writeJSON(w, http.StatusOK, profileToDTO(detail, s.now()))
+	dto := profileToDTO(detail, s.now())
+	s.enrichProfileDTO(r.Context(), detail, &dto)
+	s.enrichFixedIPRange(r.Context(), &dto)
+	writeJSON(w, http.StatusOK, dto)
+}
+
+func (s *Server) enrichFixedIPRange(ctx context.Context, dto *profileDTO) {
+	plan, err := s.accounts.FixedIPRange(ctx)
+	if err != nil {
+		return
+	}
+	dto.FixedIPRangeStart = plan.FixedStart
+	dto.FixedIPRangeEnd = plan.FixedEnd
+	dto.FixedIPPoolStart = plan.PoolStart
+	dto.FixedIPPoolEnd = plan.PoolEnd
 }
 
 func (s *Server) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
@@ -288,7 +343,7 @@ func (s *Server) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 	if !s.decodeJSON(w, r, &req) {
 		return
 	}
-	if req.Name == nil && req.Status == nil {
+	if req.Name == nil && req.Status == nil && req.RouteMode == nil && req.AccessMode == nil && req.AllowedInternal == nil && req.ClientLANAccess == nil && req.ClientNetworks == nil && req.FixedVPNIP == nil {
 		writeError(w, r, http.StatusBadRequest, CodeInvalidRequest, "没有需要更新的字段")
 		return
 	}
@@ -308,21 +363,63 @@ func (s *Server) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 			s.writeAccountError(w, r, err)
 			return
 		}
+		// 停用必须尽快断开现有连接，不等连接自然结束。
+		s.applyRuntimeBundle(r.Context(), "profile status updated")
+	}
+	if req.RouteMode != nil || req.AccessMode != nil || req.AllowedInternal != nil || req.ClientLANAccess != nil || req.ClientNetworks != nil || req.FixedVPNIP != nil {
+		current, ok, err := s.store.Profile(r.Context(), id)
+		if err != nil {
+			s.internalError(w, r, err)
+			return
+		}
+		if !ok {
+			s.writeAccountError(w, r, store.ErrNotFound)
+			return
+		}
+		routeMode, accessMode := current.RouteMode, current.AccessMode
+		allowed := current.AllowedInternal
+		clientLANAccess := current.ClientLANAccess
+		clientNetworks := current.ClientNetworks
+		fixedVPNIP := current.FixedVPNIP
+		if req.RouteMode != nil {
+			routeMode = *req.RouteMode
+		}
+		if req.AccessMode != nil {
+			accessMode = *req.AccessMode
+		}
+		if req.AllowedInternal != nil {
+			allowed = *req.AllowedInternal
+		}
+		if req.ClientLANAccess != nil {
+			clientLANAccess = *req.ClientLANAccess
+		}
+		if req.ClientNetworks != nil {
+			clientNetworks = *req.ClientNetworks
+		}
+		if req.FixedVPNIP != nil {
+			fixedVPNIP = *req.FixedVPNIP
+		}
+		detail, err = s.accounts.UpdateProfilePolicy(r.Context(), id, routeMode, accessMode, allowed, clientNetworks, clientLANAccess, fixedVPNIP)
+		if err != nil {
+			s.writeAccountError(w, r, err)
+			return
+		}
+		// 立即把新策略同步到运行代理；尚未配置导出地址时没有运行配置可下发。
+		s.applyRuntimeBundle(r.Context(), "profile policy updated")
 	}
 	s.log.Info("profile updated", "profile_id", id)
-	writeJSON(w, http.StatusOK, profileToDTO(detail, s.now()))
+	dto := profileToDTO(detail, s.now())
+	s.enrichProfileDTO(r.Context(), detail, &dto)
+	s.enrichFixedIPRange(r.Context(), &dto)
+	writeJSON(w, http.StatusOK, dto)
 }
 
 func (s *Server) handleResetProfilePassword(w http.ResponseWriter, r *http.Request) {
 	profileID := r.PathValue("id")
 	var req struct {
-		AdminPassword string `json:"adminPassword"`
-		Password      string `json:"password"`
+		Password string `json:"password"`
 	}
 	if !s.decodeJSON(w, r, &req) {
-		return
-	}
-	if _, ok := s.verifyAdminPassword(w, r, req.AdminPassword); !ok {
 		return
 	}
 	result, err := s.accounts.ResetPassword(r.Context(), profileID, req.Password)
@@ -330,43 +427,36 @@ func (s *Server) handleResetProfilePassword(w http.ResponseWriter, r *http.Reque
 		s.writeAccountError(w, r, err)
 		return
 	}
+	s.applyRuntimeBundle(r.Context(), "profile password reset")
 	s.log.Info("profile password reset", "profile_id", profileID)
+	dto := profileToDTO(result.Profile, s.now())
+	s.enrichProfileDTO(r.Context(), result.Profile, &dto)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"profile":  profileToDTO(result.Profile, s.now()),
+		"profile":  dto,
 		"password": result.Password,
 	})
 }
 
 func (s *Server) handleRotateCertificate(w http.ResponseWriter, r *http.Request) {
 	profileID := r.PathValue("id")
-	var req struct {
-		AdminPassword string `json:"adminPassword"`
-	}
-	if !s.decodeJSON(w, r, &req) {
-		return
-	}
-	if _, ok := s.verifyAdminPassword(w, r, req.AdminPassword); !ok {
-		return
-	}
 	detail, err := s.accounts.RotateCertificate(r.Context(), profileID)
 	if err != nil {
 		s.writeAccountError(w, r, err)
 		return
 	}
+	s.applyRuntimeBundle(r.Context(), "certificate rotated")
 	s.log.Info("profile certificate rotated", "profile_id", profileID)
-	writeJSON(w, http.StatusOK, map[string]any{"profile": profileToDTO(detail, s.now())})
+	dto := profileToDTO(detail, s.now())
+	s.enrichProfileDTO(r.Context(), detail, &dto)
+	writeJSON(w, http.StatusOK, map[string]any{"profile": dto})
 }
 
 func (s *Server) handleRevokeCertificate(w http.ResponseWriter, r *http.Request) {
 	profileID := r.PathValue("id")
 	var req struct {
-		AdminPassword string `json:"adminPassword"`
-		Reason        string `json:"reason"`
+		Reason string `json:"reason"`
 	}
 	if !s.decodeJSON(w, r, &req) {
-		return
-	}
-	if _, ok := s.verifyAdminPassword(w, r, req.AdminPassword); !ok {
 		return
 	}
 	detail, err := s.accounts.RevokeCertificate(r.Context(), profileID, req.Reason)
@@ -374,28 +464,22 @@ func (s *Server) handleRevokeCertificate(w http.ResponseWriter, r *http.Request)
 		s.writeAccountError(w, r, err)
 		return
 	}
+	s.applyRuntimeBundle(r.Context(), "certificate revoked")
 	s.log.Warn("profile certificate revoked", "profile_id", profileID)
-	writeJSON(w, http.StatusOK, map[string]any{"profile": profileToDTO(detail, s.now())})
+	dto := profileToDTO(detail, s.now())
+	s.enrichProfileDTO(r.Context(), detail, &dto)
+	writeJSON(w, http.StatusOK, map[string]any{"profile": dto})
 }
 
 func (s *Server) handleExportProfile(w http.ResponseWriter, r *http.Request) {
 	profileID := r.PathValue("id")
-	var req struct {
-		AdminPassword string `json:"adminPassword"`
-	}
-	if !s.decodeJSON(w, r, &req) {
-		return
-	}
-	if _, ok := s.verifyAdminPassword(w, r, req.AdminPassword); !ok {
-		return
-	}
 	result, err := s.accounts.Export(r.Context(), profileID)
 	if err != nil {
 		s.writeAccountError(w, r, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/x-openvpn-profile")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, result.Filename))
+	w.Header().Set("Content-Disposition", exportContentDisposition(result.Filename))
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
@@ -403,6 +487,12 @@ func (s *Server) handleExportProfile(w http.ResponseWriter, r *http.Request) {
 		s.log.Warn("write export failed", "profile_id", profileID, "error", err)
 	}
 	s.log.Info("profile exported", "profile_id", profileID)
+}
+
+// exportContentDisposition 同时给出 ASCII 回退名和 UTF-8 文件名。
+func exportContentDisposition(filename string) string {
+	encoded := strings.ReplaceAll(url.QueryEscape(filename), "+", "%20")
+	return fmt.Sprintf(`attachment; filename="ovpanel.ovpn"; filename*=UTF-8''%s`, encoded)
 }
 
 // ---------- PKI 与导出设置 ----------
@@ -602,9 +692,43 @@ func profileToDTO(detail store.ProfileDetail, now time.Time) profileDTO {
 		Status:          detail.Status,
 		EffectiveStatus: effective,
 		StatusReason:    reason,
+		RouteMode:       detail.RouteMode,
+		AccessMode:      detail.AccessMode,
+		AllowedInternal: detail.AllowedInternal,
+		ClientLANAccess: detail.ClientLANAccess,
+		ClientNetworks:  detail.ClientNetworks,
+		FixedVPNIP:      detail.FixedVPNIP,
 		CreatedAt:       detail.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:       detail.UpdatedAt.Format(time.RFC3339),
 	}
+	if dto.RouteMode == "" {
+		dto.RouteMode = store.RouteInherit
+	}
+	if dto.AccessMode == "" {
+		dto.AccessMode = store.AccessInherit
+	}
+	if dto.AllowedInternal == nil {
+		dto.AllowedInternal = []string{}
+	}
+	if dto.ClientLANAccess == "" {
+		dto.ClientLANAccess = store.ClientLANInherit
+	}
+	if dto.ClientNetworks == nil {
+		dto.ClientNetworks = []string{}
+	}
+	if detail.ConcurrentLimit != nil {
+		dto.ConcurrentLimit = *detail.ConcurrentLimit
+	}
+	if detail.QuotaBytes != nil {
+		dto.QuotaBytes = *detail.QuotaBytes
+	}
+	if detail.UploadBps != nil {
+		dto.UploadBps = *detail.UploadBps
+	}
+	if detail.DownloadBps != nil {
+		dto.DownloadBps = *detail.DownloadBps
+	}
+	dto.QuotaEpoch = detail.QuotaEpoch
 	if detail.ExpiresAt != nil {
 		dto.ExpiresAt = detail.ExpiresAt.Format(time.RFC3339)
 	}
@@ -665,7 +789,7 @@ func exportSettingsDTO(setting accounts.ExportSettings, configured bool) map[str
 
 func validateNewAdminPassword(username, password string) string {
 	if n := utf8.RuneCountInString(password); n < minPasswordLength {
-		return "新密码至少需要 12 个字符"
+		return "新密码至少需要 8 个字符"
 	}
 	if utf8.RuneCountInString(password) > 200 {
 		return "新密码过长"
@@ -682,6 +806,8 @@ func (s *Server) writeAccountError(w http.ResponseWriter, r *http.Request, err e
 		writeError(w, r, http.StatusNotFound, CodeNotFound, "记录不存在")
 	case errors.Is(err, store.ErrUsernameTaken):
 		writeError(w, r, http.StatusConflict, CodeUsernameTaken, "登录名已被其他配置使用")
+	case errors.Is(err, store.ErrFixedIPTaken):
+		writeError(w, r, http.StatusConflict, CodeConflict, "固定 IP 已被其他配置使用")
 	case errors.Is(err, accounts.ErrValidation):
 		writeError(w, r, http.StatusBadRequest, CodeInvalidRequest, err.Error())
 	case errors.Is(err, accounts.ErrNoPasswordAuth):

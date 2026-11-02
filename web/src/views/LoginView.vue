@@ -54,9 +54,9 @@ async function submit() {
       </header>
 
       <div class="auth-heading">
-        <span class="eyebrow"><LogIn :size="14" /> 单管理员</span>
+        <span class="eyebrow"><LogIn :size="14" /> 管理员</span>
         <h1 id="login-title">进入管理面板</h1>
-        <p>面板只使用一个管理员账号，凭据与 VPN 用户分离。</p>
+        <p>管理员账号与 VPN 用户账号分开。</p>
       </div>
 
       <NAlert v-if="notice" type="warning" :bordered="false" class="stack-gap">{{ notice }}</NAlert>

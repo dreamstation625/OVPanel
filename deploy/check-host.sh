@@ -131,6 +131,17 @@ else
   warn "宿主 net.ipv4.ip_forward=$forward；Compose 需要允许设置该 sysctl"
 fi
 
+# Docker 容器出网依赖 NAT/转发。compose.sh up -d 会自动检查 ovpanel 网络。
+if [ -f /etc/docker/daemon.json ] && grep -qE '"iptables"[[:space:]]*:[[:space:]]*false' /etc/docker/daemon.json 2>/dev/null; then
+  if have ufw && ufw status 2>/dev/null | head -n 1 | grep -qi '^Status: active'; then
+    warn "Docker iptables 已关闭且 UFW 已启用；compose.sh up -d 会自动为 ovpanel 网络添加转发和 NAT（需要 root/免密 sudo）"
+  else
+    warn "Docker iptables 已关闭；请确认宿主已提供容器 NAT/转发，否则 VPN 全局出口和 DNS 会失败"
+  fi
+else
+  ok "Docker 未显式关闭 iptables"
+fi
+
 # 磁盘空间
 if have df; then
   parent="$DATA_DIR"

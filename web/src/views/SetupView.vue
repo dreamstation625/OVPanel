@@ -32,8 +32,8 @@ async function submit() {
     error.value = '用户名长度需在 3 到 64 个字符之间'
     return
   }
-  if (password.value.length < 12) {
-    error.value = '密码至少需要 12 个字符'
+  if (password.value.length < 8) {
+    error.value = '密码至少需要 8 个字符'
     return
   }
   if (password.value !== confirm.value) {
@@ -74,8 +74,8 @@ async function submit() {
 
       <div class="auth-heading">
         <span class="eyebrow"><ShieldCheck :size="14" /> 创建管理员</span>
-        <h1 id="setup-title">设置面板的唯一管理员</h1>
-        <p>初始化成功后，这个入口会永久关闭。密码只保存为哈希，无法找回明文。</p>
+        <h1 id="setup-title">设置管理员账号</h1>
+        <p>初始化后入口关闭，密码无法找回。</p>
       </div>
 
       <NAlert v-if="error" type="error" :bordered="false" class="stack-gap">{{ error }}</NAlert>
@@ -83,7 +83,7 @@ async function submit() {
       <div v-if="status.requiresToken" class="token-block">
         <div class="token-title"><KeyRound :size="15" /> 需要初始化口令</div>
         <p>
-          当前请求不是本机直连。可在面板容器内读取
+          当前不是本机直连。可在面板容器内读取
           <code>/data/bootstrap-token</code>，或使用部署时注入的
           <code>OVPANEL_BOOTSTRAP_TOKEN</code>。
         </p>
@@ -104,7 +104,7 @@ async function submit() {
             v-model:value="password"
             type="password"
             show-password-on="click"
-            placeholder="至少 12 个字符"
+            placeholder="至少 8 个字符"
             autocomplete="new-password"
             @keyup.enter="submit"
           />

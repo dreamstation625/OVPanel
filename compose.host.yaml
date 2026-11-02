@@ -1,0 +1,124 @@
+# 独立 host 部署：可直接粘贴到宝塔、1Panel 等面板的 Compose 编排。
+# 不需要源码或其他 Compose 文件，配套环境变量示例为 .env.host.example。
+# 将示例保存为编排目录的 .env，或在面板中配置对应的编排环境变量。
+# 默认使用 latest 正式版；生产环境建议在 .env 中固定版本标签。
+#
+# 部署前：宿主开启 net.ipv4.ip_forward=1，具备 /dev/net/tun 与所需内核模块。
+# 数据默认保存在 /opt/ovpanel/data，HTTPS 证书目录为 /opt/ovpanel/certs。
+# 默认管理地址为 127.0.0.1:8080；远程初始化可使用 SSH 隧道。
+# 公网管理先配置 HTTPS，再修改 OVPANEL_ADMIN_BIND。
+# 请勿与已有的 OVPanel 编排同时启动，容器名与 VPN 端口会冲突。
+#
+# 命令行用法：docker compose --env-file .env -f compose.host.yaml up -d
+
+name: ovpanel
+
+services:
+  panel:
+    # 升级时将两个镜像改为同一个发布版本，生产环境建议固定版本标签。
+    image: ${OVPANEL_PANEL_IMAGE:-dreamstation625/ovpanel:latest}
+    container_name: ovpanel-panel
+    labels:
+      com.ovpanel.managed: "true"
+      com.ovpanel.role: "panel"
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+      - /run/ovpanel:size=1m
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      OVPANEL_DATA_DIR: /data
+      OVPANEL_LISTEN: ":8080"
+      OVPANEL_LOG_LEVEL: ${OVPANEL_LOG_LEVEL:-info}
+      OVPANEL_SESSION_TTL: ${OVPANEL_SESSION_TTL:-12h}
+      # 开启 HTTPS 时填 /certs/panel.crt 与 /certs/panel.key。
+      OVPANEL_TLS_CERT: ${OVPANEL_TLS_CERT:-}
+      OVPANEL_TLS_KEY: ${OVPANEL_TLS_KEY:-}
+      OVPANEL_DEV_SELF_SIGNED: ${OVPANEL_DEV_SELF_SIGNED:-false}
+      # 留空自动生成；初始化口令见 /opt/ovpanel/data/panel/bootstrap-token。
+      OVPANEL_BOOTSTRAP_TOKEN: ${OVPANEL_BOOTSTRAP_TOKEN:-}
+      OVPANEL_MASTER_KEY: ${OVPANEL_MASTER_KEY:-}
+      OVPANEL_CONTROL_DIR: /control
+      OVPANEL_PANEL_IMAGE_REF: ${OVPANEL_PANEL_IMAGE:-dreamstation625/ovpanel:latest}
+      OVPANEL_OPENVPN_IMAGE_REF: ${OVPANEL_OPENVPN_IMAGE:-dreamstation625/ovpanel-openvpn:latest}
+      OVPANEL_MAINTENANCE_SOCKET: /run/ovpanel/maintain.sock
+      OVPANEL_DOCKER_SOCKET: /var/run/docker.sock
+      OVPANEL_MAINTENANCE_STATE_DIR: /data/maintenance
+      OVPANEL_OPENVPN_CONTAINER: ovpanel-openvpn
+      OVPANEL_OPENVPN_IMAGE_REPOSITORY: ${OVPANEL_OPENVPN_REPOSITORY:-dreamstation625/ovpanel-openvpn}
+    ports:
+      - "${OVPANEL_ADMIN_BIND:-127.0.0.1}:${OVPANEL_ADMIN_PORT:-8080}:8080"
+    volumes:
+      - "${OVPANEL_DATA_ROOT:-/opt/ovpanel/data}/panel:/data"
+      - "${OVPANEL_DATA_ROOT:-/opt/ovpanel/data}/control:/control"
+      - "${OVPANEL_CERT_DIR:-/opt/ovpanel/certs}:/certs:ro"
+      # 仅容器内的受限维护进程使用；Web 进程不直接打开 Docker Socket。
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          wget -qO- http://127.0.0.1:8080/api/health >/dev/null 2>&1 ||
+          wget -qO- --no-check-certificate https://127.0.0.1:8080/api/health >/dev/null 2>&1
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    stop_grace_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - ovpanel
+
+  openvpn:
+    image: ${OVPANEL_OPENVPN_IMAGE:-dreamstation625/ovpanel-openvpn:latest}
+    container_name: ovpanel-openvpn
+    labels:
+      com.ovpanel.managed: "true"
+      com.ovpanel.role: "openvpn"
+    restart: unless-stopped
+    init: true
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      OVPANEL_HOST_NETWORK: "1"
+      # 运行代理只监听宿主回环地址，不向外暴露管理接口。
+      OVPANEL_AGENT_LISTEN: "127.0.0.1:9443"
+      OVPANEL_AGENT_STATE_DIR: /var/lib/ovpanel
+      OVPANEL_CONTROL_DIR: /control
+      OVPANEL_LOG_LEVEL: ${OVPANEL_LOG_LEVEL:-info}
+      # 用于 UFW 放行，必须与面板「服务端」的端口和协议一致。
+      OVPANEL_VPN_PORT: "${OVPANEL_VPN_PORT:-1194}"
+      OVPANEL_VPN_PROTO: "${OVPANEL_VPN_PROTO:-udp}"
+    volumes:
+      - "${OVPANEL_DATA_ROOT:-/opt/ovpanel/data}/openvpn:/var/lib/ovpanel"
+      - "${OVPANEL_DATA_ROOT:-/opt/ovpanel/data}/openvpn-config:/etc/openvpn/ovpanel"
+      - "${OVPANEL_DATA_ROOT:-/opt/ovpanel/data}/control:/control"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget -qO- http://127.0.0.1:9443/readyz >/dev/null 2>&1
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    stop_grace_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  ovpanel:
+    name: ovpanel

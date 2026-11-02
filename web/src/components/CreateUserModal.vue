@@ -3,8 +3,10 @@ import { ref, watch } from 'vue'
 import { NAlert, NButton, NForm, NFormItem, NInput, NModal, NSwitch } from 'naive-ui'
 import ProfileFields from './ProfileFields.vue'
 import { api, type AuthType, type CreateUserResult } from '../api'
-import { errorMessage, profileValidationMessage, suggestUsername } from '../labels'
+import { profileValidationMessage, suggestUsername } from '../labels'
+import { useNotify } from '../notify'
 
+const notify = useNotify()
 const props = defineProps<{
   show: boolean
 }>()
@@ -82,7 +84,7 @@ async function submit() {
     emit('created', result)
     emit('update:show', false)
   } catch (err) {
-    error.value = errorMessage(err)
+    notify.error(err instanceof Error ? err.message : '创建用户失败')
   } finally {
     busy.value = false
   }
@@ -113,9 +115,9 @@ async function submit() {
       <div class="profile-switch">
         <div>
           <strong>同时创建首份配置</strong>
-          <span>创建后直接得到可下载的客户端配置。</span>
+          <span>创建后可下载客户端配置。</span>
         </div>
-        <NSwitch v-model:value="withProfile" />
+        <NSwitch v-model:value="withProfile" aria-label="同时创建首份配置" />
       </div>
 
       <div v-if="withProfile" class="profile-block">

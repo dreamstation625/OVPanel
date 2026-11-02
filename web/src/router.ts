@@ -6,8 +6,12 @@ export const router = createRouter({
   routes: [
     { path: '/', redirect: '/overview' },
     { path: '/overview', component: () => import('./views/OverviewView.vue'), meta: { title: '概览' } },
+    { path: '/connections', component: () => import('./views/ConnectionsView.vue'), meta: { title: '在线连接' } },
     { path: '/users', component: () => import('./views/UsersView.vue'), meta: { title: '用户与客户端' } },
     { path: '/users/:id', component: () => import('./views/UserDetailView.vue'), meta: { title: '用户详情' } },
+    { path: '/server', component: () => import('./views/ServerView.vue'), meta: { title: '服务端' } },
+    { path: '/logs', component: () => import('./views/LogsView.vue'), meta: { title: '日志' } },
+    { path: '/backups', component: () => import('./views/BackupView.vue'), meta: { title: '备份' } },
     {
       path: '/profiles/:id',
       component: () => import('./views/ProfileDetailView.vue'),

@@ -48,6 +48,9 @@ export interface Operation {
 
 export type AuthType = 'certificate' | 'certificate_password' | 'password'
 export type UserStatus = 'active' | 'disabled'
+export type RouteMode = 'inherit' | 'split' | 'global'
+export type AccessMode = 'inherit' | 'allow' | 'deny'
+export type ClientLANAccess = 'inherit' | 'allow' | 'deny'
 export type EffectiveStatus =
   | 'active'
   | 'user_disabled'
@@ -56,6 +59,7 @@ export type EffectiveStatus =
   | 'certificate_revoked'
   | 'certificate_expired'
   | 'expired'
+  | 'quota_exhausted'
 
 export interface User {
   id: string
@@ -65,6 +69,8 @@ export interface User {
   status: UserStatus
   profileCount: number
   activeProfileCount: number
+  usageBytes: number
+  onlineSessions: number
   createdAt: string
   updatedAt: string
 }
@@ -92,6 +98,27 @@ export interface Profile {
   effectiveStatus: EffectiveStatus
   statusReason: string
   expiresAt?: string
+  routeMode: RouteMode
+  accessMode: AccessMode
+  allowedInternal: string[]
+  clientLanAccess: ClientLANAccess
+  clientNetworks: string[]
+  fixedVpnIp: string
+  fixedIpRangeStart?: string
+  fixedIpRangeEnd?: string
+  fixedIpPoolStart?: string
+  fixedIpPoolEnd?: string
+  concurrentLimit: number
+  quotaBytes: number
+  uploadBps: number
+  downloadBps: number
+  quotaEpoch: number
+  usageBytes: number
+  usagePercent: number
+  usageGaps: number
+  usageKnown: boolean
+  onlineSessions: number
+  quotaResetAt?: string
   certificate?: CertificateInfo
   createdAt: string
   updatedAt: string
@@ -151,6 +178,57 @@ export interface ExportSettings {
   proto: 'udp' | 'tcp'
 }
 
+export interface ServerConfig {
+  vpnNetwork: string
+  protocol: 'udp' | 'tcp'
+  port: number
+  dns: string[]
+  dataCiphers: string[]
+  authDigest: string
+  tlsMinVersion: string
+  keepaliveInterval: number
+  keepaliveTimeout: number
+  maxClients: number
+  routeMode: 'split' | 'global'
+  allowedInternal: string[]
+  allowClientNetworks: boolean
+  allowInterClient: boolean
+  blockIpv6: boolean
+  extraDirectives: string[]
+}
+
+export interface ServerConfigRevision {
+  revision: number
+  state: string
+  config: ServerConfig
+  rendered: string
+  hash: string
+  createdAt: string
+  appliedAt?: string
+}
+
+export interface AgentRuntimeStatus {
+  configured: boolean
+  stopped?: boolean
+  openvpnRunning: boolean
+  managementConnected: boolean
+  configHash?: string
+  sessions: number
+  lastError?: string
+  rolledBack?: boolean
+  rollbackReason?: string
+  appliedAt?: string
+}
+
+export interface ServerConfigResponse {
+  defaults: ServerConfig
+  supportedDirectives: string[]
+  active: ServerConfigRevision | null
+  draft: ServerConfigRevision | null
+  agentStatus?: AgentRuntimeStatus
+  agentStatusPresent: boolean
+}
+
 export interface UserPatch {
   displayName?: string
   notes?: string
@@ -161,6 +239,171 @@ export interface UserPatch {
 export interface ProfilePatch {
   name?: string
   status?: UserStatus
+  routeMode?: RouteMode
+  accessMode?: AccessMode
+  allowedInternal?: string[]
+  clientLanAccess?: ClientLANAccess
+  clientNetworks?: string[]
+  fixedVpnIp?: string
+}
+
+export type BackupKind = 'manual' | 'scheduled' | 'pre_restore'
+
+export interface BackupSettings {
+  configured: boolean
+  enabled: boolean
+  scheduleTime: string
+  retentionCount: number
+  updatedAt: string
+  nextRunAt?: string
+}
+
+export interface BackupItem {
+  id: string
+  filename: string
+  kind: BackupKind
+  note: string
+  sizeBytes: number
+  sha256: string
+  appVersion: string
+  configRevision: number
+  agentGeneration?: string
+  usageSeq: number
+  createdAt: string
+}
+
+export interface BackupListResponse {
+  settings: BackupSettings
+  backups: BackupItem[]
+  storageBytes: number
+  maxPackageSize: number
+}
+
+export interface BackupManifest {
+  schemaVersion: number
+  kind: BackupKind
+  createdAt: string
+  appVersion: string
+  commit?: string
+  panelSchema: number
+  configRevision: number
+  configHash?: string
+  users: number
+  profiles: number
+  validCertificates: number
+  revokedCertificates: number
+  expiredCertificates: number
+  quotaResets: number
+  adminUpdatedAt?: string
+  agentPresent: boolean
+  agentStopped: boolean
+  agentGeneration?: string
+  usageSeq: number
+  masterKeyFingerprint: string
+}
+
+export interface RestorePreview {
+  token: string
+  manifest: BackupManifest
+  warnings: string[]
+  expiresAt: string
+  sha256: string
+}
+
+export interface RestoreResult {
+  restoredAt: string
+  preRestoreBackupId: string
+  vpnStarted: boolean
+  reloginRequired: boolean
+  warnings: string[]
+}
+
+export interface UpdateCheck {
+  currentVersion: string
+  currentCommit: string
+  latestVersion?: string
+  latestName?: string
+  notes?: string
+  url?: string
+  publishedAt?: string
+  updateAvailable: boolean
+  checkedAt?: string
+  error?: string
+}
+
+export interface ProfileLimitsInput {
+  expiresAt: string
+  concurrentLimit: number
+  quotaBytes: number
+  uploadBps: number
+  downloadBps: number
+}
+
+export interface Connection {
+  id: string
+  cid: string
+  profileId: string
+  profileName: string
+  userId: string
+  userDisplayName: string
+  authType: AuthType | ''
+  vpnIp: string
+  sourceIp: string
+  connectedAt: string
+  durationSeconds: number
+  upBytes: number
+  downBytes: number
+  upRate: number
+  downRate: number
+  blocked: boolean
+  blockReason?: string
+  knownProfile: boolean
+}
+
+export interface ConnectionsResponse {
+  agentPresent: boolean
+  updatedAt?: string
+  connections: Connection[]
+  online: number
+  upRate: number
+  downRate: number
+}
+
+export interface ConnectionHistoryItem {
+  id: string
+  profileId: string
+  profileName: string
+  userDisplayName: string
+  vpnIp: string
+  sourceIp: string
+  connectedAt: string
+  disconnectedAt?: string
+  durationSeconds: number
+  endReason: string
+  upBytes: number
+  downBytes: number
+}
+
+export interface UsagePoint {
+  day: string
+  upBytes: number
+  downBytes: number
+}
+
+export interface Overview {
+  agentPresent: boolean
+  agentUpdatedAt?: string
+  onlineConnections: number
+  upRate: number
+  downRate: number
+  todayUpBytes: number
+  todayDownBytes: number
+  users: number
+  profiles: number
+  activeCertificates: number
+  adminSessions: number
+  trend: UsagePoint[]
+  connections: Connection[]
 }
 
 export class ApiError extends Error {
@@ -208,6 +451,19 @@ async function parseError(response: Response): Promise<ApiError> {
   )
 }
 
+function filenameFromDisposition(disposition: string, fallback: string): string {
+  const encoded = /filename\*=UTF-8''([^;]+)/i.exec(disposition)
+  if (encoded?.[1]) {
+    try {
+      return decodeURIComponent(encoded[1])
+    } catch {
+      // 忽略编码异常，继续使用 ASCII 回退名。
+    }
+  }
+  const plain = /filename="([^"]+)"/i.exec(disposition)
+  return plain?.[1] ?? fallback
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers)
   if (init.body !== undefined && !headers.has('Content-Type')) {
@@ -253,6 +509,10 @@ function patch<T>(path: string, body: unknown): Promise<T> {
   return request<T>(path, { method: 'PATCH', body: JSON.stringify(body) })
 }
 
+function put<T>(path: string, body: unknown): Promise<T> {
+  return request<T>(path, { method: 'PUT', body: JSON.stringify(body) })
+}
+
 export const api = {
   health: () => request<Health>('/api/health'),
   setupStatus: () => request<SetupStatus>('/api/setup'),
@@ -263,7 +523,64 @@ export const api = {
   logout: () => post<{ ok: boolean }>('/api/logout', {}),
   me: () => request<Admin>('/api/me'),
   system: () => request<SystemInfo>('/api/system'),
+  listBackups: () => request<BackupListResponse>('/api/backups'),
+  saveBackupSettings: (input: {
+    backupPassword?: string
+    enabled: boolean
+    scheduleTime: string
+    retentionCount: number
+  }) => put<{ settings: BackupSettings }>('/api/backups/settings', input),
+  createBackup: (note: string) => post<{ backup: BackupItem }>('/api/backups', { note }),
+  deleteBackup: (id: string) =>
+    post<{ ok: boolean }>(`/api/backups/${encodeURIComponent(id)}/delete`, {}),
+  downloadBackup: async (id: string) => {
+    const response = await fetch(`/api/backups/${encodeURIComponent(id)}/download`, {
+      method: 'POST',
+      headers: new Headers({ ...csrfHeader() }),
+      credentials: 'same-origin',
+    })
+    if (response.status === 401) {
+      notifyUnauthorized()
+    }
+    if (!response.ok) {
+      throw await parseError(response)
+    }
+    const blob = await response.blob()
+    const disposition = response.headers.get('Content-Disposition') ?? ''
+    return { blob, filename: filenameFromDisposition(disposition, 'ovpanel-backup.ovpbak') }
+  },
+  previewRestore: async (file: File, backupPassword: string) => {
+    const form = new FormData()
+    form.append('backupPassword', backupPassword)
+    form.append('file', file, file.name)
+    const response = await fetch('/api/backups/restore/preview', {
+      method: 'POST',
+      headers: new Headers(csrfHeader()),
+      credentials: 'same-origin',
+      body: form,
+    })
+    if (response.status === 401) {
+      notifyUnauthorized()
+    }
+    if (!response.ok) {
+      throw await parseError(response)
+    }
+    return (await response.json()) as RestorePreview
+  },
+  executeRestore: (token: string) =>
+    post<RestoreResult>('/api/backups/restore/execute', { token }),
+  updateCheck: () => request<UpdateCheck>('/api/update'),
+  overview: () => request<Overview>('/api/overview'),
   operations: () => request<{ operations: Operation[] }>('/api/operations'),
+  connections: () => request<ConnectionsResponse>('/api/connections'),
+  connectionHistory: (profileId = '', limit = 100) => {
+    const params = new URLSearchParams({ limit: String(limit) })
+    if (profileId) params.set('profileId', profileId)
+    return request<{ sessions: ConnectionHistoryItem[] }>(`/api/connections/history?${params}`)
+  },
+  disconnectConnection: (id: string) =>
+    post<{ ok: boolean }>(`/api/connections/${encodeURIComponent(id)}/disconnect`, {}),
+  usageTrend: (days = 30) => request<{ trend: UsagePoint[] }>(`/api/usage/trend?days=${days}`),
 
   listUsers: (query = '', status = '') => {
     const params = new URLSearchParams()
@@ -282,29 +599,28 @@ export const api = {
   getProfile: (id: string) => request<Profile>(`/api/profiles/${encodeURIComponent(id)}`),
   updateProfile: (id: string, patchBody: ProfilePatch) =>
     patch<Profile>(`/api/profiles/${encodeURIComponent(id)}`, patchBody),
-  resetProfilePassword: (id: string, adminPassword: string, password = '') =>
+  updateProfileLimits: (id: string, input: ProfileLimitsInput) =>
+    put<{ profile: Profile }>(`/api/profiles/${encodeURIComponent(id)}/limits`, input),
+  resetQuota: (id: string) =>
+    post<{ profile: Profile; epoch: number }>(`/api/profiles/${encodeURIComponent(id)}/quota/reset`, {}),
+  resetProfilePassword: (id: string, password = '') =>
     post<{ profile: Profile; password: string }>(`/api/profiles/${encodeURIComponent(id)}/password`, {
-      adminPassword,
       password,
     }),
-  rotateCertificate: (id: string, adminPassword: string) =>
-    post<{ profile: Profile }>(`/api/profiles/${encodeURIComponent(id)}/certificate/rotate`, {
-      adminPassword,
-    }),
-  revokeCertificate: (id: string, adminPassword: string, reason = 'manual') =>
+  rotateCertificate: (id: string) =>
+    post<{ profile: Profile }>(`/api/profiles/${encodeURIComponent(id)}/certificate/rotate`, {}),
+  revokeCertificate: (id: string, reason = 'manual') =>
     post<{ profile: Profile }>(`/api/profiles/${encodeURIComponent(id)}/certificate/revoke`, {
-      adminPassword,
       reason,
     }),
-  exportProfile: async (id: string, adminPassword: string) => {
-    const headers = new Headers({ 'Content-Type': 'application/json', ...csrfHeader() })
+  exportProfile: async (id: string) => {
+    const headers = new Headers({ ...csrfHeader() })
     let response: Response
     try {
       response = await fetch(`/api/profiles/${encodeURIComponent(id)}/export`, {
         method: 'POST',
         headers,
         credentials: 'same-origin',
-        body: JSON.stringify({ adminPassword }),
       })
     } catch {
       throw new ApiError('无法连接面板服务', 'network_error', 0)
@@ -317,9 +633,21 @@ export const api = {
     }
     const blob = await response.blob()
     const disposition = response.headers.get('Content-Disposition') ?? ''
-    const match = /filename="([^"]+)"/.exec(disposition)
-    return { blob, filename: match?.[1] ?? 'ovpanel.ovpn' }
+    return { blob, filename: filenameFromDisposition(disposition, 'ovpanel.ovpn') }
   },
+
+  getServerConfig: () => request<ServerConfigResponse>('/api/server/config'),
+  previewServerConfig: (config: ServerConfig) =>
+    post<{ config: ServerConfig; rendered: string; hash: string }>('/api/server/config/preview', config),
+  saveServerDraft: (config: ServerConfig) =>
+    request<{ draft: ServerConfigRevision }>('/api/server/config/draft', {
+      method: 'PUT',
+      body: JSON.stringify(config),
+    }),
+  applyServerConfig: () =>
+    post<{ result: unknown; agentStatus?: AgentRuntimeStatus }>('/api/server/config/apply', {}),
+  serverCommand: (action: 'start' | 'stop' | 'restart') =>
+    post<{ ok: boolean; action: string }>('/api/server/command', { action }),
 
   pkiStatus: () => request<PKIStatus>('/api/pki'),
   getExportSettings: () => request<ExportSettings>('/api/settings/export'),

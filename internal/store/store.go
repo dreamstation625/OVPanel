@@ -35,6 +35,14 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		}
 	}
 
+	db, err := openDatabase(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	return &Store{db: db, path: path}, nil
+}
+
+func openDatabase(ctx context.Context, path string) (*sql.DB, error) {
 	dsn := path +
 		"?_pragma=busy_timeout(5000)" +
 		"&_pragma=journal_mode(WAL)" +
@@ -59,8 +67,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("收紧数据库权限 %s: %w", path, err)
 	}
-
-	return &Store{db: db, path: path}, nil
+	return db, nil
 }
 
 // Close 关闭数据库。

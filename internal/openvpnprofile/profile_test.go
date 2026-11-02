@@ -77,3 +77,33 @@ func TestGenerateTLSCryptKeyFormat(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderCustomCrypto(t *testing.T) {
+	content := string(Render(ClientConfig{
+		Host: "vpn.example.com", Port: 1194, Proto: "udp",
+		DataCiphers: "CHACHA20-POLY1305", AuthDigest: "SHA512", TLSMinVersion: "1.3",
+		CAPEM: "CA", TLSCryptKey: "TA",
+	}))
+	for _, want := range []string{
+		"data-ciphers CHACHA20-POLY1305\n",
+		"auth SHA512\n",
+		"tls-version-min 1.3\n",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("缺少 %q：\n%s", want, content)
+		}
+	}
+}
+
+func TestRenderDefaultCryptoFallbacks(t *testing.T) {
+	content := string(Render(ClientConfig{Host: "vpn.example.com", Port: 1194, Proto: "udp"}))
+	for _, want := range []string{
+		"data-ciphers AES-256-GCM:AES-128-GCM\n",
+		"auth SHA256\n",
+		"tls-version-min 1.2\n",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("缺少默认值 %q：\n%s", want, content)
+		}
+	}
+}

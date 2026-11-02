@@ -7,17 +7,21 @@ package accounts
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
 	"github.com/dreamstation625/ovpanel/internal/auth"
+	"github.com/dreamstation625/ovpanel/internal/netpolicy"
 	"github.com/dreamstation625/ovpanel/internal/openvpnprofile"
 	"github.com/dreamstation625/ovpanel/internal/pki"
 	"github.com/dreamstation625/ovpanel/internal/secretbox"
+	"github.com/dreamstation625/ovpanel/internal/serverconfig"
 	"github.com/dreamstation625/ovpanel/internal/store"
 	"github.com/google/uuid"
 )
@@ -86,6 +90,7 @@ type ExportResult struct {
 type Service struct {
 	store *store.Store
 	pki   *pki.Service
+	keyMu sync.RWMutex
 	key   secretbox.Key
 	now   func() time.Time
 }
@@ -93,6 +98,27 @@ type Service struct {
 // New 创建账号服务。
 func New(st *store.Store, pkiService *pki.Service, key secretbox.Key) *Service {
 	return &Service{store: st, pki: pkiService, key: key, now: func() time.Time { return time.Now().UTC() }}
+}
+
+// SetKey 在恢复备份后替换内存中的主密钥。
+func (s *Service) SetKey(key secretbox.Key) {
+	s.keyMu.Lock()
+	s.key = key
+	s.keyMu.Unlock()
+}
+
+func (s *Service) seal(plaintext, aad []byte) ([]byte, error) {
+	s.keyMu.RLock()
+	key := s.key
+	s.keyMu.RUnlock()
+	return key.Seal(plaintext, aad)
+}
+
+func (s *Service) open(blob, aad []byte) ([]byte, error) {
+	s.keyMu.RLock()
+	key := s.key
+	s.keyMu.RUnlock()
+	return key.Open(blob, aad)
 }
 
 // CreateUser 创建没有配置的用户。
@@ -240,6 +266,133 @@ func (s *Service) UpdateProfileName(ctx context.Context, id, name string) (store
 	return s.profileDetail(ctx, id)
 }
 
+// UpdateProfilePolicy 更新配置级路由、目标网段权限、共享内网与固定地址。
+// 路由推送与访问权限分别生效：前者决定客户端拿到哪些路由，
+// 后者由运行代理的 nftables 规则执行。
+func (s *Service) UpdateProfilePolicy(ctx context.Context, id, routeMode, accessMode string, allowedInternal []string, clientNetworks []string, clientLANAccess, fixedVPNIP string) (store.ProfileDetail, error) {
+	routeMode = strings.TrimSpace(routeMode)
+	accessMode = strings.TrimSpace(accessMode)
+	clientLANAccess = strings.TrimSpace(clientLANAccess)
+	switch routeMode {
+	case store.RouteInherit, store.RouteSplit, store.RouteGlobal:
+	default:
+		return store.ProfileDetail{}, validation("路由方式不合法")
+	}
+	switch accessMode {
+	case store.AccessInherit, store.AccessAllow, store.AccessDeny:
+	default:
+		return store.ProfileDetail{}, validation("目标网段权限不合法")
+	}
+	switch clientLANAccess {
+	case "":
+		clientLANAccess = store.ClientLANInherit
+	case store.ClientLANInherit, store.ClientLANAllow, store.ClientLANDeny:
+	default:
+		return store.ProfileDetail{}, validation("客户端内网权限不合法")
+	}
+	allowedInternal = normalizeStringList(allowedInternal)
+	if accessMode != store.AccessAllow {
+		allowedInternal = []string{}
+	}
+	vpnNetwork, err := s.activeVPNNetwork(ctx)
+	if err != nil {
+		return store.ProfileDetail{}, err
+	}
+	allowedInternal, err = netpolicy.PrepareTargets(vpnNetwork, allowedInternal)
+	if err != nil {
+		return store.ProfileDetail{}, validation(err.Error())
+	}
+	if accessMode == store.AccessAllow && len(allowedInternal) == 0 {
+		return store.ProfileDetail{}, validation("仅允许指定网段时至少填写一个网段")
+	}
+	clientNetworks, err = netpolicy.PrepareClientNetworks(vpnNetwork, normalizeStringList(clientNetworks))
+	if err != nil {
+		return store.ProfileDetail{}, validation(err.Error())
+	}
+	if err := s.validateClientNetworkOwnership(ctx, id, clientNetworks); err != nil {
+		return store.ProfileDetail{}, err
+	}
+	fixedVPNIP = strings.TrimSpace(fixedVPNIP)
+	if fixedVPNIP != "" {
+		fixedVPNIP, err = serverconfig.ValidateFixedIP(vpnNetwork, fixedVPNIP)
+		if err != nil {
+			return store.ProfileDetail{}, validation(err.Error())
+		}
+	}
+	if err := s.store.UpdateProfileNetwork(ctx, id, routeMode, accessMode, allowedInternal, clientNetworks, clientLANAccess, fixedVPNIP); err != nil {
+		return store.ProfileDetail{}, err
+	}
+	return s.profileDetail(ctx, id)
+}
+
+// validateClientNetworkOwnership 检查共享内网是否与其他配置重叠并限制总数。
+func (s *Service) validateClientNetworkOwnership(ctx context.Context, profileID string, networks []string) error {
+	for i := range networks {
+		for j := i + 1; j < len(networks); j++ {
+			if netpolicy.NetworksOverlap(networks[i], networks[j]) {
+				return validation(fmt.Sprintf("共享内网 %s 与 %s 重叠", networks[i], networks[j]))
+			}
+		}
+	}
+	records, err := s.store.AuthRecords(ctx)
+	if err != nil {
+		return err
+	}
+	total := len(networks)
+	for _, record := range records {
+		if record.ProfileID == profileID {
+			continue
+		}
+		existing, err := netpolicy.NormalizeClientNetworks(record.ClientNetworks)
+		if err != nil {
+			return validation(fmt.Sprintf("配置 %s 的共享内网数据非法", record.ProfileID))
+		}
+		total += len(existing)
+		for _, candidate := range networks {
+			for _, current := range existing {
+				if netpolicy.NetworksOverlap(candidate, current) {
+					return validation(fmt.Sprintf("共享内网 %s 已被其他配置使用", candidate))
+				}
+			}
+		}
+	}
+	if total > netpolicy.MaxSharedNetworks {
+		return validation(fmt.Sprintf("共享内网最多 %d 个", netpolicy.MaxSharedNetworks))
+	}
+	return nil
+}
+
+// FixedIPRange 返回当前 VPN 网段的固定地址可用范围和动态池。
+func (s *Service) FixedIPRange(ctx context.Context) (serverconfig.AddressPlan, error) {
+	network, err := s.activeVPNNetwork(ctx)
+	if err != nil {
+		return serverconfig.AddressPlan{}, err
+	}
+	return serverconfig.PlanAddresses(network)
+}
+
+func (s *Service) activeVPNNetwork(ctx context.Context) (string, error) {
+	cfg, err := s.activeServerConfig(ctx)
+	if err != nil {
+		return "", err
+	}
+	return cfg.VPNNetwork, nil
+}
+
+func (s *Service) activeServerConfig(ctx context.Context) (serverconfig.Config, error) {
+	state, err := s.store.ServerConfigState(ctx)
+	if err != nil {
+		return serverconfig.Config{}, err
+	}
+	cfg := serverconfig.Defaults()
+	if state.Active != nil {
+		if err := json.Unmarshal([]byte(state.Active.ConfigJSON), &cfg); err != nil {
+			return serverconfig.Config{}, fmt.Errorf("解析生效服务端配置: %w", err)
+		}
+	}
+	return serverconfig.Prepare(cfg)
+}
+
 // ResetPassword 为证书+密码或仅密码配置生成新密码，只返回一次。
 func (s *Service) ResetPassword(ctx context.Context, profileID, password string) (ProfileResult, error) {
 	profile, ok, err := s.store.Profile(ctx, profileID)
@@ -324,7 +477,7 @@ func (s *Service) RevokeCertificate(ctx context.Context, profileID, reason strin
 	return s.profileDetail(ctx, profileID)
 }
 
-// Export 生成自包含 .ovpn。调用方必须先复核管理员密码。
+// Export 生成自包含 .ovpn。
 func (s *Service) Export(ctx context.Context, profileID string) (ExportResult, error) {
 	profile, ok, err := s.store.Profile(ctx, profileID)
 	if err != nil {
@@ -341,15 +494,22 @@ func (s *Service) Export(ctx context.Context, profileID string) (ExportResult, e
 	if !ok {
 		return ExportResult{}, ErrExportNotConfigured
 	}
-	tlsKey, err := s.key.Open(setting.TLSCryptCiphertext, []byte(tlsCryptAAD))
+	tlsKey, err := s.open(setting.TLSCryptCiphertext, []byte(tlsCryptAAD))
 	if err != nil {
 		return ExportResult{}, fmt.Errorf("解密 tls-crypt 密钥: %w", err)
+	}
+	serverCfg, err := s.activeServerConfig(ctx)
+	if err != nil {
+		return ExportResult{}, err
 	}
 
 	config := openvpnprofile.ClientConfig{
 		Host:            setting.Host,
 		Port:            setting.Port,
 		Proto:           setting.Proto,
+		DataCiphers:     serverconfig.JoinDataCiphers(serverCfg.DataCiphers),
+		AuthDigest:      serverCfg.AuthDigest,
+		TLSMinVersion:   serverCfg.TLSMinVersion,
 		TLSCryptKey:     string(tlsKey),
 		RequireUserPass: profile.AuthType != store.AuthCertificate,
 	}
@@ -370,9 +530,26 @@ func (s *Service) Export(ctx context.Context, profileID string) (ExportResult, e
 	}
 
 	return ExportResult{
-		Filename: "ovpanel-" + profileID + ".ovpn",
+		Filename: exportFilename(profile.UserDisplayName, profile.Name),
 		Content:  openvpnprofile.Render(config),
 	}, nil
+}
+
+// TLSCryptKey 返回服务端与客户端共用的 tls-crypt 密钥明文。
+// 运行代理应用服务端配置时使用；未配置导出地址时返回 ErrExportNotConfigured。
+func (s *Service) TLSCryptKey(ctx context.Context) (string, error) {
+	setting, ok, err := s.store.ExportSetting(ctx)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", ErrExportNotConfigured
+	}
+	key, err := s.open(setting.TLSCryptCiphertext, []byte(tlsCryptAAD))
+	if err != nil {
+		return "", fmt.Errorf("解密 tls-crypt 密钥: %w", err)
+	}
+	return string(key), nil
 }
 
 // GetExportSettings 返回连接设置；未配置时 configured=false。
@@ -403,7 +580,7 @@ func (s *Service) SaveExportSettings(ctx context.Context, input ExportSettings) 
 		if err != nil {
 			return ExportSettings{}, err
 		}
-		ciphertext, err = s.key.Seal([]byte(tlsKey), []byte(tlsCryptAAD))
+		ciphertext, err = s.seal([]byte(tlsKey), []byte(tlsCryptAAD))
 		if err != nil {
 			return ExportSettings{}, err
 		}
@@ -472,15 +649,20 @@ func EffectiveStatus(detail store.ProfileDetail, now time.Time) (code, reason st
 func (s *Service) buildProfile(ctx context.Context, userID string, input ProfileInput, now time.Time) (store.Profile, *store.CertificateRecord, string, error) {
 	profileID := uuid.NewString()
 	profile := store.Profile{
-		ID:        profileID,
-		UserID:    userID,
-		Name:      input.Name,
-		AuthType:  input.AuthType,
-		Username:  input.Username,
-		Status:    store.StatusActive,
-		ExpiresAt: input.ExpiresAt,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:              profileID,
+		UserID:          userID,
+		Name:            input.Name,
+		AuthType:        input.AuthType,
+		Username:        input.Username,
+		Status:          store.StatusActive,
+		ExpiresAt:       input.ExpiresAt,
+		RouteMode:       store.RouteInherit,
+		AccessMode:      store.AccessInherit,
+		AllowedInternal: []string{},
+		ClientNetworks:  []string{},
+		ClientLANAccess: store.ClientLANInherit,
+		CreatedAt:       now,
+		UpdatedAt:       now,
 	}
 
 	password := ""
@@ -634,6 +816,23 @@ func validatePassword(password, username string) error {
 	return nil
 }
 
+func normalizeStringList(values []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, raw := range values {
+		value := strings.TrimSpace(raw)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
 func normalizeExportSettings(input ExportSettings) (ExportSettings, error) {
 	host := strings.TrimSpace(input.Host)
 	if len(host) == 0 || len(host) > 255 || !hostPattern.MatchString(host) {
@@ -649,6 +848,12 @@ func normalizeExportSettings(input ExportSettings) (ExportSettings, error) {
 	return ExportSettings{Host: host, Port: input.Port, Proto: proto}, nil
 }
 
+type validationError string
+
+func (e validationError) Error() string { return string(e) }
+
+func (e validationError) Is(target error) bool { return target == ErrValidation }
+
 func validation(message string) error {
-	return fmt.Errorf("%w：%s", ErrValidation, message)
+	return validationError(message)
 }
