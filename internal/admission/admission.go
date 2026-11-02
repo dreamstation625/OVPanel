@@ -68,6 +68,8 @@ type Profile struct {
 	RouteMode       string   `json:"routeMode,omitempty"`
 	AccessMode      string   `json:"accessMode,omitempty"`
 	AllowedInternal []string `json:"allowedInternal,omitempty"`
+	ClientNetworks  []string `json:"clientNetworks,omitempty"`
+	ClientLANAccess string   `json:"clientLanAccess,omitempty"`
 	FixedVPNIP      string   `json:"fixedVpnIp,omitempty"`
 
 	// 使用限制；0 表示不限制。QuotaEpoch 由面板手动重置时递增。
@@ -128,6 +130,11 @@ func (s Snapshot) Validate() error {
 	usernames := map[string]string{}
 	serials := map[string]string{}
 	fingerprints := map[string]string{}
+	type sharedNetwork struct {
+		profileID string
+		cidr      string
+	}
+	sharedNetworks := make([]sharedNetwork, 0)
 	for _, profile := range s.Profiles {
 		if profile.ID == "" {
 			return fmt.Errorf("存在空配置 ID")
@@ -199,6 +206,26 @@ func (s Snapshot) Validate() error {
 		}
 		if _, err := netpolicy.NormalizeTargets(profile.AllowedInternal); err != nil {
 			return fmt.Errorf("配置 %s：%w", profile.ID, err)
+		}
+		switch profile.ClientLANAccess {
+		case "", "inherit", "allow", "deny":
+		default:
+			return fmt.Errorf("配置 %s 的客户端内网权限未知：%q", profile.ID, profile.ClientLANAccess)
+		}
+		clientNetworks, err := netpolicy.NormalizeClientNetworks(profile.ClientNetworks)
+		if err != nil {
+			return fmt.Errorf("配置 %s：%w", profile.ID, err)
+		}
+		for _, cidr := range clientNetworks {
+			for _, existing := range sharedNetworks {
+				if netpolicy.NetworksOverlap(cidr, existing.cidr) {
+					return fmt.Errorf("共享内网 %s 同时属于配置 %s 和 %s", cidr, existing.profileID, profile.ID)
+				}
+			}
+			sharedNetworks = append(sharedNetworks, sharedNetwork{profileID: profile.ID, cidr: cidr})
+		}
+		if len(sharedNetworks) > netpolicy.MaxSharedNetworks {
+			return fmt.Errorf("共享内网最多 %d 个", netpolicy.MaxSharedNetworks)
 		}
 		if profile.ConcurrentLimit < 0 || profile.UploadBps < 0 || profile.DownloadBps < 0 || profile.QuotaEpoch < 0 {
 			return fmt.Errorf("配置 %s 的使用限制不能为负数", profile.ID)

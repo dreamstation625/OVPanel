@@ -45,14 +45,16 @@ type Session struct {
 // GlobalExit 与 AllowedInternal 是服务端默认值，用于生成连接策略；
 // 真正的逐连接规则来自 Sessions，未登记地址默认拒绝。
 type Policy struct {
-	VPNPool          string    `json:"vpnPool"`
-	TunDevice        string    `json:"tunDevice"`
-	AllowInterClient bool      `json:"allowInterClient"`
-	BlockIPv6        bool      `json:"blockIpv6"`
-	GlobalExit       bool      `json:"globalExit"`
-	AllowedInternal  []string  `json:"allowedInternal,omitempty"`
-	ProtectTargets   []string  `json:"protectTargets,omitempty"`
-	Sessions         []Session `json:"sessions,omitempty"`
+	VPNPool             string    `json:"vpnPool"`
+	TunDevice           string    `json:"tunDevice"`
+	AllowInterClient    bool      `json:"allowInterClient"`
+	AllowClientNetworks bool      `json:"allowClientNetworks,omitempty"`
+	BlockIPv6           bool      `json:"blockIpv6"`
+	GlobalExit          bool      `json:"globalExit"`
+	AllowedInternal     []string  `json:"allowedInternal,omitempty"`
+	SharedNetworks      []string  `json:"sharedNetworks,omitempty"`
+	ProtectTargets      []string  `json:"protectTargets,omitempty"`
+	Sessions            []Session `json:"sessions,omitempty"`
 }
 
 type renderedSession struct {
@@ -68,6 +70,11 @@ func Render(p Policy) (string, error) {
 		return "", fmt.Errorf("VPN 地址池不是合法 IPv4 CIDR：%q", p.VPNPool)
 	}
 	poolText := pool.String()
+
+	shared, err := PrepareClientNetworks(poolText, p.SharedNetworks)
+	if err != nil {
+		return "", fmt.Errorf("共享内网策略非法：%w", err)
+	}
 
 	protect := append([]string{}, defaultProtect...)
 	protect = append(protect, p.ProtectTargets...)
@@ -109,6 +116,13 @@ func Render(p Policy) (string, error) {
 	b.WriteString("add table inet ovpanel\n")
 	b.WriteString("flush table inet ovpanel\n")
 	fmt.Fprintf(&b, "table inet %s {\n", TableName)
+	if len(shared) > 0 {
+		b.WriteString("\tset shared {\n")
+		b.WriteString("\t\ttype ipv4_addr\n")
+		b.WriteString("\t\tflags interval\n")
+		fmt.Fprintf(&b, "\t\telements = { %s }\n", strings.Join(shared, ", "))
+		b.WriteString("\t}\n")
+	}
 	b.WriteString("\tchain forward {\n")
 	b.WriteString("\t\ttype filter hook forward priority filter; policy accept;\n")
 
@@ -146,13 +160,23 @@ func Render(p Policy) (string, error) {
 	}
 	b.WriteString("\n\t\t# 6) 未开启全局出口或未登记的会话默认拒绝\n")
 	fmt.Fprintf(&b, "\t\tip saddr %s counter drop\n", poolText)
-	b.WriteString("\n\t\t# 7) 回程流量：放在所有收紧规则之后\n")
+	if len(shared) > 0 {
+		b.WriteString("\n\t\t# 7) 共享内网单向：只允许 VPN 客户端发起，回程由连接跟踪放行\n")
+		b.WriteString("\t\tip saddr @shared ct state new counter drop\n")
+		fmt.Fprintf(&b, "\t\tip daddr @shared ip saddr != %s ct state new counter drop\n", poolText)
+	}
+	b.WriteString("\n\t\t# 8) 回程流量：放在所有收紧规则之后\n")
 	b.WriteString("\t\tct state established,related counter accept\n")
 	b.WriteString("\t}\n")
 
 	b.WriteString("\n\tchain postrouting {\n")
 	b.WriteString("\t\ttype nat hook postrouting priority srcnat; policy accept;\n")
-	fmt.Fprintf(&b, "\t\tip saddr %s ip daddr != %s counter masquerade\n", poolText, poolText)
+	if len(shared) > 0 {
+		// 共享内网保留 VPN 客户端来源；否则 A 侧只能看到服务端 tun 地址。
+		fmt.Fprintf(&b, "\t\tip saddr %s ip daddr != %s ip daddr != @shared counter masquerade\n", poolText, poolText)
+	} else {
+		fmt.Fprintf(&b, "\t\tip saddr %s ip daddr != %s counter masquerade\n", poolText, poolText)
+	}
 	b.WriteString("\t}\n")
 	b.WriteString("}\n")
 	return b.String(), nil

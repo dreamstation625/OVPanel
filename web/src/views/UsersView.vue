@@ -171,7 +171,7 @@ onMounted(() => {
 
       <div v-if="!users.length && !loading" class="empty-state">
         <strong>暂无用户</strong>
-        <span>创建用户时可以直接生成第一份客户端配置。</span>
+        <span>添加用户时可同时生成首份配置。</span>
         <NButton type="primary" size="small" @click="openCreate">添加用户</NButton>
       </div>
       <div v-else-if="loading && !users.length" class="empty-state">正在读取…</div>

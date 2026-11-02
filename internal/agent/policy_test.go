@@ -144,3 +144,89 @@ func TestApplyWritesConnectPolicyAndSessionACL(t *testing.T) {
 		t.Fatal("旧会话不应继续持有已被复用的地址")
 	}
 }
+
+func sharedPolicyBundle(t *testing.T) []byte {
+	t.Helper()
+	var bundle agentproto.Bundle
+	if err := json.Unmarshal(policyBundle(t), &bundle); err != nil {
+		t.Fatalf("解析控制包失败：%v", err)
+	}
+	bundle.Policy.AllowClientNetworks = true
+	bundle.Snapshot.Profiles[0].ClientNetworks = []string{"192.168.50.0/24"}
+	bundle.Snapshot.Profiles[0].ClientLANAccess = "deny"
+	bundle.Snapshot.Profiles[1].ClientLANAccess = "inherit"
+	data, err := json.Marshal(bundle)
+	if err != nil {
+		t.Fatalf("编码控制包失败：%v", err)
+	}
+	return data
+}
+
+func TestSharedNetworksRoutesAndPolicy(t *testing.T) {
+	controlDir, stateDir := t.TempDir(), t.TempDir()
+	rt := New(controlDir, stateDir, testLogger())
+	rt.configDir = t.TempDir()
+	rt.localNetsFn = func(string) []string { return nil }
+	applied := make([]netpolicy.Policy, 0, 2)
+	rt.applyPolicyFn = func(policy netpolicy.Policy) error {
+		applied = append(applied, policy)
+		return nil
+	}
+	var routeCalls []struct {
+		networks []string
+		viaTun   bool
+		tun      string
+	}
+	rt.syncRoutesFn = func(networks []string, viaTun bool, tun string) error {
+		routeCalls = append(routeCalls, struct {
+			networks []string
+			viaTun   bool
+			tun      string
+		}{append([]string(nil), networks...), viaTun, tun})
+		return nil
+	}
+	rt.startVPNFn = func(_ context.Context, hash string) error {
+		rt.mu.Lock()
+		rt.configHash = hash
+		rt.openvpnRunning = true
+		rt.managementConnected = true
+		rt.mu.Unlock()
+		return nil
+	}
+	writeBundle(t, controlDir, sharedPolicyBundle(t))
+	if err := rt.applyOnce(context.Background()); err != nil {
+		t.Fatalf("应用失败：%v", err)
+	}
+	if len(routeCalls) == 0 || len(routeCalls[0].networks) != 1 || routeCalls[0].networks[0] != "192.168.50.0/24" {
+		t.Fatalf("共享网段路由未同步：%+v", routeCalls)
+	}
+	if routeCalls[0].viaTun {
+		t.Fatal("OpenVPN 启动前应使用 blackhole 路由")
+	}
+	if err := rt.refreshPolicy(); err != nil {
+		t.Fatalf("重建策略失败：%v", err)
+	}
+	if last := routeCalls[len(routeCalls)-1]; !last.viaTun || last.tun != "tun0" {
+		t.Fatalf("OpenVPN 运行后应把共享网段指向 tun：%+v", last)
+	}
+
+	file, err := connectpolicy.Load(filepath.Join(stateDir, connectPolicyFile))
+	if err != nil {
+		t.Fatalf("读取连接策略失败：%v", err)
+	}
+	a, ok := connectpolicy.Lookup(file, "aa:bb", "")
+	if !ok || len(a.OwnClientNetworks) != 1 || a.OwnClientNetworks[0] != "192.168.50.0/24" {
+		t.Fatalf("A 缺少 iroute 策略：%+v", a)
+	}
+	if len(a.AllowedInternal) != 0 {
+		t.Fatalf("A 不应把自己的共享网段推给自己：%+v", a.AllowedInternal)
+	}
+	b, ok := connectpolicy.Lookup(file, "", "bob")
+	if !ok || len(b.AllowedInternal) != 1 || b.AllowedInternal[0] != "192.168.50.0/24" {
+		t.Fatalf("B 应获得共享网段：%+v", b)
+	}
+	last := applied[len(applied)-1]
+	if len(last.SharedNetworks) != 1 || last.SharedNetworks[0] != "192.168.50.0/24" {
+		t.Fatalf("nft 策略缺少共享网段：%+v", last.SharedNetworks)
+	}
+}

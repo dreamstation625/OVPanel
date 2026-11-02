@@ -24,11 +24,11 @@ const options = [
 const hint = computed(() => {
   switch (props.authType) {
     case 'certificate':
-      return '创建后自动生成客户端证书，连接时只需要证书。'
+      return '自动生成客户端证书，连接只需证书。'
     case 'certificate_password':
-      return '自动生成客户端证书，同时要求登录名和密码。密码创建后只显示一次。'
+      return '自动生成证书，同时需要登录名和密码。密码只显示一次。'
     default:
-      return '只使用登录名和密码，不生成客户端证书。密码创建后只显示一次。'
+      return '只使用登录名和密码，不生成证书。密码只显示一次。'
   }
 })
 </script>

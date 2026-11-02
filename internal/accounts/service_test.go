@@ -330,3 +330,41 @@ func TestGeneratePassword(t *testing.T) {
 		t.Fatalf("密码包含歧义字符：%q", first)
 	}
 }
+
+func TestUpdateProfileClientNetworks(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+	first, err := svc.CreateUserWithProfile(ctx,
+		UserInput{DisplayName: "分支 A"},
+		ProfileInput{Name: "路由器 A", AuthType: store.AuthCertificate})
+	if err != nil {
+		t.Fatalf("创建配置失败：%v", err)
+	}
+	second, err := svc.CreateUserWithProfile(ctx,
+		UserInput{DisplayName: "分支 B"},
+		ProfileInput{Name: "路由器 B", AuthType: store.AuthCertificate})
+	if err != nil {
+		t.Fatalf("创建配置失败：%v", err)
+	}
+	detail, err := svc.UpdateProfilePolicy(ctx, first.Profile.ID, store.RouteInherit, store.AccessInherit,
+		nil, []string{"192.168.50.5/24", "10.20.30.40"}, store.ClientLANAllow, "")
+	if err != nil {
+		t.Fatalf("保存共享内网失败：%v", err)
+	}
+	if detail.ClientLANAccess != store.ClientLANAllow ||
+		len(detail.ClientNetworks) != 2 ||
+		detail.ClientNetworks[0] != "192.168.50.0/24" ||
+		detail.ClientNetworks[1] != "10.20.30.40/32" {
+		t.Fatalf("共享内网未保存或未规范化：%+v", detail)
+	}
+	if _, err := svc.UpdateProfilePolicy(ctx, second.Profile.ID, store.RouteInherit, store.AccessInherit,
+		nil, []string{"192.168.50.0/24"}, store.ClientLANInherit, ""); !errors.Is(err, ErrValidation) {
+		t.Fatalf("跨配置重复共享内网应被拒绝：%v", err)
+	}
+	for _, bad := range [][]string{{"8.8.8.0/24"}, {"10.8.1.0/24"}, {"192.168.0.0/16", "192.168.50.0/24"}} {
+		if _, err := svc.UpdateProfilePolicy(ctx, second.Profile.ID, store.RouteInherit, store.AccessInherit,
+			nil, bad, store.ClientLANInherit, ""); !errors.Is(err, ErrValidation) {
+			t.Fatalf("非法共享内网应被拒绝 %v：%v", bad, err)
+		}
+	}
+}

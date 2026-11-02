@@ -266,12 +266,13 @@ func (s *Service) UpdateProfileName(ctx context.Context, id, name string) (store
 	return s.profileDetail(ctx, id)
 }
 
-// UpdateProfilePolicy 更新配置级路由、目标网段权限与固定地址。
+// UpdateProfilePolicy 更新配置级路由、目标网段权限、共享内网与固定地址。
 // 路由推送与访问权限分别生效：前者决定客户端拿到哪些路由，
 // 后者由运行代理的 nftables 规则执行。
-func (s *Service) UpdateProfilePolicy(ctx context.Context, id, routeMode, accessMode string, allowedInternal []string, fixedVPNIP string) (store.ProfileDetail, error) {
+func (s *Service) UpdateProfilePolicy(ctx context.Context, id, routeMode, accessMode string, allowedInternal []string, clientNetworks []string, clientLANAccess, fixedVPNIP string) (store.ProfileDetail, error) {
 	routeMode = strings.TrimSpace(routeMode)
 	accessMode = strings.TrimSpace(accessMode)
+	clientLANAccess = strings.TrimSpace(clientLANAccess)
 	switch routeMode {
 	case store.RouteInherit, store.RouteSplit, store.RouteGlobal:
 	default:
@@ -281,6 +282,13 @@ func (s *Service) UpdateProfilePolicy(ctx context.Context, id, routeMode, access
 	case store.AccessInherit, store.AccessAllow, store.AccessDeny:
 	default:
 		return store.ProfileDetail{}, validation("目标网段权限不合法")
+	}
+	switch clientLANAccess {
+	case "":
+		clientLANAccess = store.ClientLANInherit
+	case store.ClientLANInherit, store.ClientLANAllow, store.ClientLANDeny:
+	default:
+		return store.ProfileDetail{}, validation("客户端内网权限不合法")
 	}
 	allowedInternal = normalizeStringList(allowedInternal)
 	if accessMode != store.AccessAllow {
@@ -297,6 +305,13 @@ func (s *Service) UpdateProfilePolicy(ctx context.Context, id, routeMode, access
 	if accessMode == store.AccessAllow && len(allowedInternal) == 0 {
 		return store.ProfileDetail{}, validation("仅允许指定网段时至少填写一个网段")
 	}
+	clientNetworks, err = netpolicy.PrepareClientNetworks(vpnNetwork, normalizeStringList(clientNetworks))
+	if err != nil {
+		return store.ProfileDetail{}, validation(err.Error())
+	}
+	if err := s.validateClientNetworkOwnership(ctx, id, clientNetworks); err != nil {
+		return store.ProfileDetail{}, err
+	}
 	fixedVPNIP = strings.TrimSpace(fixedVPNIP)
 	if fixedVPNIP != "" {
 		fixedVPNIP, err = serverconfig.ValidateFixedIP(vpnNetwork, fixedVPNIP)
@@ -304,10 +319,47 @@ func (s *Service) UpdateProfilePolicy(ctx context.Context, id, routeMode, access
 			return store.ProfileDetail{}, validation(err.Error())
 		}
 	}
-	if err := s.store.UpdateProfileNetwork(ctx, id, routeMode, accessMode, allowedInternal, fixedVPNIP); err != nil {
+	if err := s.store.UpdateProfileNetwork(ctx, id, routeMode, accessMode, allowedInternal, clientNetworks, clientLANAccess, fixedVPNIP); err != nil {
 		return store.ProfileDetail{}, err
 	}
 	return s.profileDetail(ctx, id)
+}
+
+// validateClientNetworkOwnership 检查共享内网是否与其他配置重叠并限制总数。
+func (s *Service) validateClientNetworkOwnership(ctx context.Context, profileID string, networks []string) error {
+	for i := range networks {
+		for j := i + 1; j < len(networks); j++ {
+			if netpolicy.NetworksOverlap(networks[i], networks[j]) {
+				return validation(fmt.Sprintf("共享内网 %s 与 %s 重叠", networks[i], networks[j]))
+			}
+		}
+	}
+	records, err := s.store.AuthRecords(ctx)
+	if err != nil {
+		return err
+	}
+	total := len(networks)
+	for _, record := range records {
+		if record.ProfileID == profileID {
+			continue
+		}
+		existing, err := netpolicy.NormalizeClientNetworks(record.ClientNetworks)
+		if err != nil {
+			return validation(fmt.Sprintf("配置 %s 的共享内网数据非法", record.ProfileID))
+		}
+		total += len(existing)
+		for _, candidate := range networks {
+			for _, current := range existing {
+				if netpolicy.NetworksOverlap(candidate, current) {
+					return validation(fmt.Sprintf("共享内网 %s 已被其他配置使用", candidate))
+				}
+			}
+		}
+	}
+	if total > netpolicy.MaxSharedNetworks {
+		return validation(fmt.Sprintf("共享内网最多 %d 个", netpolicy.MaxSharedNetworks))
+	}
+	return nil
 }
 
 // FixedIPRange 返回当前 VPN 网段的固定地址可用范围和动态池。
@@ -597,6 +649,8 @@ func (s *Service) buildProfile(ctx context.Context, userID string, input Profile
 		RouteMode:       store.RouteInherit,
 		AccessMode:      store.AccessInherit,
 		AllowedInternal: []string{},
+		ClientNetworks:  []string{},
+		ClientLANAccess: store.ClientLANInherit,
 		CreatedAt:       now,
 		UpdatedAt:       now,
 	}

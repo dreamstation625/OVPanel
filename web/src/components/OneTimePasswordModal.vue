@@ -48,7 +48,7 @@ async function copy() {
   >
     <div class="password-body">
       <NAlert type="warning" :bordered="false">
-        关闭后无法再次查看。请先复制或妥善保存，再继续操作。
+        关闭后无法再次查看，请先复制保存。
       </NAlert>
       <p v-if="username" class="username">登录名 <code>{{ username }}</code></p>
       <div class="password-value">

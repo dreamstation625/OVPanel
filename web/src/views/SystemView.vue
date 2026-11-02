@@ -101,7 +101,7 @@ async function changePassword() {
   passwordBusy.value = true
   try {
     await api.changeAdminPassword(currentPassword.value, newPassword.value)
-    notify.success('密码已更新，需要重新登录，即将返回登录页。')
+    notify.success('密码已更新，即将返回登录页。')
     currentPassword.value = ''
     newPassword.value = ''
     confirmPasswordInput.value = ''
@@ -188,10 +188,10 @@ onMounted(load)
           <span class="surface-meta">{{ exportSettings?.configured ? '已配置' : '未配置' }}</span>
         </header>
         <p class="section-description">
-          下载的 .ovpn 会使用这里的地址和端口。修改地址不会更换加密密钥。
+          下载的 .ovpn 使用这里的地址和端口；修改地址不会更换密钥。
         </p>
         <NAlert v-if="exportSettings && !exportSettings.configured" type="info" :bordered="false" class="stack-gap">
-          下载客户端配置前需要先填写 VPN 地址与端口。
+          下载客户端配置前请先填写 VPN 地址与端口。
         </NAlert>
         <NForm>
           <NFormItem label="VPN 地址" required>
@@ -247,7 +247,7 @@ onMounted(load)
           </div>
         </template>
         <NAlert v-else-if="pki" type="info" :bordered="false">
-          还没有证书。创建首个证书配置或导出仅密码配置时会自动创建。
+          暂无证书。创建证书配置或导出仅密码配置时自动创建。
         </NAlert>
       </section>
 
@@ -255,7 +255,7 @@ onMounted(load)
         <header class="surface-head">
           <h2><KeyRound :size="17" /> 管理员密码</h2>
         </header>
-        <p class="section-description">修改后需要重新登录，其他设备上的登录也会失效。</p>
+        <p class="section-description">修改后需重新登录，其他设备登录会失效。</p>
         <NAlert v-if="passwordError" type="error" :bordered="false" class="stack-gap">{{ passwordError }}</NAlert>
         <NForm>
           <NFormItem label="当前密码" required>

@@ -128,7 +128,7 @@ func TestUpdateProfileNetworkFixedIP(t *testing.T) {
 	if err := s.CreateUserWithProfile(ctx, testUser("u2"), testProfile("p2", "u2", AuthCertificate, ""), nil); err != nil {
 		t.Fatalf("创建第二个配置失败：%v", err)
 	}
-	if err := s.UpdateProfileNetwork(ctx, "p1", RouteInherit, AccessInherit, nil, "10.8.255.200"); err != nil {
+	if err := s.UpdateProfileNetwork(ctx, "p1", RouteInherit, AccessInherit, nil, nil, ClientLANInherit, "10.8.255.200"); err != nil {
 		t.Fatalf("设置固定 IP 失败：%v", err)
 	}
 	detail, ok, err := s.Profile(ctx, "p1")
@@ -139,12 +139,12 @@ func TestUpdateProfileNetworkFixedIP(t *testing.T) {
 		t.Fatalf("设置固定 IP 应锁定并发为 1：%+v", detail.ConcurrentLimit)
 	}
 
-	err = s.UpdateProfileNetwork(ctx, "p2", RouteInherit, AccessInherit, nil, "10.8.255.200")
+	err = s.UpdateProfileNetwork(ctx, "p2", RouteInherit, AccessInherit, nil, nil, ClientLANInherit, "10.8.255.200")
 	if !errors.Is(err, ErrFixedIPTaken) {
 		t.Fatalf("重复固定 IP 应返回 ErrFixedIPTaken：%v", err)
 	}
 
-	if err := s.UpdateProfileNetwork(ctx, "p1", RouteInherit, AccessInherit, nil, ""); err != nil {
+	if err := s.UpdateProfileNetwork(ctx, "p1", RouteInherit, AccessInherit, nil, nil, ClientLANInherit, ""); err != nil {
 		t.Fatalf("清除固定 IP 失败：%v", err)
 	}
 	detail, _, _ = s.Profile(ctx, "p1")

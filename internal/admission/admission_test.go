@@ -220,3 +220,29 @@ func TestSnapshotAcceptsPublicTargets(t *testing.T) {
 		t.Fatal("回环目标应被准入快照拒绝")
 	}
 }
+
+func TestSnapshotValidatesClientNetworks(t *testing.T) {
+	snapshot := testSnapshot(t)
+	snapshot.Profiles[0].ClientNetworks = []string{"192.168.50.0/24"}
+	snapshot.Profiles[1].ClientNetworks = []string{"192.168.60.0/24"}
+	snapshot.Profiles[1].ClientLANAccess = "allow"
+	if err := snapshot.Validate(); err != nil {
+		t.Fatalf("合法共享内网被拒绝：%v", err)
+	}
+
+	snapshot.Profiles[1].ClientNetworks = []string{"192.168.50.128/25"}
+	if err := snapshot.Validate(); err == nil || !strings.Contains(err.Error(), "共享内网") {
+		t.Fatalf("重叠共享内网应被拒绝：%v", err)
+	}
+
+	snapshot.Profiles[1].ClientNetworks = []string{"8.8.8.0/24"}
+	if err := snapshot.Validate(); err == nil || !strings.Contains(err.Error(), "私网") {
+		t.Fatalf("公网共享内网应被拒绝：%v", err)
+	}
+
+	snapshot.Profiles[1].ClientNetworks = nil
+	snapshot.Profiles[1].ClientLANAccess = "unknown"
+	if err := snapshot.Validate(); err == nil || !strings.Contains(err.Error(), "客户端内网权限") {
+		t.Fatalf("未知客户端内网权限应被拒绝：%v", err)
+	}
+}

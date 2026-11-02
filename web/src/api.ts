@@ -50,6 +50,7 @@ export type AuthType = 'certificate' | 'certificate_password' | 'password'
 export type UserStatus = 'active' | 'disabled'
 export type RouteMode = 'inherit' | 'split' | 'global'
 export type AccessMode = 'inherit' | 'allow' | 'deny'
+export type ClientLANAccess = 'inherit' | 'allow' | 'deny'
 export type EffectiveStatus =
   | 'active'
   | 'user_disabled'
@@ -100,6 +101,8 @@ export interface Profile {
   routeMode: RouteMode
   accessMode: AccessMode
   allowedInternal: string[]
+  clientLanAccess: ClientLANAccess
+  clientNetworks: string[]
   fixedVpnIp: string
   fixedIpRangeStart?: string
   fixedIpRangeEnd?: string
@@ -182,6 +185,7 @@ export interface ServerConfig {
   dns: string[]
   routeMode: 'split' | 'global'
   allowedInternal: string[]
+  allowClientNetworks: boolean
   allowInterClient: boolean
   blockIpv6: boolean
   extraDirectives: string[]
@@ -232,6 +236,8 @@ export interface ProfilePatch {
   routeMode?: RouteMode
   accessMode?: AccessMode
   allowedInternal?: string[]
+  clientLanAccess?: ClientLANAccess
+  clientNetworks?: string[]
   fixedVpnIp?: string
 }
 

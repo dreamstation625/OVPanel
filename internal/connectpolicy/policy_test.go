@@ -121,3 +121,100 @@ func TestWriteAndLoad(t *testing.T) {
 		t.Fatal("读取后应能匹配证书身份")
 	}
 }
+
+func TestEffectiveWithSharedNetworks(t *testing.T) {
+	snapshot := admission.Snapshot{
+		Users: []admission.User{{ID: "u1", Status: "active"}},
+		Profiles: []admission.Profile{
+			{
+				ID: "A", UserID: "u1", Status: "active",
+				ClientNetworks: []string{"192.168.50.0/24"},
+				RouteMode:      "split", AccessMode: "allow",
+				AllowedInternal: []string{"192.168.50.0/24"},
+			},
+			{ID: "B", UserID: "u1", Status: "active", ClientLANAccess: "inherit"},
+			{ID: "C", UserID: "u1", Status: "active", ClientLANAccess: "deny"},
+			{ID: "D", UserID: "u1", Status: "disabled", ClientNetworks: []string{"192.168.60.0/24"}, ClientLANAccess: "deny"},
+		},
+	}
+	advertised, err := AdvertisedNetworks(snapshot)
+	if err != nil {
+		t.Fatalf("汇总共享内网失败：%v", err)
+	}
+	if len(advertised) != 1 || len(advertised["A"]) != 1 {
+		t.Fatalf("只应汇总启用配置的共享内网：%+v", advertised)
+	}
+	server := Policy{AllowClientNetworks: true}
+	a, err := EffectiveWithShared(snapshot.Profiles[0], server, advertised)
+	if err != nil {
+		t.Fatalf("计算 A 策略失败：%v", err)
+	}
+	if len(a.OwnClientNetworks) != 1 || a.OwnClientNetworks[0] != "192.168.50.0/24" {
+		t.Fatalf("A 应记录自己的共享内网：%+v", a)
+	}
+	if len(a.AllowedInternal) != 0 {
+		t.Fatalf("A 不应把自己的共享内网推给自己：%+v", a.AllowedInternal)
+	}
+	b, err := EffectiveWithShared(snapshot.Profiles[1], server, advertised)
+	if err != nil {
+		t.Fatalf("计算 B 策略失败：%v", err)
+	}
+	if len(b.AllowedInternal) != 1 || b.AllowedInternal[0] != "192.168.50.0/24" {
+		t.Fatalf("B 应继承共享内网：%+v", b.AllowedInternal)
+	}
+	c, err := EffectiveWithShared(snapshot.Profiles[2], server, advertised)
+	if err != nil {
+		t.Fatalf("计算 C 策略失败：%v", err)
+	}
+	if len(c.AllowedInternal) != 0 {
+		t.Fatalf("C 禁止访问共享内网：%+v", c.AllowedInternal)
+	}
+	d, err := EffectiveWithShared(snapshot.Profiles[3], server, advertised)
+	if err != nil {
+		t.Fatalf("计算 D 策略失败：%v", err)
+	}
+	if len(d.AllowedInternal) != 0 {
+		t.Fatalf("停用配置不应获得共享内网：%+v", d.AllowedInternal)
+	}
+
+	// 服务端默认关闭时，继承者不应获得共享内网；显式允许仍可访问。
+	off := Policy{}
+	b2, _ := EffectiveWithShared(snapshot.Profiles[1], off, advertised)
+	if len(b2.AllowedInternal) != 0 {
+		t.Fatalf("服务端关闭时继承者不应获得共享内网：%+v", b2.AllowedInternal)
+	}
+	allow := snapshot.Profiles[1]
+	allow.ClientLANAccess = "allow"
+	b3, _ := EffectiveWithShared(allow, off, advertised)
+	if len(b3.AllowedInternal) != 1 {
+		t.Fatalf("显式允许应获得共享内网：%+v", b3.AllowedInternal)
+	}
+}
+
+func TestClientLinesWithSharedNetworks(t *testing.T) {
+	lines, err := ClientLines(Policy{
+		OwnClientNetworks: []string{"192.168.50.0/24"},
+		AllowedInternal:   []string{"10.0.16.0/22"},
+	})
+	if err != nil {
+		t.Fatalf("生成共享内网配置失败：%v", err)
+	}
+	if len(lines) != 2 ||
+		lines[0] != "iroute 192.168.50.0 255.255.255.0" ||
+		lines[1] != `push "route 10.0.16.0 255.255.252.0"` {
+		t.Fatalf("共享内网 iroute 异常：%v", lines)
+	}
+}
+
+func TestAdvertisedNetworksRejectsInvalid(t *testing.T) {
+	snapshot := admission.Snapshot{
+		Users: []admission.User{{ID: "u1", Status: "active"}},
+		Profiles: []admission.Profile{{
+			ID: "A", UserID: "u1", Status: "active",
+			ClientNetworks: []string{"8.8.8.0/24"},
+		}},
+	}
+	if _, err := AdvertisedNetworks(snapshot); err == nil {
+		t.Fatal("公网共享内网应被拒绝")
+	}
+}

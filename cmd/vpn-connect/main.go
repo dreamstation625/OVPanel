@@ -56,7 +56,7 @@ func run() error {
 	if err := os.WriteFile(output, []byte(payload), 0o600); err != nil {
 		return fmt.Errorf("写入推送配置: %w", err)
 	}
-	fmt.Fprintf(os.Stderr, "vpn-connect: matched=%t global=%t routes=%d\n",
-		found, policy.GlobalExit, len(policy.AllowedInternal))
+	fmt.Fprintf(os.Stderr, "vpn-connect: matched=%t global=%t routes=%d shared=%d\n",
+		found, policy.GlobalExit, len(policy.AllowedInternal), len(policy.OwnClientNetworks))
 	return nil
 }

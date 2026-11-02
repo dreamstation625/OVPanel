@@ -20,6 +20,8 @@ type AuthRecord struct {
 	RouteMode       string
 	AccessMode      string
 	AllowedInternal []string
+	ClientNetworks  []string
+	ClientLANAccess string
 	FixedVPNIP      string
 
 	ConcurrentLimit int64
@@ -43,6 +45,7 @@ func (s *Store) AuthRecords(ctx context.Context) ([]AuthRecord, error) {
 		`SELECT u.id, u.status,
 		        p.id, p.auth_type, COALESCE(p.username, ''), COALESCE(p.password_hash, ''),
 		        p.status, p.expires_at, p.route_mode, p.access_mode, p.allowed_internal_json,
+		        p.client_networks_json, p.client_lan_access,
 		        p.fixed_vpn_ip, p.concurrent_limit, p.quota_bytes, p.upload_bps, p.download_bps, p.quota_epoch,
 		        c.serial_number, c.fingerprint_sha256, c.status, c.expires_at
 		   FROM app_user u
@@ -60,6 +63,7 @@ func (s *Store) AuthRecords(ctx context.Context) ([]AuthRecord, error) {
 			record                         AuthRecord
 			profileExpires, certExpires    sql.NullString
 			allowedInternal                string
+			clientNetworks                 string
 			concurrent, quota, up, down    sql.NullInt64
 			certSerial, certFP, certStatus sql.NullString
 		)
@@ -67,7 +71,8 @@ func (s *Store) AuthRecords(ctx context.Context) ([]AuthRecord, error) {
 			&record.UserID, &record.UserStatus,
 			&record.ProfileID, &record.AuthType, &record.Username, &record.PasswordHash,
 			&record.ProfileStatus, &profileExpires,
-			&record.RouteMode, &record.AccessMode, &allowedInternal, &record.FixedVPNIP,
+			&record.RouteMode, &record.AccessMode, &allowedInternal,
+			&clientNetworks, &record.ClientLANAccess, &record.FixedVPNIP,
 			&concurrent, &quota, &up, &down, &record.QuotaEpoch,
 			&certSerial, &certFP, &certStatus, &certExpires,
 		); err != nil {
@@ -75,6 +80,7 @@ func (s *Store) AuthRecords(ctx context.Context) ([]AuthRecord, error) {
 		}
 		record.ExpiresAt = nullableTime(profileExpires)
 		record.AllowedInternal = decodeStringList(allowedInternal)
+		record.ClientNetworks = decodeStringList(clientNetworks)
 		record.ConcurrentLimit = concurrent.Int64
 		record.QuotaBytes = quota.Int64
 		record.UploadBps = up.Int64

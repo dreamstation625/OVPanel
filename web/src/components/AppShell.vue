@@ -279,7 +279,7 @@ async function logout() {
           </div>
           <pre v-if="releaseNotes" class="release-notes">{{ releaseNotes }}</pre>
           <p class="update-hint">
-            更新提示只统计正式版本。更新方式：按 Release 说明拉取对应版本的面板和 OpenVPN 镜像并重建容器。面板不会在网页内自动更新。
+            只提示正式版本。按 Release 说明更新面板和 OpenVPN 镜像并重建容器；面板不会在网页内自动更新。
           </p>
         </template>
         <div class="update-actions">

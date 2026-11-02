@@ -206,6 +206,14 @@ func (s *Service) ApplyConfig(ctx context.Context, config serverconfig.Config, r
 			return Result{}, fmt.Errorf("%w：配置 %s 的固定 IP %s 不可用：%v", accounts.ErrValidation, profile.ID, profile.FixedVPNIP, err)
 		}
 	}
+	for _, profile := range snapshot.Profiles {
+		if len(profile.ClientNetworks) == 0 {
+			continue
+		}
+		if _, err := netpolicy.PrepareClientNetworks(prepared.VPNNetwork, profile.ClientNetworks); err != nil {
+			return Result{}, fmt.Errorf("%w：配置 %s 的共享内网不可用：%v", accounts.ErrValidation, profile.ID, err)
+		}
+	}
 
 	bundle := agentproto.Bundle{
 		Version:        agentproto.Version,
@@ -218,12 +226,13 @@ func (s *Service) ApplyConfig(ctx context.Context, config serverconfig.Config, r
 		TLSCryptKey:    tlsKey,
 		CRLPEM:         crlPEM,
 		Policy: netpolicy.Policy{
-			VPNPool:          prepared.VPNNetwork,
-			TunDevice:        "tun0",
-			AllowInterClient: prepared.AllowInterClient,
-			GlobalExit:       prepared.RouteMode == serverconfig.RouteGlobal,
-			BlockIPv6:        prepared.BlockIPv6,
-			AllowedInternal:  prepared.AllowedInternal,
+			VPNPool:             prepared.VPNNetwork,
+			TunDevice:           "tun0",
+			AllowInterClient:    prepared.AllowInterClient,
+			AllowClientNetworks: prepared.AllowClientNetworks,
+			GlobalExit:          prepared.RouteMode == serverconfig.RouteGlobal,
+			BlockIPv6:           prepared.BlockIPv6,
+			AllowedInternal:     prepared.AllowedInternal,
 		},
 		Snapshot: snapshot,
 		IssuedAt: s.now(),

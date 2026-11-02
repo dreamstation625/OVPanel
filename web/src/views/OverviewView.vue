@@ -28,7 +28,7 @@ const stats = computed(() => {
       icon: Activity,
     },
     { label: '今日流量', value: formatBytes(info.todayUpBytes + info.todayDownBytes), hint: `上行 ${formatBytes(info.todayUpBytes)} · 下行 ${formatBytes(info.todayDownBytes)}`, icon: FileBadge },
-    { label: '用户 / 配置', value: `${info.users} / ${info.profiles}`, hint: '按用户和客户端配置统计', icon: Users },
+    { label: '用户 / 配置', value: `${info.users} / ${info.profiles}`, hint: '用户数与配置数', icon: Users },
   ]
 })
 
@@ -200,8 +200,8 @@ onBeforeUnmount(() => {
           </li>
         </ul>
         <div v-else class="surface-empty">
-          <strong>当前没有在线连接</strong>
-          <span>打开“在线连接”查看连接详情和历史。</span>
+          <strong>暂无在线连接</strong>
+          <span>连接后显示。</span>
         </div>
       </section>
     </div>
@@ -240,7 +240,7 @@ onBeforeUnmount(() => {
         </ul>
         <div v-else class="surface-empty">
           <strong>暂无操作记录</strong>
-          <span>备份、恢复等操作会显示在这里。</span>
+          <span>备份、恢复等操作记录。</span>
         </div>
       </section>
     </div>

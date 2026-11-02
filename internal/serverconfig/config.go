@@ -23,29 +23,32 @@ const (
 
 // Config 是一份完整的服务端期望配置。
 type Config struct {
-	VPNNetwork       string    `json:"vpnNetwork"`
-	Protocol         string    `json:"protocol"`
-	Port             int       `json:"port"`
-	DNS              []string  `json:"dns"`
-	RouteMode        RouteMode `json:"routeMode"`
-	AllowedInternal  []string  `json:"allowedInternal"` // 字段名保留兼容；值为任意 IPv4 目标网段
-	AllowInterClient bool      `json:"allowInterClient"`
-	BlockIPv6        bool      `json:"blockIpv6"`
-	ExtraDirectives  []string  `json:"extraDirectives"`
+	VPNNetwork      string    `json:"vpnNetwork"`
+	Protocol        string    `json:"protocol"`
+	Port            int       `json:"port"`
+	DNS             []string  `json:"dns"`
+	RouteMode       RouteMode `json:"routeMode"`
+	AllowedInternal []string  `json:"allowedInternal"` // 字段名保留兼容；值为任意 IPv4 目标网段
+	// AllowClientNetworks 是能否访问其他客户端共享内网的默认值。
+	AllowClientNetworks bool     `json:"allowClientNetworks"`
+	AllowInterClient    bool     `json:"allowInterClient"`
+	BlockIPv6           bool     `json:"blockIpv6"`
+	ExtraDirectives     []string `json:"extraDirectives"`
 }
 
-// Defaults 返回默认配置：UDP/1194、10.8.0.0/16、DNS 119.29.29.29、指定网段分流、互访关闭、阻断 IPv6。
+// Defaults 返回默认配置：UDP/1194、10.8.0.0/16、DNS 119.29.29.29、指定网段分流、互访与客户端内网访问关闭、阻断 IPv6。
 func Defaults() Config {
 	return Config{
-		VPNNetwork:       "10.8.0.0/16",
-		Protocol:         "udp",
-		Port:             1194,
-		DNS:              []string{"119.29.29.29"},
-		RouteMode:        RouteSplit,
-		AllowedInternal:  []string{},
-		AllowInterClient: false,
-		BlockIPv6:        true,
-		ExtraDirectives:  []string{},
+		VPNNetwork:          "10.8.0.0/16",
+		Protocol:            "udp",
+		Port:                1194,
+		DNS:                 []string{"119.29.29.29"},
+		RouteMode:           RouteSplit,
+		AllowedInternal:     []string{},
+		AllowClientNetworks: false,
+		AllowInterClient:    false,
+		BlockIPv6:           true,
+		ExtraDirectives:     []string{},
 	}
 }
 

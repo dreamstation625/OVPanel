@@ -16,6 +16,7 @@ const form = reactive<ServerConfig>({
   dns: ['119.29.29.29'],
   routeMode: 'split',
   allowedInternal: [],
+  allowClientNetworks: false,
   allowInterClient: false,
   blockIpv6: true,
   extraDirectives: [],
@@ -43,7 +44,7 @@ const configState = computed(() => {
 const promptMeta = computed(() => {
   switch (prompt.value.mode) {
     case 'start':
-      return { title: '启动 OpenVPN', description: '使用当前配置启动 OpenVPN。', actionLabel: '启动', danger: false }
+      return { title: '启动 OpenVPN', description: '按当前配置启动。', actionLabel: '启动', danger: false }
     case 'stop':
       return {
         title: '停止 OpenVPN',
@@ -61,7 +62,7 @@ const promptMeta = computed(() => {
     default:
       return {
         title: '应用配置',
-        description: '应用后可能重启 OpenVPN，现有连接会短暂中断；失败时自动恢复上一版本。',
+        description: '应用可能重启 OpenVPN，连接会短暂中断；失败自动回退。',
         actionLabel: '应用',
         danger: false,
       }
@@ -164,7 +165,7 @@ async function confirmPrompt() {
   try {
     if (mode === 'apply') {
       await api.applyServerConfig()
-      notify.success('配置已应用，正在等待 VPN 服务确认。')
+      notify.success('配置已应用，等待 VPN 服务确认。')
     } else {
       await api.serverCommand(mode)
       notify.success(mode === 'stop' ? '已发送停止。' : mode === 'start' ? '已发送启动。' : '已发送重启。')
@@ -252,14 +253,21 @@ onMounted(load)
             />
           </NFormItem>
           <p class="hint">
-            分流时这些网段会推送给客户端；全局时公网默认放行，这里只用于放行私有网络。可填内网或公网 IPv4 网段，也可填单个 IP。不要填写 VPN 服务器自身的公网地址，否则可能导致连接回环。
+            分流时推送给客户端；全局时只用于放行私有网络。可填 IPv4 网段或单个 IP。不要填写 VPN 服务器自身的公网地址。
           </p>
           <div class="switch-row">
             <div>
               <strong>允许客户端互相访问</strong>
-              <span>开启后，连接到 VPN 的设备可以互相访问。</span>
+              <span>开启后，连接 VPN 的设备可以互相访问。</span>
             </div>
             <NSwitch v-model:value="form.allowInterClient" aria-label="允许客户端互相访问" />
+          </div>
+          <div class="switch-row">
+            <div>
+              <strong>允许访问客户端共享内网</strong>
+              <span>继承服务端设置的配置可以访问其他客户端共享内网；保存应用后生效。</span>
+            </div>
+            <NSwitch v-model:value="form.allowClientNetworks" aria-label="允许访问客户端共享内网" />
           </div>
           <div class="switch-row">
             <div>
@@ -348,7 +356,7 @@ onMounted(load)
         <h2><ShieldCheck :size="16" /> 配置内容</h2>
         <span class="surface-meta">最近修改 {{ formatDate(meta?.draft?.createdAt || meta?.active?.createdAt) }}</span>
       </header>
-      <pre class="config-preview" tabindex="0">{{ rendered || '保存后或点击“检查配置”可在这里查看配置内容。' }}</pre>
+      <pre class="config-preview" tabindex="0">{{ rendered || '保存或检查配置后显示内容。' }}</pre>
     </section>
 
     <ConfirmModal

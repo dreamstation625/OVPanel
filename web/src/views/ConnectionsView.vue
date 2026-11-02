@@ -169,7 +169,7 @@ function endReasonLabel(reason: string) {
           </span>
         </div>
         <p class="page-meta">
-          来源 IP 是 OpenVPN 看到的连接地址；bridge 模式经 Docker 端口代理时可能显示容器网关，host-network 模式会保留真实来源。
+          来源 IP 由 OpenVPN 记录；bridge 模式可能显示容器网关，host-network 模式保留真实来源。
         </p>
       </div>
       <div class="header-tools">
@@ -261,14 +261,14 @@ function endReasonLabel(reason: string) {
                     断开
                   </NButton>
                 </template>
-                仅断开这一条连接，该用户仍可重新连接。确认继续？
+                只断开这一条，该用户仍可重新连接。确认继续？
               </NPopconfirm>
             </div>
           </div>
         </div>
         <div v-else class="surface-empty">
-          <strong>当前没有在线连接</strong>
-          <span>客户端连接后会显示在这里。</span>
+          <strong>暂无在线连接</strong>
+          <span>客户端连接后显示。</span>
         </div>
       </section>
     </template>
@@ -310,14 +310,14 @@ function endReasonLabel(reason: string) {
           </div>
           <div class="cell cell-reason">
             <span>{{ endReasonLabel(item.endReason) }}</span>
-            <span v-if="!item.disconnectedAt" class="muted">仍在线或没有正常结束</span>
+            <span v-if="!item.disconnectedAt" class="muted">未正常结束</span>
             <span v-else class="muted">{{ formatDate(item.disconnectedAt) }}</span>
           </div>
         </div>
       </div>
       <div v-else class="surface-empty">
-        <strong>还没有连接历史</strong>
-        <span>连接开始、流量和结束记录会自动保存在这里。</span>
+        <strong>暂无连接历史</strong>
+        <span>连接记录保存在这里。</span>
       </div>
     </section>
   </div>

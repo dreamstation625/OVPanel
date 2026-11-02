@@ -58,6 +58,8 @@ type profileDTO struct {
 	RouteMode         string          `json:"routeMode"`
 	AccessMode        string          `json:"accessMode"`
 	AllowedInternal   []string        `json:"allowedInternal"`
+	ClientLANAccess   string          `json:"clientLanAccess"`
+	ClientNetworks    []string        `json:"clientNetworks"`
 	FixedVPNIP        string          `json:"fixedVpnIp"`
 	FixedIPRangeStart string          `json:"fixedIpRangeStart,omitempty"`
 	FixedIPRangeEnd   string          `json:"fixedIpRangeEnd,omitempty"`
@@ -114,6 +116,8 @@ type updateProfileRequest struct {
 	RouteMode       *string   `json:"routeMode"`
 	AccessMode      *string   `json:"accessMode"`
 	AllowedInternal *[]string `json:"allowedInternal"`
+	ClientLANAccess *string   `json:"clientLanAccess"`
+	ClientNetworks  *[]string `json:"clientNetworks"`
 	FixedVPNIP      *string   `json:"fixedVpnIp"`
 }
 
@@ -339,7 +343,7 @@ func (s *Server) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 	if !s.decodeJSON(w, r, &req) {
 		return
 	}
-	if req.Name == nil && req.Status == nil && req.RouteMode == nil && req.AccessMode == nil && req.AllowedInternal == nil && req.FixedVPNIP == nil {
+	if req.Name == nil && req.Status == nil && req.RouteMode == nil && req.AccessMode == nil && req.AllowedInternal == nil && req.ClientLANAccess == nil && req.ClientNetworks == nil && req.FixedVPNIP == nil {
 		writeError(w, r, http.StatusBadRequest, CodeInvalidRequest, "没有需要更新的字段")
 		return
 	}
@@ -362,7 +366,7 @@ func (s *Server) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 		// 停用必须尽快断开现有连接，不等连接自然结束。
 		s.applyRuntimeBundle(r.Context(), "profile status updated")
 	}
-	if req.RouteMode != nil || req.AccessMode != nil || req.AllowedInternal != nil || req.FixedVPNIP != nil {
+	if req.RouteMode != nil || req.AccessMode != nil || req.AllowedInternal != nil || req.ClientLANAccess != nil || req.ClientNetworks != nil || req.FixedVPNIP != nil {
 		current, ok, err := s.store.Profile(r.Context(), id)
 		if err != nil {
 			s.internalError(w, r, err)
@@ -374,6 +378,8 @@ func (s *Server) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 		}
 		routeMode, accessMode := current.RouteMode, current.AccessMode
 		allowed := current.AllowedInternal
+		clientLANAccess := current.ClientLANAccess
+		clientNetworks := current.ClientNetworks
 		fixedVPNIP := current.FixedVPNIP
 		if req.RouteMode != nil {
 			routeMode = *req.RouteMode
@@ -384,10 +390,16 @@ func (s *Server) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 		if req.AllowedInternal != nil {
 			allowed = *req.AllowedInternal
 		}
+		if req.ClientLANAccess != nil {
+			clientLANAccess = *req.ClientLANAccess
+		}
+		if req.ClientNetworks != nil {
+			clientNetworks = *req.ClientNetworks
+		}
 		if req.FixedVPNIP != nil {
 			fixedVPNIP = *req.FixedVPNIP
 		}
-		detail, err = s.accounts.UpdateProfilePolicy(r.Context(), id, routeMode, accessMode, allowed, fixedVPNIP)
+		detail, err = s.accounts.UpdateProfilePolicy(r.Context(), id, routeMode, accessMode, allowed, clientNetworks, clientLANAccess, fixedVPNIP)
 		if err != nil {
 			s.writeAccountError(w, r, err)
 			return
@@ -683,6 +695,8 @@ func profileToDTO(detail store.ProfileDetail, now time.Time) profileDTO {
 		RouteMode:       detail.RouteMode,
 		AccessMode:      detail.AccessMode,
 		AllowedInternal: detail.AllowedInternal,
+		ClientLANAccess: detail.ClientLANAccess,
+		ClientNetworks:  detail.ClientNetworks,
 		FixedVPNIP:      detail.FixedVPNIP,
 		CreatedAt:       detail.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:       detail.UpdatedAt.Format(time.RFC3339),
@@ -695,6 +709,12 @@ func profileToDTO(detail store.ProfileDetail, now time.Time) profileDTO {
 	}
 	if dto.AllowedInternal == nil {
 		dto.AllowedInternal = []string{}
+	}
+	if dto.ClientLANAccess == "" {
+		dto.ClientLANAccess = store.ClientLANInherit
+	}
+	if dto.ClientNetworks == nil {
+		dto.ClientNetworks = []string{}
 	}
 	if detail.ConcurrentLimit != nil {
 		dto.ConcurrentLimit = *detail.ConcurrentLimit

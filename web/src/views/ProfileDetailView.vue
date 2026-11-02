@@ -10,13 +10,14 @@ import {
   NFormItem,
   NInput,
   NInputNumber,
+  NModal,
   NPopconfirm,
   NSelect,
   NSwitch,
 } from 'naive-ui'
 import ConfirmModal from '../components/ConfirmModal.vue'
 import OneTimePasswordModal from '../components/OneTimePasswordModal.vue'
-import { api, ApiError, type AccessMode, type Profile, type RouteMode } from '../api'
+import { api, ApiError, type AccessMode, type ClientLANAccess, type Profile, type RouteMode } from '../api'
 import {
   authLabel,
   authRequiresCertificate,
@@ -53,6 +54,7 @@ const loading = ref(true)
 const error = ref('')
 const copied = ref(false)
 const oneTime = ref({ show: false, password: '', username: '' })
+const shareNotice = ref({ show: false, text: '' })
 const prompt = ref<PromptState>({
   show: false,
   title: '',
@@ -67,6 +69,8 @@ const policy = reactive({
   routeMode: 'inherit' as RouteMode,
   accessMode: 'inherit' as AccessMode,
   allowedText: '',
+  clientLanAccess: 'inherit' as ClientLANAccess,
+  clientNetworksText: '',
   fixedVpnIp: '',
 })
 const policyBusy = ref(false)
@@ -91,6 +95,11 @@ const accessOptions = [
   { label: '继承服务端', value: 'inherit' },
   { label: '仅允许指定网段', value: 'allow' },
   { label: '禁止访问私有网段', value: 'deny' },
+]
+const clientLANOptions = [
+  { label: '继承服务端', value: 'inherit' },
+  { label: '允许访问其他客户端共享内网', value: 'allow' },
+  { label: '禁止访问其他客户端共享内网', value: 'deny' },
 ]
 
 const backTarget = computed(() => (profile.value ? `/users/${profile.value.userId}` : '/users'))
@@ -165,7 +174,7 @@ function exportProfile() {
   const id = profile.value.id
   openPrompt(
     '下载客户端配置',
-    '文件包含客户端私钥和加密密钥，请通过安全方式交给使用者，不要公开转发。',
+    '文件含客户端私钥和加密密钥，请安全交付，不要公开转发。',
     '下载',
     async () => {
       const result = await api.exportProfile(id)
@@ -180,7 +189,7 @@ function resetPassword() {
     return
   }
   const id = profile.value.id
-  openPrompt('重置 VPN 密码', '旧密码立即失效；新密码只会显示一次。', '重置密码', async () => {
+  openPrompt('重置 VPN 密码', '旧密码立即失效；新密码只显示一次。', '重置密码', async () => {
     const result = await api.resetProfilePassword(id)
     profile.value = result.profile
     oneTime.value = {
@@ -199,7 +208,7 @@ function rotateCertificate() {
   const id = profile.value.id
   openPrompt(
     '更换客户端证书',
-    '旧证书会立即失效，所有使用旧配置的设备都需要重新下载 .ovpn。',
+    '旧证书立即失效，使用旧配置的设备需重新下载 .ovpn。',
     '更换证书',
     async () => {
       const result = await api.rotateCertificate(id)
@@ -216,7 +225,7 @@ function revokeCertificate() {
   const id = profile.value.id
   openPrompt(
     '作废客户端证书',
-    '作废后无法恢复。该配置将无法连接，需要重新签发证书。',
+    '作废后无法恢复，配置将无法连接，需重新签发证书。',
     '作废证书',
     async () => {
       const result = await api.revokeCertificate(id)
@@ -252,6 +261,7 @@ async function savePolicy() {
   if (!current || policyBusy.value) {
     return
   }
+  const previousShared = networksKey(current.clientNetworks ?? [])
   policyBusy.value = true
   try {
     profile.value = await api.updateProfile(current.id, {
@@ -264,14 +274,36 @@ async function savePolicy() {
               .map((value) => value.trim())
               .filter(Boolean)
           : [],
+      clientLanAccess: policy.clientLanAccess,
+      clientNetworks: policy.clientNetworksText
+        .split(/[,，\s]+/)
+        .map((value) => value.trim())
+        .filter(Boolean),
       fixedVpnIp: policy.fixedVpnIp.trim(),
     })
-    notify.success('网络策略已保存；路由和固定 IP 在客户端重新连接后生效。')
+    const saved = profile.value
+    if (networksKey(saved.clientNetworks ?? []) !== previousShared) {
+      const label = `${saved.userDisplayName} · ${saved.name}`
+      shareNotice.value = {
+        show: true,
+        text:
+          saved.onlineSessions > 0
+            ? `客户端「${label}」有 ${saved.onlineSessions} 条在线连接。请重连该客户端使共享网段生效；需要访问该网段的其他客户端也需重连。`
+            : `请重连客户端「${label}」使共享网段生效；需要访问该网段的其他客户端也需重连。`,
+      }
+      notify.success('网络策略已保存；请重连共享客户端使新路由生效。')
+    } else {
+      notify.success('网络策略已保存。')
+    }
   } catch (err) {
     notify.error(errorMessage(err))
   } finally {
     policyBusy.value = false
   }
+}
+
+function networksKey(values: string[]) {
+  return [...values].sort().join('|')
 }
 
 async function saveLimits() {
@@ -321,7 +353,7 @@ function resetQuota() {
   }
   openPrompt(
     '重置流量额度',
-    '重置后从当前用量重新计算；历史连接和统计不会删除，在线连接不会断开。',
+    '重置后从当前用量重算；历史记录保留，在线连接不断开。',
     '重置额度',
     async () => {
       const result = await api.resetQuota(current.id)
@@ -351,6 +383,8 @@ watch(
     policy.routeMode = value.routeMode
     policy.accessMode = value.accessMode
     policy.allowedText = value.allowedInternal.join(', ')
+    policy.clientLanAccess = value.clientLanAccess ?? 'inherit'
+    policy.clientNetworksText = (value.clientNetworks ?? []).join(', ')
     policy.fixedVpnIp = value.fixedVpnIp ?? ''
     limits.expiresAt = value.expiresAt ? new Date(value.expiresAt).getTime() : null
     limits.concurrentEnabled = value.concurrentLimit > 0
@@ -405,7 +439,7 @@ watch(() => route.params.id, load, { immediate: true })
       </header>
 
       <NAlert v-if="profile.effectiveStatus !== 'active'" type="warning" :bordered="false" class="stack-gap">
-        {{ profile.statusReason }}。VPN 服务会拒绝新连接，并断开已有连接。
+        {{ profile.statusReason }}。VPN 服务会拒绝新连接并断开已有连接。
       </NAlert>
 
       <section class="surface">
@@ -430,7 +464,7 @@ watch(() => route.params.id, load, { immediate: true })
                   {{ profile.status === 'active' ? '停用配置' : '启用配置' }}
                 </NButton>
               </template>
-              {{ profile.status === 'active' ? '停用后所有使用该配置的设备都不可连接，确认继续？' : '启用该配置？' }}
+              {{ profile.status === 'active' ? '停用后所有使用该配置的设备都不可连接，确认？' : '启用该配置？' }}
             </NPopconfirm>
           </div>
         </header>
@@ -464,7 +498,7 @@ watch(() => route.params.id, load, { immediate: true })
       <section class="surface">
         <header class="surface-head">
           <h2>网络策略</h2>
-          <span class="surface-meta">分别设置路由和目标网段权限</span>
+          <span class="surface-meta">路由、目标网段与共享内网</span>
         </header>
         <NForm>
           <div class="policy-grid">
@@ -473,6 +507,9 @@ watch(() => route.params.id, load, { immediate: true })
             </NFormItem>
             <NFormItem label="目标网段权限">
               <NSelect v-model:value="policy.accessMode" :options="accessOptions" />
+            </NFormItem>
+            <NFormItem label="共享内网访问">
+              <NSelect v-model:value="policy.clientLanAccess" :options="clientLANOptions" />
             </NFormItem>
           </div>
           <NFormItem v-if="policy.accessMode === 'allow'" label="允许访问的目标网段">
@@ -483,17 +520,31 @@ watch(() => route.params.id, load, { immediate: true })
               placeholder="例如 10.0.16.0/22、192.168.99.0/24、1.1.1.1，用逗号或换行分隔"
             />
           </NFormItem>
+          <NFormItem label="共享内网">
+            <NInput
+              v-model:value="policy.clientNetworksText"
+              type="textarea"
+              :autosize="{ minRows: 2, maxRows: 4 }"
+              placeholder="例如 192.168.50.0/24，用逗号或换行分隔"
+            />
+          </NFormItem>
           <NFormItem label="固定 VPN 地址">
             <NInput
               v-model:value="policy.fixedVpnIp"
-              placeholder="留空自动分配；填写 VPN 网段内、动态池外的地址"
+              placeholder="留空自动分配；填写动态池外的地址"
             />
           </NFormItem>
           <p class="policy-hint">
-            路由方式决定哪些流量经过 VPN；目标网段权限决定能访问哪些目标。分流时可填内网或公网网段，客户端只把这些目标路由到 VPN；全局时公网默认放行，目标网段只用于放行私有网络。不要填写 VPN 服务器自身的公网地址，否则可能导致连接回环。
+            分流时只把目标网段路由到 VPN；全局时只用于放行私有网络。不要填写 VPN 服务器自身的公网地址。
           </p>
           <p class="policy-hint">
-            固定 IP 可使用 VPN 网段内<template v-if="profile.fixedIpRangeStart">（{{ profile.fixedIpRangeStart }} 至 {{ profile.fixedIpRangeEnd }}）</template>除动态池<template v-if="profile.fixedIpPoolStart">（{{ profile.fixedIpPoolStart }} 至 {{ profile.fixedIpPoolEnd }}）</template>以外的地址，保存后并发上限固定为 1，客户端重新连接后生效；首次配置固定 IP 或修改 VPN 网段后，请到“服务端”应用一次配置，使动态池避让固定地址。
+            共享内网只支持私网/CGNAT IPv4，填写这台客户端后面的内网，不要填写服务端已能访问的网段。客户端需开启转发和 NAT；建议固定 IP 并只保持一条连接。
+          </p>
+          <p class="policy-hint">
+            其他客户端只能访问共享内网，共享内网里的设备不能主动访问 VPN 客户端。修改后相关客户端需重连。
+          </p>
+          <p class="policy-hint">
+            固定 IP 需在 VPN 网段内并避开动态池<template v-if="profile.fixedIpPoolStart">（{{ profile.fixedIpPoolStart }} 至 {{ profile.fixedIpPoolEnd }}）</template>。保存后并发上限为 1，客户端重连后生效；首次设置或修改 VPN 网段后，需到“服务端”应用一次配置。
           </p>
           <div class="policy-actions">
             <NButton type="primary" :loading="policyBusy" @click="savePolicy">保存网络策略</NButton>
@@ -504,7 +555,7 @@ watch(() => route.params.id, load, { immediate: true })
       <section class="surface">
         <header class="surface-head">
           <h2>使用限制</h2>
-          <span class="surface-meta">{{ fixedIPActive ? '已设置固定 IP，并发上限固定为 1' : '由 VPN 服务执行；0 或关闭表示不限制' }}</span>
+          <span class="surface-meta">{{ fixedIPActive ? '已设置固定 IP，并发上限为 1' : '0 或关闭表示不限制' }}</span>
         </header>
 
         <div class="usage-row">
@@ -517,7 +568,7 @@ watch(() => route.params.id, load, { immediate: true })
           </div>
           <div class="usage-side">
             <span v-if="profile.usageKnown">在线 {{ profile.onlineSessions }} 条</span>
-            <span v-else>暂时无法获取用量</span>
+            <span v-else>暂无用量数据</span>
             <span v-if="profile.quotaResetAt">上次重置 {{ formatDate(profile.quotaResetAt) }}</span>
             <span v-if="profile.usageGaps > 0" class="usage-gap">
               统计中断 {{ profile.usageGaps }} 次，期间流量可能少计
@@ -627,7 +678,7 @@ watch(() => route.params.id, load, { immediate: true })
       <section v-if="authRequiresCertificate(profile.authType)" class="surface">
         <header class="surface-head">
           <h2>客户端证书</h2>
-          <span class="surface-meta">{{ profile.certificate ? '当前有效' : '没有有效证书' }}</span>
+          <span class="surface-meta">{{ profile.certificate ? '有效' : '无有效证书' }}</span>
         </header>
 
         <template v-if="profile.certificate">
@@ -677,6 +728,19 @@ watch(() => route.params.id, load, { immediate: true })
       title="VPN 密码已重置"
       @update:show="oneTime.show = $event"
     />
+    <NModal
+      v-model:show="shareNotice.show"
+      preset="card"
+      title="共享网段已更新"
+      :style="{ width: 'min(460px, calc(100vw - 28px))' }"
+    >
+      <p class="share-notice">{{ shareNotice.text }}</p>
+      <template #footer>
+        <div class="policy-actions">
+          <NButton type="primary" @click="shareNotice.show = false">知道了</NButton>
+        </div>
+      </template>
+    </NModal>
   </div>
 </template>
 
@@ -841,7 +905,7 @@ watch(() => route.params.id, load, { immediate: true })
 
 .policy-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 12px;
 }
 
@@ -849,6 +913,13 @@ watch(() => route.params.id, load, { immediate: true })
   margin: 0 0 14px;
   color: var(--text-3);
   font-size: 11.5px;
+  line-height: 1.65;
+}
+
+.share-notice {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 13px;
   line-height: 1.65;
 }
 

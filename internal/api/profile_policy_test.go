@@ -92,6 +92,32 @@ func TestProfilePolicyUpdate(t *testing.T) {
 		}
 	}
 
+	shared := doJSON(t, h, http.MethodPatch, "/api/profiles/"+id, "127.0.0.1:5000", map[string]any{
+		"clientLanAccess": "allow",
+		"clientNetworks":  []string{"192.168.50.5/24", "10.20.30.40"},
+	}, cookies...)
+	if shared.Code != http.StatusOK {
+		t.Fatalf("共享内网应被接受：%d %s", shared.Code, shared.Body.String())
+	}
+	var sharedProfile profileDTO
+	if err := json.Unmarshal(shared.Body.Bytes(), &sharedProfile); err != nil {
+		t.Fatalf("解析共享内网结果失败：%v", err)
+	}
+	if sharedProfile.ClientLANAccess != "allow" ||
+		len(sharedProfile.ClientNetworks) != 2 ||
+		sharedProfile.ClientNetworks[0] != "192.168.50.0/24" ||
+		sharedProfile.ClientNetworks[1] != "10.20.30.40/32" {
+		t.Fatalf("共享内网未规范化：%+v", sharedProfile)
+	}
+	for _, bad := range [][]string{{"8.8.8.0/24"}, {"10.8.1.0/24"}} {
+		invalid := doJSON(t, h, http.MethodPatch, "/api/profiles/"+id, "127.0.0.1:5000", map[string]any{
+			"clientNetworks": bad,
+		}, cookies...)
+		if invalid.Code != http.StatusBadRequest {
+			t.Fatalf("非法共享内网应被拒绝：%v %d %s", bad, invalid.Code, invalid.Body.String())
+		}
+	}
+
 	detail := doJSON(t, h, http.MethodGet, "/api/profiles/"+id, "127.0.0.1:5000", nil, cookies...)
 	if detail.Code != http.StatusOK {
 		t.Fatalf("读取详情失败：%d %s", detail.Code, detail.Body.String())

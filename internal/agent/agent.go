@@ -28,6 +28,7 @@ import (
 	"github.com/dreamstation625/ovpanel/internal/admission"
 	"github.com/dreamstation625/ovpanel/internal/agentproto"
 	"github.com/dreamstation625/ovpanel/internal/agentusage"
+	"github.com/dreamstation625/ovpanel/internal/clientroutes"
 	"github.com/dreamstation625/ovpanel/internal/connectpolicy"
 	"github.com/dreamstation625/ovpanel/internal/netpolicy"
 	"github.com/dreamstation625/ovpanel/internal/serverconfig"
@@ -125,7 +126,8 @@ type Runtime struct {
 	lastError           string
 	appliedAt           time.Time
 
-	usage *agentusage.Store
+	usage  *agentusage.Store
+	routes *clientroutes.Manager
 
 	proc       *exec.Cmd
 	procDone   chan struct{}
@@ -138,6 +140,8 @@ type Runtime struct {
 	applyPolicyFn  func(netpolicy.Policy) error
 	applyTrafficFn func([]traffic.Session) error
 	startVPNFn     func(context.Context, string) error
+	syncRoutesFn   func(networks []string, viaTun bool, tun string) error
+	localNetsFn    func(vpnPool string) []string
 }
 
 // New 创建运行代理。每次进程启动生成新的运行代次，会话以代次 + CID 区分。
@@ -152,6 +156,7 @@ func New(controlDir, stateDir string, log *slog.Logger) *Runtime {
 		sessions:    map[string]sessionInfo{},
 		pendingAddr: map[string]string{},
 		usage:       agentusage.New(stateDir, controlDir, generation, log),
+		routes:      clientroutes.New(filepath.Join(stateDir, "client-routes.json")),
 	}
 }
 
@@ -638,9 +643,10 @@ func (r *Runtime) writeConnectPolicy(bundle agentproto.Bundle) error {
 		return fmt.Errorf("解析 VPN 网段: %w", err)
 	}
 	file, err := connectpolicy.Build(bundle.Snapshot, connectpolicy.Policy{
-		GlobalExit:      bundle.Policy.GlobalExit,
-		AllowedInternal: bundle.Policy.AllowedInternal,
-		VPNMask:         net.IP(network.Mask).String(),
+		GlobalExit:          bundle.Policy.GlobalExit,
+		AllowedInternal:     bundle.Policy.AllowedInternal,
+		AllowClientNetworks: bundle.Policy.AllowClientNetworks,
+		VPNMask:             net.IP(network.Mask).String(),
 	})
 	if err != nil {
 		return fmt.Errorf("生成连接路由策略: %w", err)
@@ -651,23 +657,55 @@ func (r *Runtime) writeConnectPolicy(bundle agentproto.Bundle) error {
 	return nil
 }
 
-// refreshPolicy 依据当前在线会话重建逐连接 nftables 规则。
+// refreshPolicy 依据当前在线会话重建逐连接 nftables 规则与共享内网路由。
 // 未取得地址或未登记的会话由地址池默认拒绝兜底。
 func (r *Runtime) refreshPolicy() error {
 	r.mu.Lock()
 	base := r.serverPolicy
 	snapshot := r.snapshot
-	sessions := make([]netpolicy.Session, 0, len(r.sessions))
+	running := r.openvpnRunning
+	active := make([]sessionInfo, 0, len(r.sessions))
 	for _, info := range r.sessions {
-		if info.vpnIP == "" {
-			continue
+		if info.vpnIP != "" {
+			active = append(active, info)
 		}
+	}
+	r.mu.Unlock()
+
+	advertised, err := connectpolicy.AdvertisedNetworks(snapshot)
+	if err != nil {
+		return err
+	}
+	networks := connectpolicy.FlattenAdvertised(advertised)
+	localNetworks := localProtectCIDRs(base.VPNPool)
+	if r.localNetsFn != nil {
+		localNetworks = r.localNetsFn(base.VPNPool)
+	}
+	for _, cidr := range networks {
+		for _, local := range localNetworks {
+			if netpolicy.NetworksOverlap(cidr, local) {
+				return fmt.Errorf("共享内网 %s 与服务端本地网络 %s 重叠", cidr, local)
+			}
+		}
+	}
+	if err := r.syncClientRoutes(networks, running, base.TunDevice); err != nil {
+		return err
+	}
+	base.SharedNetworks = networks
+
+	serverPolicy := connectpolicy.Policy{
+		GlobalExit:          base.GlobalExit,
+		AllowedInternal:     base.AllowedInternal,
+		AllowClientNetworks: base.AllowClientNetworks,
+	}
+	sessions := make([]netpolicy.Session, 0, len(active))
+	for _, info := range active {
 		effective := connectpolicy.Policy{}
 		if profile, ok := findProfile(snapshot, info.profileID); ok {
-			effective = connectpolicy.Effective(profile, connectpolicy.Policy{
-				GlobalExit:      base.GlobalExit,
-				AllowedInternal: base.AllowedInternal,
-			})
+			effective, err = connectpolicy.EffectiveWithShared(profile, serverPolicy, advertised)
+			if err != nil {
+				return err
+			}
 		}
 		sessions = append(sessions, netpolicy.Session{
 			IP:              info.vpnIP,
@@ -677,7 +715,6 @@ func (r *Runtime) refreshPolicy() error {
 	}
 	base.Sessions = sessions
 	base.ProtectTargets = nil
-	r.mu.Unlock()
 
 	if err := r.applyPolicy(base); err != nil {
 		r.mu.Lock()
@@ -834,6 +871,9 @@ func (r *Runtime) restartOpenVPN(ctx context.Context, configHash string) error {
 	r.pendingAddr = map[string]string{}
 	r.mu.Unlock()
 	if err := r.refreshPolicy(); err != nil {
+		r.mu.Lock()
+		r.policyDirty = true
+		r.mu.Unlock()
 		r.log.Warn("clear session policy after restart failed", "error", err)
 	}
 
@@ -841,8 +881,10 @@ func (r *Runtime) restartOpenVPN(ctx context.Context, configHash string) error {
 		err := cmd.Wait()
 		logFile.Close()
 		close(done)
+		exitedCurrent := false
 		r.mu.Lock()
 		if r.proc == cmd {
+			exitedCurrent = true
 			r.proc = nil
 			r.procDone = nil
 			r.openvpnRunning = false
@@ -853,6 +895,13 @@ func (r *Runtime) restartOpenVPN(ctx context.Context, configHash string) error {
 		}
 		r.mu.Unlock()
 		r.log.Warn("openvpn exited", "error", err)
+		// tun 设备随进程消失，路由必须立刻改为 blackhole，避免回落到默认路由。
+		// 若主循环已经启动新进程，则不要覆盖新实例的路由。
+		if exitedCurrent {
+			if syncErr := r.syncRoutesForState(false); syncErr != nil {
+				r.log.Warn("blackhole client routes after openvpn exit failed", "error", syncErr)
+			}
+		}
 	}()
 
 	if err := waitForSocket(ctx, managementSocket, done, 15*time.Second); err != nil {
@@ -1509,6 +1558,12 @@ func (r *Runtime) stopProcess() {
 	if err := r.usage.Save(); err != nil {
 		r.log.Warn("persist usage ledger failed", "error", err)
 	}
+	if err := r.syncRoutesForState(false); err != nil {
+		r.mu.Lock()
+		r.policyDirty = true
+		r.mu.Unlock()
+		r.log.Warn("blackhole client routes after stop failed", "error", err)
+	}
 }
 
 // Stop 停止 OpenVPN、管理连接、限速队列与项目专用 nftables 表。
@@ -1517,6 +1572,11 @@ func (r *Runtime) Stop() {
 	r.clearTraffic()
 	if err := netpolicy.Delete(); err != nil {
 		r.log.Warn("delete network policy failed", "error", err)
+	}
+	if r.routes != nil {
+		if err := r.routes.Cleanup(); err != nil {
+			r.log.Warn("cleanup client routes failed", "error", err)
+		}
 	}
 	r.usage.Close()
 }
@@ -1531,6 +1591,30 @@ func (r *Runtime) applyPolicy(policy netpolicy.Policy) error {
 		return err
 	}
 	return netpolicy.Apply(script)
+}
+
+func (r *Runtime) syncClientRoutes(networks []string, viaTun bool, tun string) error {
+	if r.syncRoutesFn != nil {
+		return r.syncRoutesFn(networks, viaTun, tun)
+	}
+	if r.routes == nil {
+		return nil
+	}
+	return r.routes.Sync(networks, viaTun, tun)
+}
+
+// syncRoutesForState 按当前快照和 OpenVPN 状态同步共享内网路由，
+// 不重建 nftables 规则；用于进程启动/退出时避免路由缺省泄漏。
+func (r *Runtime) syncRoutesForState(viaTun bool) error {
+	r.mu.Lock()
+	snapshot := r.snapshot
+	tun := r.serverPolicy.TunDevice
+	r.mu.Unlock()
+	advertised, err := connectpolicy.AdvertisedNetworks(snapshot)
+	if err != nil {
+		return err
+	}
+	return r.syncClientRoutes(connectpolicy.FlattenAdvertised(advertised), viaTun, tun)
 }
 
 func (r *Runtime) startVPN(ctx context.Context, configHash string) error {

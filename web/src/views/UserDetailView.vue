@@ -148,7 +148,7 @@ watch(() => route.params.id, load, { immediate: true })
       </header>
 
       <NAlert v-if="detail.user.status === 'disabled'" type="warning" :bordered="false" class="stack-gap">
-        该用户已停用，其所有客户端配置当前都不能连接，已有连接会被断开。
+        该用户已停用，所有配置不可连接，已有连接会断开。
       </NAlert>
 
       <section class="surface">
@@ -163,7 +163,7 @@ watch(() => route.params.id, load, { immediate: true })
                 {{ detail.user.status === 'active' ? '停用用户' : '启用用户' }}
               </NButton>
             </template>
-            {{ detail.user.status === 'active' ? '停用后该用户的全部配置都不可连接，确认继续？' : '启用该用户及其配置？' }}
+            {{ detail.user.status === 'active' ? '停用后所有配置不可连接，确认继续？' : '启用该用户及其配置？' }}
           </NPopconfirm>
         </header>
         <dl class="fact-list">
@@ -216,7 +216,7 @@ watch(() => route.params.id, load, { immediate: true })
         </div>
         <div v-else class="empty-state">
           <strong>暂无客户端配置</strong>
-          <span>添加配置后可以下载 .ovpn 并查看证书状态。</span>
+          <span>添加后可下载 .ovpn 并查看证书状态。</span>
           <NButton type="primary" size="small" @click="addProfileShow = true">添加配置</NButton>
         </div>
       </section>

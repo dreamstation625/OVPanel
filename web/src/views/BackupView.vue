@@ -131,7 +131,7 @@ function saveSettings() {
     return
   }
 
-  openPrompt('确认备份设置', '修改备份计划或恢复密码会影响后续备份，确认继续？', '保存设置', async () => {
+  openPrompt('确认备份设置', '修改备份计划或恢复密码会影响后续备份，确认？', '保存设置', async () => {
     settingsBusy.value = true
     try {
       const result = await api.saveBackupSettings({
@@ -158,7 +158,7 @@ function manualBackup() {
   }
   openPrompt(
     '立即创建备份',
-    '备份包含用户、证书、用量记录和加密密钥。请妥善保存恢复密码。',
+    '备份包含用户、证书、用量记录和密钥；请保存好恢复密码。',
     '开始备份',
     async () => {
       await api.createBackup('手动备份')
@@ -208,7 +208,7 @@ function startPreview() {
   }
   openPrompt(
     '检查备份包',
-    '面板会解密并检查备份包，然后显示将要恢复的数据。此时不会修改任何数据。',
+    '解密并检查备份包，显示恢复内容，不修改数据。',
     '检查',
     async () => {
       previewBusy.value = true
@@ -229,7 +229,7 @@ function executeRestore() {
   const token = preview.value.token
   openPrompt(
     '恢复数据',
-    '恢复会断开所有 VPN 连接，并将数据恢复到备份时间点，完成后需要重新登录。确认继续？',
+    '恢复会断开所有 VPN 连接，将数据恢复到备份时间点，完成后需重新登录。确认继续？',
     '开始恢复',
     async () => {
       restoreBusy.value = true
@@ -240,7 +240,7 @@ function executeRestore() {
         if (result.warnings.length > 0) {
           notify.warning('恢复已完成，请查看结果中的提醒。')
         } else {
-          notify.success('恢复已完成，请使用备份时间点的管理员密码重新登录。')
+          notify.success('恢复完成，请使用备份时间点的管理员密码重新登录。')
         }
       } finally {
         restoreBusy.value = false
@@ -299,7 +299,7 @@ onMounted(load)
     </NAlert>
 
     <NAlert v-if="restoreResult" type="warning" :bordered="false" class="stack-gap">
-      恢复完成，已自动创建恢复前的备份 <code>{{ restoreResult.preRestoreBackupId }}</code>。
+      恢复完成，已创建恢复前备份 <code>{{ restoreResult.preRestoreBackupId }}</code>。
       请使用备份时间点的管理员密码重新登录。
       <RouterLink to="/login" class="text-link">前往登录</RouterLink>
     </NAlert>
@@ -307,7 +307,7 @@ onMounted(load)
     <section class="surface">
       <header class="surface-head">
         <h2>备份设置</h2>
-        <span class="surface-meta">自动备份保存在本机，不会同步到其他服务器</span>
+        <span class="surface-meta">自动备份保存在本机，不同步到其他服务器</span>
       </header>
       <NForm>
         <div class="settings-grid">
@@ -339,7 +339,7 @@ onMounted(load)
         <div class="schedule-line">
           <NSwitch v-model:value="settingsForm.enabled" aria-label="启用每日自动备份" />
           <span>启用每日自动备份</span>
-          <span class="muted">备份失败时会保留最近一次可用备份</span>
+          <span class="muted">备份失败时保留最近一次可用备份</span>
         </div>
         <div class="actions-line">
           <NButton type="primary" :loading="settingsBusy" @click="saveSettings">保存备份设置</NButton>
@@ -381,15 +381,15 @@ onMounted(load)
         </div>
       </div>
       <div v-else class="surface-empty">
-        <strong>还没有备份</strong>
-        <span>设置恢复密码后可以立即备份，或启用每日自动备份。</span>
+        <strong>暂无备份</strong>
+        <span>设置恢复密码后可立即备份，或启用每日自动备份。</span>
       </div>
     </section>
 
     <section class="surface">
       <header class="surface-head">
         <h2>从备份恢复</h2>
-        <span class="surface-meta">恢复时 VPN 会中断，完成后需要重新登录</span>
+        <span class="surface-meta">恢复时 VPN 会中断，完成后需重新登录</span>
       </header>
       <div class="restore-grid">
         <label class="file-picker">
@@ -407,7 +407,7 @@ onMounted(load)
         <NButton type="warning" :loading="previewBusy" @click="startPreview">检查备份包</NButton>
       </div>
       <p class="restore-hint">
-        恢复前会自动备份当前数据并停止 VPN。检查失败、密码错误或空间不足时不会修改数据。
+        恢复前会备份当前数据并停止 VPN；检查失败、密码错误或空间不足时不修改数据。
       </p>
     </section>
 

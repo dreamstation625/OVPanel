@@ -57,6 +57,10 @@ const (
 	AccessInherit = "inherit"
 	AccessAllow   = "allow"
 	AccessDeny    = "deny"
+
+	ClientLANInherit = "inherit"
+	ClientLANAllow   = "allow"
+	ClientLANDeny    = "deny"
 )
 
 // Profile 是一份独立的认证与授权单位。
@@ -72,6 +76,10 @@ type Profile struct {
 	RouteMode       string
 	AccessMode      string
 	AllowedInternal []string
+	// ClientNetworks 是这台客户端连接后共享给其他客户端的内网。
+	// ClientLANAccess 控制本配置能否访问其他配置共享的内网。
+	ClientNetworks  []string
+	ClientLANAccess string
 	// FixedVPNIP 非空时，client-connect 为该配置分配固定地址。
 	FixedVPNIP string
 
@@ -226,7 +234,15 @@ func insertProfile(ctx context.Context, ex dbExec, p Profile) error {
 	if accessMode == "" {
 		accessMode = AccessInherit
 	}
+	clientLANAccess := p.ClientLANAccess
+	if clientLANAccess == "" {
+		clientLANAccess = ClientLANInherit
+	}
 	allowed, err := encodeStringList(p.AllowedInternal)
+	if err != nil {
+		return err
+	}
+	clientNetworks, err := encodeStringList(p.ClientNetworks)
 	if err != nil {
 		return err
 	}
@@ -234,14 +250,16 @@ func insertProfile(ctx context.Context, ex dbExec, p Profile) error {
 		`INSERT INTO client_profile (
 			id, user_id, name, auth_type, username, password_hash, status, expires_at,
 			concurrent_limit, quota_bytes, upload_bps, download_bps,
-			route_mode, access_mode, allowed_internal_json, fixed_vpn_ip, created_at, updated_at
-		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			route_mode, access_mode, allowed_internal_json, fixed_vpn_ip,
+			client_networks_json, client_lan_access, created_at, updated_at
+		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		p.ID, p.UserID, p.Name, p.AuthType,
 		nullableString(p.Username), nullableString(p.PasswordHash),
 		p.Status, nullableTimeValue(p.ExpiresAt),
 		nullableInt(p.ConcurrentLimit), nullableInt(p.QuotaBytes),
 		nullableInt(p.UploadBps), nullableInt(p.DownloadBps),
 		routeMode, accessMode, allowed, p.FixedVPNIP,
+		clientNetworks, clientLANAccess,
 		formatTime(p.CreatedAt), formatTime(p.UpdatedAt))
 	if err != nil {
 		if isUsernameConflict(err) {
@@ -314,20 +332,26 @@ func (s *Store) UpdateProfileName(ctx context.Context, id, name string) error {
 	return nil
 }
 
-// UpdateProfileNetwork 更新配置级路由、目标网段权限与固定地址。
+// UpdateProfileNetwork 更新配置级路由、目标网段权限、共享内网与固定地址。
 // 设置固定地址时并发上限同步锁定为 1，避免同一配置的多条连接争用同一地址。
-func (s *Store) UpdateProfileNetwork(ctx context.Context, id, routeMode, accessMode string, allowedInternal []string, fixedVPNIP string) error {
+func (s *Store) UpdateProfileNetwork(ctx context.Context, id, routeMode, accessMode string, allowedInternal, clientNetworks []string, clientLANAccess, fixedVPNIP string) error {
 	allowed, err := encodeStringList(allowedInternal)
+	if err != nil {
+		return err
+	}
+	clientNetworksJSON, err := encodeStringList(clientNetworks)
 	if err != nil {
 		return err
 	}
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE client_profile
-		    SET route_mode = ?, access_mode = ?, allowed_internal_json = ?, fixed_vpn_ip = ?,
+		    SET route_mode = ?, access_mode = ?, allowed_internal_json = ?,
+		        client_networks_json = ?, client_lan_access = ?, fixed_vpn_ip = ?,
 		        concurrent_limit = CASE WHEN ? <> '' THEN 1 ELSE concurrent_limit END,
 		        updated_at = ?
 		  WHERE id = ?`,
-		routeMode, accessMode, allowed, fixedVPNIP, fixedVPNIP, formatTime(nowUTC()), id)
+		routeMode, accessMode, allowed, clientNetworksJSON, clientLANAccess, fixedVPNIP,
+		fixedVPNIP, formatTime(nowUTC()), id)
 	if err != nil {
 		if isFixedIPConflict(err) {
 			return ErrFixedIPTaken
@@ -571,7 +595,8 @@ func (s *Store) ProfileByUsername(ctx context.Context, username string) (Profile
 const profileDetailSelect = `p.id, p.user_id, p.name, p.auth_type, COALESCE(p.username, ''),
 	CASE WHEN p.password_hash IS NULL THEN 0 ELSE 1 END, p.status, p.expires_at,
 	p.concurrent_limit, p.quota_bytes, p.upload_bps, p.download_bps, p.quota_epoch,
-	p.route_mode, p.access_mode, p.allowed_internal_json, p.fixed_vpn_ip, p.created_at, p.updated_at,
+	p.route_mode, p.access_mode, p.allowed_internal_json, p.fixed_vpn_ip,
+	p.client_networks_json, p.client_lan_access, p.created_at, p.updated_at,
 	u.display_name, u.status,
 	c.id, c.serial_number, c.fingerprint_sha256, c.common_name, c.status,
 	c.issued_at, c.expires_at, c.revoked_at, c.revoke_reason`
@@ -585,6 +610,7 @@ func scanProfileDetail(row rowScanner) (ProfileDetail, error) {
 		concurrent, quota, upload, down  sql.NullInt64
 		quotaEpoch                       int64
 		routeMode, accessMode, allowed   string
+		clientNetworks, clientLANAccess  string
 		fixedVPNIP                       string
 		createdAt, updatedAt             string
 		certID, certSerial, certFP       sql.NullString
@@ -594,7 +620,8 @@ func scanProfileDetail(row rowScanner) (ProfileDetail, error) {
 	err := row.Scan(
 		&d.ID, &d.UserID, &d.Name, &d.AuthType, &username, &hasPassword, &d.Status, &expiresAt,
 		&concurrent, &quota, &upload, &down, &quotaEpoch,
-		&routeMode, &accessMode, &allowed, &fixedVPNIP, &createdAt, &updatedAt,
+		&routeMode, &accessMode, &allowed, &fixedVPNIP,
+		&clientNetworks, &clientLANAccess, &createdAt, &updatedAt,
 		&d.UserDisplayName, &d.UserStatus,
 		&certID, &certSerial, &certFP, &certCN, &certStatus, &certIssued, &certExpires, &certRevoked, &reason,
 	)
@@ -612,6 +639,8 @@ func scanProfileDetail(row rowScanner) (ProfileDetail, error) {
 	d.RouteMode = routeMode
 	d.AccessMode = accessMode
 	d.AllowedInternal = decodeStringList(allowed)
+	d.ClientNetworks = decodeStringList(clientNetworks)
+	d.ClientLANAccess = clientLANAccess
 	d.FixedVPNIP = fixedVPNIP
 	d.CreatedAt = parseTime(createdAt)
 	d.UpdatedAt = parseTime(updatedAt)
