@@ -56,6 +56,14 @@
 
 **宝塔 / 1Panel 部署：** 准备好下文的 Linux 宿主环境后，在面板中新建 Compose 编排，粘贴 [compose.host.yaml](compose.host.yaml)，将 [.env.host.example](.env.host.example) 保存为编排目录的 `.env`，或填入面板的编排环境变量配置。默认使用 `latest` 正式版镜像，数据目录为 `/opt/ovpanel/data`，无需克隆仓库。详见[面板部署说明](deploy/README.md#宝塔--1panel-部署)。
 
+命令行使用独立 host 编排时，也可以把环境变量单独保存为 `.env.host`：
+
+```bash
+docker compose --env-file .env.host -f compose.host.yaml up -d
+```
+
+后续 `ps`、`logs`、`down` 等操作保留同样的 `--env-file .env.host -f compose.host.yaml`。不要与 `compose.yaml` / `compose.hostnet.yaml` 混用；`.env.host` 含主密钥或口令时不要提交到仓库。
+
 以下步骤为克隆仓库后的命令行部署方式。
 
 ### 1. 准备环境
@@ -112,6 +120,8 @@ host 模式下，OpenVPN 的 nftables 规则作用于宿主网络；入口脚本
 docker compose -f compose.yaml -f compose.hostnet.yaml exec panel cat /data/bootstrap-token
 ```
 
+也可以直接在宿主数据目录的 `panel/bootstrap-token` 读取，不需要进入容器。CLI 部署默认路径是 `./data/panel/bootstrap-token`，独立 host 编排默认是 `/opt/ovpanel/data/panel/bootstrap-token`。
+
 在服务器本机打开 `http://127.0.0.1:8080`，输入口令并创建管理员。远程部署时可先在自己的电脑建立 SSH 隧道，再访问同一地址：
 
 ```bash
@@ -142,7 +152,7 @@ ssh -L 8080:127.0.0.1:8080 <SSH用户>@<服务器地址>
 4. 下载 `.ovpn` 文件，导入 OpenVPN 客户端连接；在「在线连接」查看结果。
 5. 在「备份」设置恢复密码和每日备份计划，将备份包下载到其他设备保存。
 
-`.env` 中的 `OVPANEL_VPN_PORT` / `OVPANEL_VPN_PROTO`、服务端配置和客户端连接地址须对应。修改端口或协议后重建 OpenVPN 容器，并检查宿主防火墙与云安全组。
+`.env` 中的 `OVPANEL_VPN_PORT` / `OVPANEL_VPN_PROTO` 与服务端配置的监听端口/协议一致。客户端连接地址可以使用 NAT 映射后的外部端口，端口不必与服务端监听端口相同，但协议仍需一致。修改监听端口或协议后重建 OpenVPN 容器，并检查宿主防火墙与云安全组。
 
 固定 VPN 地址需在 VPN 网段内并避开动态池，设置后该配置并发上限为 1。配置到期时间默认不设置；新签发的客户端证书默认有效期 15 年，已有客户端证书不会自动延长，需要更换并重新下载配置。服务端证书可在“系统 → 证书”中续签，续签保留私钥，客户端不需要重新下载。旧 CA 的剩余有效期会限制新证书期限。客户端内网共享的路由与回程要求见[客户端内网共享](deploy/README.md#客户端内网共享)；调整加密参数后的客户端兼容要求见[OpenVPN 加密与连接](deploy/README.md#openvpn-加密与连接)。
 

@@ -13,7 +13,7 @@ const form = reactive<ServerConfig>({
   vpnNetwork: '10.8.0.0/16',
   protocol: 'udp',
   port: 1194,
-  dns: ['119.29.29.29'],
+  dns: [],
   dataCiphers: ['AES-256-GCM', 'AES-128-GCM'],
   authDigest: 'SHA256',
   tlsMinVersion: '1.2',
@@ -27,7 +27,7 @@ const form = reactive<ServerConfig>({
   blockIpv6: true,
   extraDirectives: [],
 })
-const dnsText = ref('119.29.29.29')
+const dnsText = ref('')
 const internalText = ref('')
 const extrasText = ref('')
 const rendered = ref('')
@@ -321,7 +321,7 @@ onMounted(load)
             </NFormItem>
           </div>
           <NFormItem label="DNS">
-            <NInput v-model:value="dnsText" placeholder="例如 119.29.29.29，多个用逗号分隔" />
+            <NInput v-model:value="dnsText" placeholder="留空使用客户端本地 DNS；多个用逗号分隔" />
           </NFormItem>
           <div class="access-scope">
             <div class="access-scope-head">

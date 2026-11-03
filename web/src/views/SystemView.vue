@@ -211,16 +211,16 @@ onMounted(load)
           <span class="surface-meta">{{ exportSettings?.configured ? '已配置' : '未配置' }}</span>
         </header>
         <p class="section-description">
-          下载的 .ovpn 使用这里的地址和端口；修改地址不会更换密钥。
+          下载的 .ovpn 使用这里的地址和端口。使用 NAT 映射时，填写客户端实际连接的外部端口；协议需与服务端一致。修改这里不会更换密钥。
         </p>
         <NAlert v-if="exportSettings && !exportSettings.configured" type="info" :bordered="false" class="stack-gap">
           下载客户端配置前请先填写 VPN 地址或域名与端口。
         </NAlert>
         <NForm>
-          <NFormItem label="VPN 地址或域名" required>
+          <NFormItem label="客户端连接地址" required>
             <NInput v-model:value="exportHost" placeholder="vpn.example.com 或 IP 地址" maxlength="255" />
           </NFormItem>
-          <NFormItem label="端口" required>
+          <NFormItem label="客户端连接端口" required>
             <NInputNumber
               v-model:value="exportPort"
               :min="1"
