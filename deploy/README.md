@@ -209,8 +209,10 @@ OVPANEL_VPN_PORT=21194
 OVPANEL_VPN_PROTO=tcp
 ```
 
-修改后在面板保存并应用相同的协议 / 端口，重建 openvpn 容器，并同步「系统 → VPN
-连接地址」中的端口与宿主防火墙 / 云安全组规则，重新下载客户端配置：
+修改后在面板保存并应用相同的协议 / 端口，重建 openvpn 容器，并按内部监听端口更新
+`.env`、宿主防火墙和云安全组。若前面还有 NAT 映射，到「系统 → VPN 连接地址」填写
+客户端实际访问的外部地址和端口；外部端口可以与服务端监听端口不同，协议必须一致。
+修改后重新下载客户端配置：
 
 ```bash
 docker compose -f compose.yaml -f compose.hostnet.yaml up -d --no-build --no-deps --force-recreate openvpn

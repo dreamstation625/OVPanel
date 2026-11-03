@@ -176,12 +176,12 @@ func TestServerNetworkChangeRequiresFixedIPReset(t *testing.T) {
 	}
 	saveDraft(configFor("10.20.0.0/16"))
 	if rec := doJSON(t, h, http.MethodPut, "/api/settings/export", "127.0.0.1:5000", map[string]any{
-		"host": "vpn.example.com", "port": 1195, "proto": "udp",
+		"host": "vpn.example.com", "port": 1194, "proto": "tcp",
 	}, cookies...); rec.Code != http.StatusOK {
 		t.Fatalf("修改导出设置失败：%d %s", rec.Code, rec.Body.String())
 	}
 	if rec := apply(map[string]any{"resetFixedIps": true}); rec.Code == http.StatusOK {
-		t.Fatalf("导出设置不一致时不应应用成功：%s", rec.Body.String())
+		t.Fatalf("导出协议不一致时不应应用成功：%s", rec.Body.String())
 	}
 	detail = doJSON(t, h, http.MethodGet, "/api/profiles/"+created.Profile.ID, "127.0.0.1:5000", nil, cookies...)
 	if err := json.Unmarshal(detail.Body.Bytes(), &profile); err != nil {

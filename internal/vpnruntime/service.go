@@ -190,9 +190,9 @@ func (s *Service) ApplyConfig(ctx context.Context, config serverconfig.Config, r
 	if !configured {
 		return Result{}, accounts.ErrExportNotConfigured
 	}
-	if exportSettings.Port != config.Port || exportSettings.Proto != config.Protocol {
-		return Result{}, fmt.Errorf("导出连接设置与服务端端口/协议不一致（导出 %d/%s，服务端 %d/%s）",
-			exportSettings.Port, exportSettings.Proto, config.Port, config.Protocol)
+	if exportSettings.Proto != config.Protocol {
+		return Result{}, fmt.Errorf("导出连接协议与服务端协议不一致（导出 %s，服务端 %s）",
+			exportSettings.Proto, config.Protocol)
 	}
 
 	serverCert, serverKey, err := s.pki.EnsureServerCertificate(ctx)

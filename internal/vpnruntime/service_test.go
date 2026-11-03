@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -33,8 +34,9 @@ func TestApplyWritesBundle(t *testing.T) {
 	}
 	pkiService := pki.New(st, key)
 	accountsService := accounts.New(st, pkiService, key)
+	// 导出端口是客户端外部连接端口，可以和服务端监听端口不同（NAT 映射）。
 	if _, err := accountsService.SaveExportSettings(ctx, accounts.ExportSettings{
-		Host: "vpn.example.com", Port: 1194, Proto: "udp",
+		Host: "vpn.example.com", Port: 443, Proto: "udp",
 	}); err != nil {
 		t.Fatalf("保存导出设置失败：%v", err)
 	}
@@ -92,6 +94,32 @@ func TestApplyWritesBundle(t *testing.T) {
 		if info.Mode().Perm() != 0o600 {
 			t.Fatalf("控制包权限 = %o", info.Mode().Perm())
 		}
+	}
+}
+
+func TestApplyRejectsExportProtocolMismatch(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	st, err := store.Open(ctx, filepath.Join(dir, "panel.db"))
+	if err != nil {
+		t.Fatalf("打开数据库失败：%v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+	if _, err := st.Migrate(ctx); err != nil {
+		t.Fatalf("迁移失败：%v", err)
+	}
+	key, _ := secretbox.LoadOrCreate(filepath.Join(dir, "master.key"), "")
+	pkiService := pki.New(st, key)
+	accountsService := accounts.New(st, pkiService, key)
+	if _, err := accountsService.SaveExportSettings(ctx, accounts.ExportSettings{
+		Host: "vpn.example.com", Port: 1194, Proto: "tcp",
+	}); err != nil {
+		t.Fatalf("保存导出设置失败：%v", err)
+	}
+	service := New(st, pkiService, accountsService, filepath.Join(dir, "control"))
+
+	if _, err := service.Apply(ctx); err == nil || !strings.Contains(err.Error(), "协议不一致") {
+		t.Fatalf("协议不一致时应拒绝下发：%v", err)
 	}
 }
 
