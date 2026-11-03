@@ -57,7 +57,7 @@ sudo sysctl -p /etc/sysctl.d/90-ovpanel.conf
 2. 将 [`.env.host.example`](../.env.host.example) 保存为编排目录下的 `.env`，或将参数
    填入面板的编排环境变量配置。通过这些变量调整镜像标签、数据目录、管理端口和 HTTPS，
    两个镜像使用同一个发布标签。已有 `.env` 时合并所需参数，不覆盖原有配置。
-   当前示例默认使用 `latest` 正式版，生产环境建议固定为 `0.0.6` 或更新的正式版本。
+   当前示例默认使用 `latest` 正式版，生产环境建议固定为 `0.0.7` 或更新的正式版本。
 3. 保存并启动编排。保留 `openvpn` 的 `network_mode: host`，不要额外添加端口映射或容器 sysctl。
 4. 在面板的 `ovpanel-panel` 容器终端运行 `cat /data/bootstrap-token` 获取初始化口令。
    也可在宿主执行：
@@ -131,6 +131,9 @@ docker compose -f compose.yaml -f compose.hostnet.yaml ps
 - OpenVPN 的 nft 规则位于宿主网络命名空间，需要宿主已开启
   `net.ipv4.ip_forward=1`；需要隔离 OpenVPN 网络时使用下文的 bridge 模式。
 - `.env` 中的 `OVPANEL_VPN_PORT`/`OVPANEL_VPN_PROTO` 必须与面板服务端配置一致。
+- `ovpanel` Docker bridge 的子网由 `OVPANEL_DOCKER_SUBNET` 控制，默认
+  `10.250.0.0/24`；不能与 VPN 网段、目标网段、客户端共享内网或宿主局域网重叠。
+  修改后需停止面板、删除旧 `ovpanel` 网络并重新启动，Compose 才会使用新子网。
 - 后续操作保留两个 `-f` 参数；host 模式不使用 `deploy/compose.sh` 或
   `deploy/ensure-forwarding.sh`，这两个脚本用于 bridge 部署。
 
@@ -332,8 +335,8 @@ VPN 地址池转发和 UFW 数据端口规则。两种模式不要同时启用�
 ```bash
 # 1. 先创建并验证加密备份
 # 2. 在 .env 中设置对应版本的镜像
-#    OVPANEL_PANEL_IMAGE=dreamstation625/ovpanel:0.0.6
-#    OVPANEL_OPENVPN_IMAGE=dreamstation625/ovpanel-openvpn:0.0.6
+#    OVPANEL_PANEL_IMAGE=dreamstation625/ovpanel:0.0.7
+#    OVPANEL_OPENVPN_IMAGE=dreamstation625/ovpanel-openvpn:0.0.7
 docker compose -f compose.yaml -f compose.hostnet.yaml pull
 docker compose -f compose.yaml -f compose.hostnet.yaml up -d --no-build --no-deps --force-recreate panel
 docker compose -f compose.yaml -f compose.hostnet.yaml up -d --no-build --no-deps --force-recreate openvpn
