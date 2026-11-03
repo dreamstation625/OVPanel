@@ -138,3 +138,6 @@ services:
 networks:
   ovpanel:
     name: ovpanel
+    ipam:
+      config:
+        - subnet: ${OVPANEL_DOCKER_SUBNET:-10.250.0.0/24}

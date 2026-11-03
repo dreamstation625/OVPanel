@@ -102,6 +102,8 @@ OVPANEL_OPENVPN_IMAGE=dreamstation625/ovpanel-openvpn:latest
 
 建议生产环境按 [Release](https://github.com/dreamstation625/OVPanel/releases) 固定具体版本。`dev` 为开发预发布标签；复制开发分支的 `.env.example` 后，请确认是否需要切换。
 
+`OVPANEL_DOCKER_SUBNET` 控制面板容器所在的 `ovpanel` Docker bridge 子网，默认 `10.250.0.0/24`。它不能与 VPN 网段、目标网段、客户端共享内网或宿主局域网重叠；修改后需停止面板、删除旧 `ovpanel` 网络后重新启动，否则 Compose 会继续使用旧子网。
+
 ```bash
 docker compose -f compose.yaml -f compose.hostnet.yaml pull
 docker compose -f compose.yaml -f compose.hostnet.yaml up -d --no-build
@@ -171,6 +173,7 @@ ssh -L 8080:127.0.0.1:8080 <SSH用户>@<服务器地址>
 | `OVPANEL_ADMIN_PORT` | `8080` | 面板宿主端口 |
 | `OVPANEL_VPN_PORT` / `OVPANEL_VPN_PROTO` | `1194` / `udp` | VPN 数据端口和协议 |
 | `OVPANEL_VPN_BIND` | `0.0.0.0` | 仅用于 bridge 模式的端口映射绑定 |
+| `OVPANEL_DOCKER_SUBNET` | `10.250.0.0/24` | 面板所在 Docker bridge 子网，不能与 VPN/目标网段重叠 |
 | `OVPANEL_DATA_ROOT` | `./data` | 宿主持久化目录 |
 | `OVPANEL_CERT_DIR` | `./certs` | 宿主 HTTPS 证书目录 |
 | `OVPANEL_TLS_CERT` / `OVPANEL_TLS_KEY` | 空 | 容器内证书 / 私钥路径，同时设置以启用 HTTPS |

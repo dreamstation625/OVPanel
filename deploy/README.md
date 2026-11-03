@@ -132,6 +132,9 @@ docker compose -f compose.yaml -f compose.hostnet.yaml ps
 - OpenVPN 的 nft 规则位于宿主网络命名空间，需要宿主已开启
   `net.ipv4.ip_forward=1`；需要隔离 OpenVPN 网络时使用下文的 bridge 模式。
 - `.env` 中的 `OVPANEL_VPN_PORT`/`OVPANEL_VPN_PROTO` 必须与面板服务端配置一致。
+- `ovpanel` Docker bridge 的子网由 `OVPANEL_DOCKER_SUBNET` 控制，默认
+  `10.250.0.0/24`；不能与 VPN 网段、目标网段、客户端共享内网或宿主局域网重叠。
+  修改后需停止面板、删除旧 `ovpanel` 网络并重新启动，Compose 才会使用新子网。
 - 后续操作保留两个 `-f` 参数；host 模式不使用 `deploy/compose.sh` 或
   `deploy/ensure-forwarding.sh`，这两个脚本用于 bridge 部署。
 
