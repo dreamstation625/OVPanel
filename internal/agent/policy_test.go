@@ -378,6 +378,25 @@ func TestVPNPoolChangeEndsClientsBeforeApply(t *testing.T) {
 	}
 }
 
+func TestControlPlaneInterface(t *testing.T) {
+	cases := map[string]bool{
+		"docker0":  true,
+		"br-2f1c":  true,
+		"veth12ab": true,
+		"virbr0":   true,
+		"cni0":     true,
+		"eth0":     false,
+		"enp3s0":   false,
+		"bond0":    false,
+		"wlan0":    false,
+	}
+	for name, want := range cases {
+		if got := controlPlaneInterface(name); got != want {
+			t.Fatalf("controlPlaneInterface(%q)=%v, want %v", name, got, want)
+		}
+	}
+}
+
 func TestHostAddressFromManagement(t *testing.T) {
 	cases := map[string]string{
 		"10.8.0.2":                    "10.8.0.2",

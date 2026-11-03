@@ -1704,7 +1704,9 @@ func (r *Runtime) applyPolicy(policy netpolicy.Policy) error {
 	if r.applyPolicyFn != nil {
 		return r.applyPolicyFn(policy)
 	}
-	policy.ProtectTargets = append(policy.ProtectTargets, localProtectCIDRs(policy.VPNPool)...)
+	// 只永久保护控制面网络；物理网卡所在局域网是管理员可授权的目标，
+	// 放进保护列表会排在被逐会话 accept 之前，导致目标永远不可达。
+	policy.ProtectTargets = append(policy.ProtectTargets, controlPlaneCIDRs(policy.VPNPool)...)
 	script, err := netpolicy.Render(policy)
 	if err != nil {
 		return err
@@ -1743,21 +1745,48 @@ func (r *Runtime) startVPN(ctx context.Context, configHash string) error {
 	return r.restartOpenVPN(ctx, configHash)
 }
 
-// localProtectCIDRs 保护容器自身的 Docker 网络与回环地址，
-// 不因管理员授权了某个目标网段而暴露控制面。
+// controlPlaneCIDRs 返回需要永久保护的容器/控制面网络。
+// 物理网卡所在的局域网不在此列表中，管理员授权后应允许 VPN 客户端访问；
+// 宿主机自身的服务仍由 input 链丢弃，不受这里影响。
+func controlPlaneCIDRs(vpnPool string) []string {
+	return interfaceCIDRs(vpnPool, controlPlaneInterface)
+}
+
+// controlPlaneInterface 判断接口是否属于 Docker 等控制面网络。
+func controlPlaneInterface(name string) bool {
+	switch {
+	case name == "docker0":
+		return true
+	case strings.HasPrefix(name, "br-"),
+		strings.HasPrefix(name, "veth"),
+		strings.HasPrefix(name, "virbr"),
+		strings.HasPrefix(name, "cni"):
+		return true
+	}
+	return false
+}
+
+// localProtectCIDRs 汇总宿主本地网段，用于校验 VPN 网段和共享内网是否重叠。
+// 它不直接用于 nft 永久保护，否则会误伤管理员授权的宿主局域网目标。
 func localProtectCIDRs(vpnPool string) []string {
+	return interfaceCIDRs(vpnPool, nil)
+}
+
+func interfaceCIDRs(vpnPool string, keep func(string) bool) []string {
 	interfaces, err := net.Interfaces()
 	if err != nil {
 		return nil
 	}
-	poolIP, poolNet, _ := net.ParseCIDR(vpnPool)
-	_ = poolIP
+	_, poolNet, _ := net.ParseCIDR(vpnPool)
 	out := make([]string, 0)
 	for _, iface := range interfaces {
 		if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
 			continue
 		}
 		if strings.HasPrefix(iface.Name, "tun") || strings.HasPrefix(iface.Name, "ifb") {
+			continue
+		}
+		if keep != nil && !keep(iface.Name) {
 			continue
 		}
 		addrs, err := iface.Addrs()
