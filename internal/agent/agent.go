@@ -48,6 +48,7 @@ const (
 	managementDir     = "/run/ovpanel"
 	managementSocket  = serverconfig.ManagementSocket
 	openvpnLogFile    = "openvpn.log"
+	poolStateFile     = "ipp.txt"
 )
 
 type sessionInfo struct {
@@ -435,14 +436,18 @@ func (r *Runtime) applyBundle(ctx context.Context, bundle agentproto.Bundle, bun
 	base := bundle.Policy
 	base.Sessions = nil
 	r.mu.Lock()
+	previousPool := r.serverPolicy.VPNPool
 	r.snapshot = bundle.Snapshot
 	r.serverPolicy = base
 	serverCertChanged := bundle.ServerCertSerial != "" && r.serverCertSerial != bundle.ServerCertSerial
+	poolChanged := previousPool != "" && previousPool != base.VPNPool
 	needsRestart := serverCertChanged || r.configHash != bundle.ConfigHash || !r.openvpnRunning || !r.managementConnected
 	r.mu.Unlock()
 	// 面板手动重置额度会递增代次；账本把当时累计设为新基线。
 	r.usage.SyncEpochs(bundle.Snapshot)
-	if err := r.refreshPolicy(); err != nil {
+	// 网段变化时旧会话地址已不合法；先跳过它们完成策略校验，
+	// 校验成功后再结束旧连接，失败则保留现有连接并回退。
+	if err := r.refreshPolicyWith(poolChanged); err != nil {
 		return err
 	}
 	if err := r.refreshTraffic(); err != nil {
@@ -454,6 +459,13 @@ func (r *Runtime) applyBundle(ctx context.Context, bundle agentproto.Bundle, bun
 	r.mu.Unlock()
 
 	if needsRestart {
+		if poolChanged {
+			// 旧地址池的会话和持久化分配不能带入新网段。
+			r.stopProcess()
+			if err := os.Remove(filepath.Join(r.stateDir, poolStateFile)); err != nil && !errors.Is(err, os.ErrNotExist) {
+				r.log.Warn("clear OpenVPN IP persistence after VPN pool change failed", "error", err)
+			}
+		}
 		if err := r.startVPN(ctx, bundle.ConfigHash); err != nil {
 			return err
 		}
@@ -687,6 +699,12 @@ func (r *Runtime) writeConnectPolicy(bundle agentproto.Bundle) error {
 // refreshPolicy 依据当前在线会话重建逐连接 nftables 规则与共享内网路由。
 // 未取得地址或未登记的会话由地址池默认拒绝兜底。
 func (r *Runtime) refreshPolicy() error {
+	return r.refreshPolicyWith(false)
+}
+
+// refreshPolicyWith 在地址池变更时跳过旧池会话，先完成新策略校验；
+// 调用方随后会结束旧连接并重启，不会让旧会话继续获得新规则。
+func (r *Runtime) refreshPolicyWith(ignoreOutOfPool bool) error {
 	r.mu.Lock()
 	base := r.serverPolicy
 	snapshot := r.snapshot
@@ -698,6 +716,17 @@ func (r *Runtime) refreshPolicy() error {
 		}
 	}
 	r.mu.Unlock()
+	if ignoreOutOfPool {
+		if _, pool, err := net.ParseCIDR(base.VPNPool); err == nil {
+			filtered := make([]sessionInfo, 0, len(active))
+			for _, info := range active {
+				if ip := net.ParseIP(info.vpnIP); ip != nil && pool.Contains(ip) {
+					filtered = append(filtered, info)
+				}
+			}
+			active = filtered
+		}
+	}
 
 	advertised, err := connectpolicy.AdvertisedNetworks(snapshot)
 	if err != nil {
@@ -1675,7 +1704,9 @@ func (r *Runtime) applyPolicy(policy netpolicy.Policy) error {
 	if r.applyPolicyFn != nil {
 		return r.applyPolicyFn(policy)
 	}
-	policy.ProtectTargets = append(policy.ProtectTargets, localProtectCIDRs(policy.VPNPool)...)
+	// 只永久保护控制面网络；物理网卡所在局域网是管理员可授权的目标，
+	// 放进保护列表会排在被逐会话 accept 之前，导致目标永远不可达。
+	policy.ProtectTargets = append(policy.ProtectTargets, controlPlaneCIDRs(policy.VPNPool)...)
 	script, err := netpolicy.Render(policy)
 	if err != nil {
 		return err
@@ -1714,21 +1745,48 @@ func (r *Runtime) startVPN(ctx context.Context, configHash string) error {
 	return r.restartOpenVPN(ctx, configHash)
 }
 
-// localProtectCIDRs 保护容器自身的 Docker 网络与回环地址，
-// 不因管理员授权了某个目标网段而暴露控制面。
+// controlPlaneCIDRs 返回需要永久保护的容器/控制面网络。
+// 物理网卡所在的局域网不在此列表中，管理员授权后应允许 VPN 客户端访问；
+// 宿主机自身的服务仍由 input 链丢弃，不受这里影响。
+func controlPlaneCIDRs(vpnPool string) []string {
+	return interfaceCIDRs(vpnPool, controlPlaneInterface)
+}
+
+// controlPlaneInterface 判断接口是否属于 Docker 等控制面网络。
+func controlPlaneInterface(name string) bool {
+	switch {
+	case name == "docker0":
+		return true
+	case strings.HasPrefix(name, "br-"),
+		strings.HasPrefix(name, "veth"),
+		strings.HasPrefix(name, "virbr"),
+		strings.HasPrefix(name, "cni"):
+		return true
+	}
+	return false
+}
+
+// localProtectCIDRs 汇总宿主本地网段，用于校验 VPN 网段和共享内网是否重叠。
+// 它不直接用于 nft 永久保护，否则会误伤管理员授权的宿主局域网目标。
 func localProtectCIDRs(vpnPool string) []string {
+	return interfaceCIDRs(vpnPool, nil)
+}
+
+func interfaceCIDRs(vpnPool string, keep func(string) bool) []string {
 	interfaces, err := net.Interfaces()
 	if err != nil {
 		return nil
 	}
-	poolIP, poolNet, _ := net.ParseCIDR(vpnPool)
-	_ = poolIP
+	_, poolNet, _ := net.ParseCIDR(vpnPool)
 	out := make([]string, 0)
 	for _, iface := range interfaces {
 		if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
 			continue
 		}
 		if strings.HasPrefix(iface.Name, "tun") || strings.HasPrefix(iface.Name, "ifb") {
+			continue
+		}
+		if keep != nil && !keep(iface.Name) {
 			continue
 		}
 		addrs, err := iface.Addrs()

@@ -57,7 +57,7 @@ sudo sysctl -p /etc/sysctl.d/90-ovpanel.conf
 2. 将 [`.env.host.example`](../.env.host.example) 保存为编排目录下的 `.env`，或将参数
    填入面板的编排环境变量配置。通过这些变量调整镜像标签、数据目录、管理端口和 HTTPS，
    两个镜像使用同一个发布标签。已有 `.env` 时合并所需参数，不覆盖原有配置。
-   当前示例默认使用 `latest` 正式版，生产环境建议固定为 `0.0.4` 或更新的正式版本。
+   当前示例默认使用 `latest` 正式版，生产环境建议固定为 `0.0.5` 或更新的正式版本。
 3. 保存并启动编排。保留 `openvpn` 的 `network_mode: host`，不要额外添加端口映射或容器 sysctl。
 4. 在面板的 `ovpanel-panel` 容器终端运行 `cat /data/bootstrap-token` 获取初始化口令。
    也可在宿主执行：
@@ -267,8 +267,9 @@ data/
 同样不能回退为旧授权。
 
 VPN 隧道不开放宿主本机服务，包括服务端 VPN 地址上的 DNS/SSH/管理端口；DNS
-请使用可转发访问的服务器。host 模式的 ACL、IPv6 阻断和 NAT 仅作用于 VPN 接口，
-不接管其他容器的流量。
+请使用可转发访问的服务器。host 模式下，宿主机所在的物理局域网可以作为目标网段
+授权给客户端，只有宿主机自身的地址仍不可访问。host 模式的 ACL、IPv6 阻断和 NAT
+仅作用于 VPN 接口，不接管其他容器的流量。
 
 ## 网络能力检查
 
@@ -329,8 +330,8 @@ VPN 地址池转发和 UFW 数据端口规则。两种模式不要同时启用�
 ```bash
 # 1. 先创建并验证加密备份
 # 2. 在 .env 中设置对应版本的镜像
-#    OVPANEL_PANEL_IMAGE=dreamstation625/ovpanel:0.0.4
-#    OVPANEL_OPENVPN_IMAGE=dreamstation625/ovpanel-openvpn:0.0.4
+#    OVPANEL_PANEL_IMAGE=dreamstation625/ovpanel:0.0.5
+#    OVPANEL_OPENVPN_IMAGE=dreamstation625/ovpanel-openvpn:0.0.5
 docker compose -f compose.yaml -f compose.hostnet.yaml pull
 docker compose -f compose.yaml -f compose.hostnet.yaml up -d --no-build --no-deps --force-recreate panel
 docker compose -f compose.yaml -f compose.hostnet.yaml up -d --no-build --no-deps --force-recreate openvpn

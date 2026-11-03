@@ -230,11 +230,20 @@ export interface AgentRuntimeStatus {
   appliedAt?: string
 }
 
+export interface FixedIPProfile {
+  id: string
+  userId: string
+  userDisplayName: string
+  name: string
+  fixedVpnIp: string
+}
+
 export interface ServerConfigResponse {
   defaults: ServerConfig
   supportedDirectives: string[]
   active: ServerConfigRevision | null
   draft: ServerConfigRevision | null
+  fixedIpProfiles?: FixedIPProfile[]
   agentStatus?: AgentRuntimeStatus
   agentStatusPresent: boolean
 }
@@ -660,8 +669,10 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(config),
     }),
-  applyServerConfig: () =>
-    post<{ result: unknown; agentStatus?: AgentRuntimeStatus }>('/api/server/config/apply', {}),
+  applyServerConfig: (resetFixedIps = false) =>
+    post<{ result: unknown; agentStatus?: AgentRuntimeStatus }>('/api/server/config/apply', {
+      resetFixedIps,
+    }),
   serverCommand: (action: 'start' | 'stop' | 'restart') =>
     post<{ ok: boolean; action: string }>('/api/server/command', { action }),
 

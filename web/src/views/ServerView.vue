@@ -36,6 +36,7 @@ const busy = ref(false)
 const error = ref('')
 type PromptMode = 'apply' | 'start' | 'stop' | 'restart'
 const prompt = ref({ show: false, loading: false, mode: 'apply' as PromptMode })
+const fixedIPPrompt = ref({ show: false, loading: false })
 
 const configState = computed(() => {
   if (!meta.value) {
@@ -45,6 +46,18 @@ const configState = computed(() => {
     return '已保存，待应用'
   }
   return meta.value.active ? '配置已应用' : '尚未保存'
+})
+
+const vpnNetworkChanged = computed(() => {
+  const active = meta.value?.active?.config.vpnNetwork
+  return Boolean(active && form.vpnNetwork.trim() !== active)
+})
+
+const fixedIPProfiles = computed(() => meta.value?.fixedIpProfiles ?? [])
+const fixedIPPromptText = computed(() => {
+  const names = fixedIPProfiles.value.map((item) => `${item.userDisplayName} · ${item.name}`)
+  const summary = names.length <= 3 ? names.join('、') : `${names.slice(0, 3).join('、')} 等 ${names.length} 个`
+  return `修改 VPN 网段会断开所有客户端并重新分配地址，失败自动回退。以下客户端设置了固定 VPN 地址：${summary}。是否自动改为自动分配并继续？取消后请先在对应客户端配置里清空固定 VPN 地址，再重新应用。`
 })
 
 const promptMeta = computed(() => {
@@ -68,7 +81,9 @@ const promptMeta = computed(() => {
     default:
       return {
         title: '应用配置',
-        description: '应用可能重启 OpenVPN，连接会短暂中断；失败自动回退。',
+        description: vpnNetworkChanged.value
+          ? 'VPN 网段已修改：应用会断开所有客户端并重新分配地址；失败自动回退。'
+          : '应用可能重启 OpenVPN，连接会短暂中断；失败自动回退。',
         actionLabel: '应用',
         danger: false,
       }
@@ -93,6 +108,7 @@ const protocolOptions = [
   { label: 'UDP', value: 'udp' },
   { label: 'TCP', value: 'tcp' },
 ]
+const vpnNetworkHint = '支持私有 /16 至 /24 网段。修改后会断开全部客户端并重新分配地址；不能与宿主现有网段重叠。'
 const routeOptions = [
   { label: '仅指定网段经过 VPN', value: 'split' },
   { label: '全部 IPv4 流量经过 VPN', value: 'global' },
@@ -195,6 +211,10 @@ async function saveDraft() {
 }
 
 function askApply() {
+  if (vpnNetworkChanged.value && fixedIPProfiles.value.length > 0) {
+    fixedIPPrompt.value = { show: true, loading: false }
+    return
+  }
   prompt.value = { show: true, loading: false, mode: 'apply' }
 }
 
@@ -220,6 +240,25 @@ async function confirmPrompt() {
     notify.error(errorMessage(err))
   } finally {
     prompt.value.loading = false
+  }
+}
+
+async function confirmFixedIPReset() {
+  if (fixedIPPrompt.value.loading) {
+    return
+  }
+  fixedIPPrompt.value.loading = true
+  try {
+    await api.applyServerConfig(true)
+    notify.success('固定 VPN 地址已改为自动分配，配置已应用，等待 VPN 服务确认。')
+    fixedIPPrompt.value.show = false
+    window.setTimeout(load, 1500)
+  } catch (err) {
+    fixedIPPrompt.value.show = false
+    notify.error(errorMessage(err))
+    await load()
+  } finally {
+    fixedIPPrompt.value.loading = false
   }
 }
 
@@ -270,7 +309,7 @@ onMounted(load)
           <h2>服务端设置</h2>
         </header>
         <NForm>
-          <NFormItem label="VPN 网段" required>
+          <NFormItem label="VPN 网段" required :feedback="vpnNetworkHint">
             <NInput v-model:value="form.vpnNetwork" placeholder="10.8.0.0/16" />
           </NFormItem>
           <div class="two-col">
@@ -450,6 +489,15 @@ onMounted(load)
       :loading="prompt.loading"
       :danger="promptMeta.danger"
       @confirm="confirmPrompt"
+    />
+    <ConfirmModal
+      v-model:show="fixedIPPrompt.show"
+      title="固定 VPN 地址需要改为自动分配"
+      :description="fixedIPPromptText"
+      action-label="改为自动并应用"
+      :loading="fixedIPPrompt.loading"
+      danger
+      @confirm="confirmFixedIPReset"
     />
   </div>
 </template>
