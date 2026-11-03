@@ -56,6 +56,14 @@
 
 **宝塔 / 1Panel 部署：** 准备好下文的 Linux 宿主环境后，在面板中新建 Compose 编排，粘贴 [compose.host.yaml](compose.host.yaml)，将 [.env.host.example](.env.host.example) 保存为编排目录的 `.env`，或填入面板的编排环境变量配置。默认使用配套的 `dev` 镜像，数据目录为 `/opt/ovpanel/data`，无需克隆仓库。详见[面板部署说明](deploy/README.md#宝塔--1panel-部署)。
 
+命令行使用独立 host 编排时，也可以把环境变量单独保存为 `.env.host`：
+
+```bash
+docker compose --env-file .env.host -f compose.host.yaml up -d
+```
+
+后续 `ps`、`logs`、`down` 等操作保留同样的 `--env-file .env.host -f compose.host.yaml`。不要与 `compose.yaml` / `compose.hostnet.yaml` 混用；`.env.host` 含主密钥或口令时不要提交到仓库。
+
 以下步骤为克隆仓库后的命令行部署方式。
 
 ### 1. 准备环境
@@ -111,6 +119,8 @@ host 模式下，OpenVPN 的 nftables 规则作用于宿主网络；入口脚本
 ```bash
 docker compose -f compose.yaml -f compose.hostnet.yaml exec panel cat /data/bootstrap-token
 ```
+
+也可以直接在宿主数据目录的 `panel/bootstrap-token` 读取，不需要进入容器。CLI 部署默认路径是 `./data/panel/bootstrap-token`，独立 host 编排默认是 `/opt/ovpanel/data/panel/bootstrap-token`。
 
 在服务器本机打开 `http://127.0.0.1:8080`，输入口令并创建管理员。远程部署时可先在自己的电脑建立 SSH 隧道，再访问同一地址：
 
