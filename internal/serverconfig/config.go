@@ -42,13 +42,13 @@ type Config struct {
 	ExtraDirectives     []string `json:"extraDirectives"`
 }
 
-// Defaults 返回默认配置：UDP/1194、10.8.0.0/16、DNS 119.29.29.29、指定网段分流、互访与客户端内网访问关闭、阻断 IPv6。
+// Defaults 返回默认配置：UDP/1194、10.8.0.0/16、DNS 为空、指定网段分流、互访与客户端内网访问关闭、阻断 IPv6。
 func Defaults() Config {
 	return Config{
 		VPNNetwork:          "10.8.0.0/16",
 		Protocol:            "udp",
 		Port:                1194,
-		DNS:                 []string{"119.29.29.29"},
+		DNS:                 []string{},
 		DataCiphers:         []string{"AES-256-GCM", "AES-128-GCM"},
 		AuthDigest:          "SHA256",
 		TLSMinVersion:       "1.2",

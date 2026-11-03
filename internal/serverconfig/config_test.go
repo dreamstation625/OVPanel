@@ -23,7 +23,6 @@ func TestDefaultsRender(t *testing.T) {
 		"verify-client-cert optional", "auth-user-pass-optional", "duplicate-cn",
 		"crl-verify /etc/openvpn/ovpanel/crl.pem",
 		"script-security 2", "client-connect /usr/local/bin/vpn-connect",
-		"push \"dhcp-option DNS 119.29.29.29\"",
 		"push \"block-ipv6\"", "keepalive 10 60",
 	} {
 		if !strings.Contains(text, want) {
@@ -35,6 +34,9 @@ func TestDefaultsRender(t *testing.T) {
 	}
 	if strings.Contains(text, "redirect-gateway") {
 		t.Fatal("路由必须逐连接下发，服务端不能全局推送")
+	}
+	if strings.Contains(text, "dhcp-option DNS") {
+		t.Fatal("默认不应推送 DNS")
 	}
 }
 
