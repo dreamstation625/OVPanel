@@ -72,6 +72,8 @@ func Render(input Config) (string, string, error) {
 	fmt.Fprintf(&b, "auth %s\n", cfg.AuthDigest)
 	b.WriteString("verify-client-cert optional\n")
 	b.WriteString("auth-user-pass-optional\n")
+	// 仅密码配置没有稳定证书 CN，用登录名作为地址租约身份。
+	b.WriteString("username-as-common-name\n")
 	b.WriteString("duplicate-cn\n")
 	if cfg.MaxClients > 0 {
 		fmt.Fprintf(&b, "max-clients %d\n", cfg.MaxClients)

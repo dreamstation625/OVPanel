@@ -66,11 +66,27 @@ jobs:
             fi
           fi
 
-          # main 只在 VERSION 变化（对应 tag 不存在）时发布；dev 的 dev 标签
-          # 每次推送都覆盖重建，保证只有一个 dev 版本。
+          # 普通代码推送不重建镜像；只有 AutoBuild 或 VERSION 变化才触发。
+          # AutoBuild 内容不参与构建，更新其中任意内容（通常写 UTC 时间戳）即可。
+          triggered=true
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            before="$(jq -r '.before // empty' "$GITHUB_EVENT_PATH")"
+            after="$(jq -r '.after // empty' "$GITHUB_EVENT_PATH")"
+            if [[ -z "$before" || "$before" =~ ^0+$ || -z "$after" ]]; then
+              triggered=true
+            elif git diff --quiet "$before" "$after" -- AutoBuild VERSION 2>/dev/null; then
+              triggered=false
+            fi
+          fi
+
+          # main 只在 VERSION 变化（对应 tag 不存在）时发布正式版；dev 的 dev
+          # 标签在 AutoBuild 或 VERSION 变化时覆盖重建，保证只有一个 dev 版本。
           should_publish=true
-          if [ "$tag" != "dev" ] && git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
-            echo "标签 ${tag} 已存在，跳过发布"
+          if [ "$triggered" != "true" ]; then
+            echo "未修改 AutoBuild 或 VERSION，跳过构建发布"
+            should_publish=false
+          elif [ "$tag" != "dev" ] && git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
+            echo "标签 ${tag} 已存在，跳过发布；正式版重建请更新 VERSION"
             should_publish=false
           fi
 
