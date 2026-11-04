@@ -618,12 +618,16 @@ export const api = {
   getUser: (id: string) => request<UserDetail>(`/api/users/${encodeURIComponent(id)}`),
   updateUser: (id: string, patchBody: UserPatch) =>
     patch<UserDetail>(`/api/users/${encodeURIComponent(id)}`, patchBody),
+  deleteUser: (id: string) =>
+    post<{ ok: boolean }>(`/api/users/${encodeURIComponent(id)}/delete`, {}),
   addProfile: (userId: string, input: ProfileInput) =>
     post<AddProfileResult>(`/api/users/${encodeURIComponent(userId)}/profiles`, input),
 
   getProfile: (id: string) => request<Profile>(`/api/profiles/${encodeURIComponent(id)}`),
   updateProfile: (id: string, patchBody: ProfilePatch) =>
     patch<Profile>(`/api/profiles/${encodeURIComponent(id)}`, patchBody),
+  deleteProfile: (id: string) =>
+    post<{ ok: boolean }>(`/api/profiles/${encodeURIComponent(id)}/delete`, {}),
   updateProfileLimits: (id: string, input: ProfileLimitsInput) =>
     put<{ profile: Profile }>(`/api/profiles/${encodeURIComponent(id)}/limits`, input),
   resetQuota: (id: string) =>

@@ -310,6 +310,28 @@ func (s *Server) handleAddProfile(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, resp)
 }
 
+func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := s.accounts.DeleteUser(r.Context(), id); err != nil {
+		s.writeAccountError(w, r, err)
+		return
+	}
+	s.applyRuntimeBundle(w, r, "user deleted")
+	s.log.Info("user deleted", "user_id", id)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleDeleteProfile(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := s.accounts.DeleteProfile(r.Context(), id); err != nil {
+		s.writeAccountError(w, r, err)
+		return
+	}
+	s.applyRuntimeBundle(w, r, "profile deleted")
+	s.log.Info("profile deleted", "profile_id", id)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 func (s *Server) handleProfileDetail(w http.ResponseWriter, r *http.Request) {
 	detail, ok, err := s.store.Profile(r.Context(), r.PathValue("id"))
 	if err != nil {

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, Copy, Download, Gauge, KeyRound, RefreshCw, ShieldOff, ShieldCheck } from '@lucide/vue'
+import { ArrowLeft, Copy, Download, Gauge, KeyRound, RefreshCw, ShieldOff, ShieldCheck, Trash2 } from '@lucide/vue'
 import {
   NAlert,
   NButton,
@@ -30,8 +30,6 @@ import {
   formatFingerprint,
   gbToBytes,
   mbpsToBps,
-  statusLabel,
-  statusTone,
 } from '../labels'
 import { copyText, downloadBlob } from '../utils'
 import { useNotify } from '../notify'
@@ -259,6 +257,25 @@ function revokeCertificate() {
   )
 }
 
+function askDeleteProfile() {
+  const current = profile.value
+  if (!current) {
+    return
+  }
+  openPrompt(
+    '删除配置',
+    `删除「${current.name}」会同时删除证书、在线记录和用量数据，并断开在线连接。删除后无法恢复。`,
+    '删除配置',
+    async () => {
+      await api.deleteProfile(current.id)
+      notify.success('配置已删除。')
+      router.push(backTarget.value)
+    },
+    true,
+    5,
+  )
+}
+
 async function toggleStatus() {
   if (!profile.value) {
     return
@@ -475,8 +492,8 @@ watch(() => route.params.id, load, { immediate: true })
           <span class="eyebrow"><ShieldCheck :size="14" /> 客户端配置</span>
           <div class="title-row">
             <h1>{{ profile.name }}</h1>
-            <span class="chip" :class="`chip--${statusTone(profile.effectiveStatus)}`">
-              {{ statusLabel(profile.effectiveStatus) }}
+            <span class="chip" :class="profile.status === 'active' ? 'chip--ok' : 'chip--warn'">
+              {{ profile.status === 'active' ? '启用' : '已停用' }}
             </span>
           </div>
           <p class="page-meta">
@@ -487,6 +504,10 @@ watch(() => route.params.id, load, { immediate: true })
           <NButton type="primary" :disabled="!canDownload" @click="exportProfile">
             <template #icon><Download :size="16" /></template>
             下载 .ovpn
+          </NButton>
+          <NButton type="error" ghost @click="askDeleteProfile">
+            <template #icon><Trash2 :size="15" /></template>
+            删除配置
           </NButton>
         </div>
       </header>
@@ -861,6 +882,8 @@ watch(() => route.params.id, load, { immediate: true })
 
 .header-tools {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 8px;
 }
 

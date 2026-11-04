@@ -443,6 +443,59 @@ func (s *Store) UpdateProfileNetwork(ctx context.Context, id, routeMode, accessM
 	return nil
 }
 
+// DeleteProfile 删除配置、证书以及级联的会话和用量记录。
+func (s *Store) DeleteProfile(ctx context.Context, id string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("删除配置: %w", err)
+	}
+	defer tx.Rollback()
+
+	var count int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM client_profile WHERE id = ?`, id).Scan(&count); err != nil {
+		return fmt.Errorf("读取配置: %w", err)
+	}
+	if count == 0 {
+		return ErrNotFound
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM certificate WHERE profile_id = ?`, id); err != nil {
+		return fmt.Errorf("删除配置证书: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM client_profile WHERE id = ?`, id); err != nil {
+		return fmt.Errorf("删除配置: %w", err)
+	}
+	return tx.Commit()
+}
+
+// DeleteUser 删除用户及其全部配置、证书和级联记录。
+func (s *Store) DeleteUser(ctx context.Context, id string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("删除用户: %w", err)
+	}
+	defer tx.Rollback()
+
+	var count int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM app_user WHERE id = ?`, id).Scan(&count); err != nil {
+		return fmt.Errorf("读取用户: %w", err)
+	}
+	if count == 0 {
+		return ErrNotFound
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM certificate
+		  WHERE profile_id IN (SELECT id FROM client_profile WHERE user_id = ?)`, id); err != nil {
+		return fmt.Errorf("删除用户证书: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM client_profile WHERE user_id = ?`, id); err != nil {
+		return fmt.Errorf("删除用户配置: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM app_user WHERE id = ?`, id); err != nil {
+		return fmt.Errorf("删除用户: %w", err)
+	}
+	return tx.Commit()
+}
+
 // UpdateProfileStatus 启用或停用配置。
 func (s *Store) UpdateProfileStatus(ctx context.Context, id, status string) error {
 	res, err := s.db.ExecContext(ctx,

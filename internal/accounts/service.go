@@ -260,6 +260,16 @@ func (s *Service) SetProfileStatus(ctx context.Context, id, status string) (stor
 	return s.profileDetail(ctx, id)
 }
 
+// DeleteUser 删除用户及其全部客户端配置和证书。
+func (s *Service) DeleteUser(ctx context.Context, id string) error {
+	return s.store.DeleteUser(ctx, id)
+}
+
+// DeleteProfile 删除客户端配置及其证书、连接和用量记录。
+func (s *Service) DeleteProfile(ctx context.Context, id string) error {
+	return s.store.DeleteProfile(ctx, id)
+}
+
 // UpdateProfileName 更新配置名称。
 func (s *Service) UpdateProfileName(ctx context.Context, id, name string) (store.ProfileDetail, error) {
 	name = strings.TrimSpace(name)
