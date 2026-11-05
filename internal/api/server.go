@@ -139,8 +139,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/users/{id}", s.requireSession(http.HandlerFunc(s.handleUserDetail)))
 	mux.Handle("PATCH /api/users/{id}", s.requireSession(http.HandlerFunc(s.handleUpdateUser)))
 	mux.Handle("POST /api/users/{id}/profiles", s.requireSession(http.HandlerFunc(s.handleAddProfile)))
+	mux.Handle("POST /api/users/{id}/delete", s.requireSession(http.HandlerFunc(s.handleDeleteUser)))
 
 	mux.Handle("GET /api/profiles/{id}", s.requireSession(http.HandlerFunc(s.handleProfileDetail)))
+	mux.Handle("POST /api/profiles/{id}/delete", s.requireSession(http.HandlerFunc(s.handleDeleteProfile)))
 	mux.Handle("PATCH /api/profiles/{id}", s.requireSession(http.HandlerFunc(s.handleUpdateProfile)))
 	mux.Handle("PUT /api/profiles/{id}/limits", s.requireSession(http.HandlerFunc(s.handleUpdateProfileLimits)))
 	mux.Handle("POST /api/profiles/{id}/quota/reset", s.requireSession(http.HandlerFunc(s.handleResetQuota)))

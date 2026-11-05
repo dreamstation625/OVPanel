@@ -1,16 +1,18 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
-import { ArrowLeft, Pencil, Plus, UserRoundX, UserRoundCheck } from '@lucide/vue'
+import { useRoute, useRouter } from 'vue-router'
+import { ArrowLeft, Pencil, Plus, Trash2, UserRoundX, UserRoundCheck } from '@lucide/vue'
 import { NAlert, NButton, NForm, NFormItem, NInput, NModal, NPopconfirm } from 'naive-ui'
 import AddProfileModal from '../components/AddProfileModal.vue'
+import ConfirmModal from '../components/ConfirmModal.vue'
 import OneTimePasswordModal from '../components/OneTimePasswordModal.vue'
 import { api, ApiError, type AddProfileResult, type UserDetail } from '../api'
-import { authLabel, errorMessage, formatBytes, formatDate, shortFingerprint, statusLabel, statusTone } from '../labels'
+import { authLabel, errorMessage, formatBytes, formatDate, shortFingerprint } from '../labels'
 import { useNotify } from '../notify'
 
 const notify = useNotify()
 const route = useRoute()
+const router = useRouter()
 const detail = ref<UserDetail | null>(null)
 const loading = ref(false)
 const error = ref('')
@@ -22,6 +24,7 @@ const editBusy = ref(false)
 const editError = ref('')
 const addProfileShow = ref(false)
 const oneTime = ref({ show: false, password: '', username: '' })
+const deletePrompt = ref({ show: false, loading: false })
 
 async function load() {
   const id = String(route.params.id ?? '')
@@ -95,6 +98,28 @@ async function toggleStatus() {
   }
 }
 
+function askDeleteUser() {
+  deletePrompt.value = { show: true, loading: false }
+}
+
+async function confirmDeleteUser() {
+  if (!detail.value || deletePrompt.value.loading) {
+    return
+  }
+  deletePrompt.value.loading = true
+  try {
+    await api.deleteUser(detail.value.user.id)
+    notify.success('用户已删除。')
+    deletePrompt.value.show = false
+    router.push('/users')
+  } catch (err) {
+    deletePrompt.value.show = false
+    notify.error(errorMessage(err))
+  } finally {
+    deletePrompt.value.loading = false
+  }
+}
+
 function handleProfileCreated(result: AddProfileResult) {
   notify.success('客户端配置已创建。')
   load()
@@ -143,6 +168,10 @@ watch(() => route.params.id, load, { immediate: true })
           <NButton type="primary" @click="addProfileShow = true">
             <template #icon><Plus :size="16" /></template>
             添加配置
+          </NButton>
+          <NButton type="error" ghost @click="askDeleteUser">
+            <template #icon><Trash2 :size="15" /></template>
+            删除用户
           </NButton>
         </div>
       </header>
@@ -207,8 +236,8 @@ watch(() => route.params.id, load, { immediate: true })
               <span class="profile-stats">
                 在线 {{ profile.onlineSessions }} · {{ formatBytes(profile.usageBytes) }}
               </span>
-              <span class="chip" :class="`chip--${statusTone(profile.effectiveStatus)}`">
-                {{ statusLabel(profile.effectiveStatus) }}
+              <span class="chip" :class="profile.status === 'active' ? 'chip--ok' : 'chip--warn'">
+                {{ profile.status === 'active' ? '启用' : '已停用' }}
               </span>
               <span class="row-action">查看</span>
             </div>
@@ -250,6 +279,16 @@ watch(() => route.params.id, load, { immediate: true })
       </template>
     </NModal>
 
+    <ConfirmModal
+      v-model:show="deletePrompt.show"
+      title="删除用户"
+      :description="`删除用户「${detail?.user.displayName ?? ''}」会同时删除其 ${detail?.profiles.length ?? 0} 个客户端配置、证书、在线记录和用量数据，并断开在线连接。删除后无法恢复。`"
+      action-label="删除用户"
+      :loading="deletePrompt.loading"
+      danger
+      :countdown="5"
+      @confirm="confirmDeleteUser"
+    />
     <AddProfileModal v-model:show="addProfileShow" :user-id="String(route.params.id)" @created="handleProfileCreated" />
     <OneTimePasswordModal
       :show="oneTime.show"
@@ -306,6 +345,8 @@ watch(() => route.params.id, load, { immediate: true })
 
 .header-tools {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 8px;
 }
 

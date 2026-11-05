@@ -288,6 +288,52 @@ func TestP03ServerCertificateRenew(t *testing.T) {
 	}
 }
 
+func TestP03DeleteProfileAndUser(t *testing.T) {
+	srv := newTestServer(t)
+	h, cookies := setupAndLogin(t, srv)
+
+	create := func(name string) (userID, profileID string) {
+		t.Helper()
+		rec := doJSON(t, h, http.MethodPost, "/api/users", "127.0.0.1:5000", map[string]any{
+			"displayName": name,
+			"profile":     map[string]any{"name": "默认配置", "authType": "certificate"},
+		}, cookies...)
+		if rec.Code != http.StatusCreated && rec.Code != http.StatusAccepted {
+			t.Fatalf("创建用户失败：%d %s", rec.Code, rec.Body.String())
+		}
+		var result struct {
+			User    userDTO    `json:"user"`
+			Profile profileDTO `json:"profile"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+			t.Fatalf("解析创建结果失败：%v", err)
+		}
+		return result.User.ID, result.Profile.ID
+	}
+
+	userID, profileID := create("删除配置测试")
+	if rec := doJSON(t, h, http.MethodPost, "/api/profiles/"+profileID+"/delete", "127.0.0.1:5000",
+		map[string]any{}, cookies...); rec.Code != http.StatusOK && rec.Code != http.StatusAccepted {
+		t.Fatalf("删除配置失败：%d %s", rec.Code, rec.Body.String())
+	}
+	if rec := doJSON(t, h, http.MethodGet, "/api/profiles/"+profileID, "127.0.0.1:5000", nil, cookies...); rec.Code != http.StatusNotFound {
+		t.Fatalf("删除后配置仍存在：%d", rec.Code)
+	}
+	detail := doJSON(t, h, http.MethodGet, "/api/users/"+userID, "127.0.0.1:5000", nil, cookies...)
+	if detail.Code != http.StatusOK || !strings.Contains(detail.Body.String(), `"profiles":[]`) {
+		t.Fatalf("删除配置后用户详情异常：%d %s", detail.Code, detail.Body.String())
+	}
+
+	userID, _ = create("删除用户测试")
+	if rec := doJSON(t, h, http.MethodPost, "/api/users/"+userID+"/delete", "127.0.0.1:5000",
+		map[string]any{}, cookies...); rec.Code != http.StatusOK && rec.Code != http.StatusAccepted {
+		t.Fatalf("删除用户失败：%d %s", rec.Code, rec.Body.String())
+	}
+	if rec := doJSON(t, h, http.MethodGet, "/api/users/"+userID, "127.0.0.1:5000", nil, cookies...); rec.Code != http.StatusNotFound {
+		t.Fatalf("删除后用户仍存在：%d", rec.Code)
+	}
+}
+
 func TestP03CSRFAndAdminPassword(t *testing.T) {
 	srv := newTestServer(t)
 	h, cookies := setupAndLogin(t, srv)

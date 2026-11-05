@@ -197,6 +197,52 @@ func TestFixedIPProfilesClearAndRestore(t *testing.T) {
 	}
 }
 
+func TestDeleteProfileAndUser(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+
+	cert1 := testCert("c1", "p1", 1)
+	if err := s.CreateUserWithProfile(ctx, testUser("u1"), testProfile("p1", "u1", AuthCertificate, ""), &cert1); err != nil {
+		t.Fatalf("创建首个配置失败：%v", err)
+	}
+	if err := s.DeleteProfile(ctx, "p1"); err != nil {
+		t.Fatalf("删除配置失败：%v", err)
+	}
+	if _, ok, err := s.Profile(ctx, "p1"); err != nil || ok {
+		t.Fatalf("配置应已删除：ok=%v err=%v", ok, err)
+	}
+	if history, err := s.CertificateHistory(ctx, "p1"); err != nil || len(history) != 0 {
+		t.Fatalf("配置证书应已删除：%+v %v", history, err)
+	}
+	if _, ok, err := s.User(ctx, "u1"); err != nil || !ok {
+		t.Fatalf("删除配置不应删除用户：ok=%v err=%v", ok, err)
+	}
+
+	cert2 := testCert("c2", "p2", 2)
+	if err := s.CreateUserWithProfile(ctx, testUser("u2"), testProfile("p2", "u2", AuthCertificate, ""), &cert2); err != nil {
+		t.Fatalf("创建第二个用户失败：%v", err)
+	}
+	if err := s.DeleteUser(ctx, "u2"); err != nil {
+		t.Fatalf("删除用户失败：%v", err)
+	}
+	if _, ok, err := s.User(ctx, "u2"); err != nil || ok {
+		t.Fatalf("用户应已删除：ok=%v err=%v", ok, err)
+	}
+	if _, ok, err := s.Profile(ctx, "p2"); err != nil || ok {
+		t.Fatalf("用户配置应已删除：ok=%v err=%v", ok, err)
+	}
+	if history, err := s.CertificateHistory(ctx, "p2"); err != nil || len(history) != 0 {
+		t.Fatalf("用户证书应已删除：%+v %v", history, err)
+	}
+
+	if err := s.DeleteProfile(ctx, "missing"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("删除不存在的配置应返回 ErrNotFound：%v", err)
+	}
+	if err := s.DeleteUser(ctx, "missing"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("删除不存在的用户应返回 ErrNotFound：%v", err)
+	}
+}
+
 func TestCertificateRotationAndRevocation(t *testing.T) {
 	ctx := context.Background()
 	s := openTestStore(t)

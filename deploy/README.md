@@ -57,7 +57,7 @@ sudo sysctl -p /etc/sysctl.d/90-ovpanel.conf
 2. 将 [`.env.host.example`](../.env.host.example) 保存为编排目录下的 `.env`，或将参数
    填入面板的编排环境变量配置。通过这些变量调整镜像标签、数据目录、管理端口和 HTTPS，
    两个镜像使用同一个发布标签。已有 `.env` 时合并所需参数，不覆盖原有配置。
-   当前示例默认使用 `latest` 正式版，生产环境建议固定为 `0.0.7` 或更新的正式版本。
+   当前示例默认使用 `latest` 正式版，生产环境建议固定为 `0.0.8` 或更新的正式版本。
 3. 保存并启动编排。保留 `openvpn` 的 `network_mode: host`，不要额外添加端口映射或容器 sysctl。
 4. 在面板的 `ovpanel-panel` 容器终端运行 `cat /data/bootstrap-token` 获取初始化口令。
    也可在宿主执行：
@@ -335,8 +335,8 @@ VPN 地址池转发和 UFW 数据端口规则。两种模式不要同时启用�
 ```bash
 # 1. 先创建并验证加密备份
 # 2. 在 .env 中设置对应版本的镜像
-#    OVPANEL_PANEL_IMAGE=dreamstation625/ovpanel:0.0.7
-#    OVPANEL_OPENVPN_IMAGE=dreamstation625/ovpanel-openvpn:0.0.7
+#    OVPANEL_PANEL_IMAGE=dreamstation625/ovpanel:0.0.8
+#    OVPANEL_OPENVPN_IMAGE=dreamstation625/ovpanel-openvpn:0.0.8
 docker compose -f compose.yaml -f compose.hostnet.yaml pull
 docker compose -f compose.yaml -f compose.hostnet.yaml up -d --no-build --no-deps --force-recreate panel
 docker compose -f compose.yaml -f compose.hostnet.yaml up -d --no-build --no-deps --force-recreate openvpn

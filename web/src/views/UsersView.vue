@@ -72,7 +72,7 @@ function closeOneTime() {
 }
 
 function userStatusLabel(value: User['status']) {
-  return value === 'active' ? '启用' : '停用'
+  return value === 'active' ? '启用' : '已停用'
 }
 
 onMounted(() => {
@@ -138,6 +138,7 @@ onMounted(() => {
         :key="user.id"
         :to="`/users/${user.id}`"
         class="list-row"
+        :class="{ 'is-disabled': user.status === 'disabled' }"
       >
         <div class="user-cell">
           <strong>{{ user.displayName }}</strong>
@@ -148,7 +149,7 @@ onMounted(() => {
           </div>
         </div>
         <div>
-          <span class="chip" :class="user.status === 'active' ? 'chip--ok' : 'chip--neutral'">
+          <span class="chip" :class="user.status === 'active' ? 'chip--ok' : 'chip--warn'">
             {{ userStatusLabel(user.status) }}
           </span>
         </div>
@@ -274,6 +275,14 @@ onMounted(() => {
 
 .list-row:hover {
   background: var(--surface-2);
+}
+
+.list-row.is-disabled {
+  box-shadow: inset 3px 0 var(--warn);
+}
+
+.list-row.is-disabled:hover {
+  background: var(--warn-soft);
 }
 
 .list-row:focus-visible {
