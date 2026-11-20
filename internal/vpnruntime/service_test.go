@@ -13,6 +13,7 @@ import (
 	"github.com/dreamstation625/ovpanel/internal/accounts"
 	"github.com/dreamstation625/ovpanel/internal/agentproto"
 	"github.com/dreamstation625/ovpanel/internal/pki"
+	"github.com/dreamstation625/ovpanel/internal/runtimeauth"
 	"github.com/dreamstation625/ovpanel/internal/secretbox"
 	"github.com/dreamstation625/ovpanel/internal/store"
 )
@@ -120,6 +121,57 @@ func TestApplyRejectsExportProtocolMismatch(t *testing.T) {
 
 	if _, err := service.Apply(ctx); err == nil || !strings.Contains(err.Error(), "协议不一致") {
 		t.Fatalf("协议不一致时应拒绝下发：%v", err)
+	}
+}
+
+func TestSyncAccountsRefreshesExpiredCRL(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	st, err := store.Open(ctx, filepath.Join(dir, "panel.db"))
+	if err != nil {
+		t.Fatalf("打开数据库失败：%v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+	if _, err := st.Migrate(ctx); err != nil {
+		t.Fatalf("迁移失败：%v", err)
+	}
+	key, _ := secretbox.LoadOrCreate(filepath.Join(dir, "master.key"), "")
+	pkiService := pki.New(st, key)
+	accountsService := accounts.New(st, pkiService, key)
+	controlDir := filepath.Join(dir, "control")
+	if err := os.MkdirAll(controlDir, 0o700); err != nil {
+		t.Fatalf("创建控制目录失败：%v", err)
+	}
+	snapshot, err := runtimeauth.Build(ctx, st)
+	if err != nil {
+		t.Fatalf("构建认证快照失败：%v", err)
+	}
+	bundle := agentproto.Bundle{Version: agentproto.Version, Snapshot: snapshot}
+	payload, err := json.MarshalIndent(bundle, "", "  ")
+	if err != nil {
+		t.Fatalf("编码控制包失败：%v", err)
+	}
+	if err := os.WriteFile(filepath.Join(controlDir, BundleFileName), payload, 0o600); err != nil {
+		t.Fatalf("写入控制包失败：%v", err)
+	}
+
+	service := New(st, pkiService, accountsService, controlDir)
+	if _, err := service.SyncAccounts(ctx); err != nil {
+		t.Fatalf("同步账号失败：%v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(controlDir, BundleFileName))
+	if err != nil {
+		t.Fatalf("读取控制包失败：%v", err)
+	}
+	var updated agentproto.Bundle
+	if err := json.Unmarshal(raw, &updated); err != nil {
+		t.Fatalf("解析控制包失败：%v", err)
+	}
+	if updated.CRLPEM == "" {
+		t.Fatal("CRL 缺失时同步应生成新 CRL")
+	}
+	if pki.CRLNeedsRefresh(updated.CRLPEM, time.Now().UTC(), 0) {
+		t.Fatal("同步后 CRL 仍不可用")
 	}
 }
 

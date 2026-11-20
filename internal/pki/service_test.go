@@ -175,6 +175,39 @@ func TestCRLContainsRevokedCertificate(t *testing.T) {
 	}
 }
 
+func TestCRLValidityAndRefreshDetection(t *testing.T) {
+	svc, _, _ := newTestService(t)
+	ctx := context.Background()
+	if _, _, err := svc.BuildClientCertificate(ctx, "profile-1", "ovp-profile-1"); err != nil {
+		t.Fatalf("签发失败：%v", err)
+	}
+	crlPEM, err := svc.CRLPEM(ctx)
+	if err != nil {
+		t.Fatalf("生成 CRL 失败：%v", err)
+	}
+	block, _ := pem.Decode([]byte(crlPEM))
+	if block == nil {
+		t.Fatal("CRL PEM 非法")
+	}
+	crl, err := x509.ParseRevocationList(block.Bytes)
+	if err != nil {
+		t.Fatalf("解析 CRL 失败：%v", err)
+	}
+	now := time.Now().UTC()
+	if crl.NextUpdate.Before(now.Add(360 * 24 * time.Hour)) {
+		t.Fatalf("CRL 有效期过短：%v", crl.NextUpdate)
+	}
+	if CRLNeedsRefresh(crlPEM, now, 30*24*time.Hour) {
+		t.Fatal("新生成的 CRL 不应立即刷新")
+	}
+	if !CRLNeedsRefresh(crlPEM, now.Add(340*24*time.Hour), 30*24*time.Hour) {
+		t.Fatal("CRL 临近过期时应触发刷新")
+	}
+	if !CRLNeedsRefresh("invalid", now, 0) {
+		t.Fatal("非法 CRL 应触发刷新")
+	}
+}
+
 func TestCheckRejectsWrongMasterKey(t *testing.T) {
 	svc, st, _ := newTestService(t)
 	ctx := context.Background()
