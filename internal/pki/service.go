@@ -33,6 +33,7 @@ const (
 	caValidityYears     = 20
 	clientValidityYears = 15
 	serverValidityYears = 15
+	crlValidity         = 365 * 24 * time.Hour
 	rsaBits             = 2048
 )
 
@@ -256,7 +257,7 @@ func (s *Service) CRLPEM(ctx context.Context) (string, error) {
 	template := &x509.RevocationList{
 		Number:                    number,
 		ThisUpdate:                now.Add(-5 * time.Minute),
-		NextUpdate:                now.Add(7 * 24 * time.Hour),
+		NextUpdate:                now.Add(crlValidity),
 		RevokedCertificateEntries: entries,
 	}
 	der, err := x509.CreateRevocationList(rand.Reader, template, caCert, signer)
@@ -264,6 +265,19 @@ func (s *Service) CRLPEM(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("签发 CRL: %w", err)
 	}
 	return string(pem.EncodeToMemory(&pem.Block{Type: "X509 CRL", Bytes: der})), nil
+}
+
+// CRLNeedsRefresh 判断 CRL 是否已过期或将在 threshold 内过期。
+func CRLNeedsRefresh(crlPEM string, now time.Time, threshold time.Duration) bool {
+	block, _ := pem.Decode([]byte(crlPEM))
+	if block == nil || block.Type != "X509 CRL" {
+		return true
+	}
+	crl, err := x509.ParseRevocationList(block.Bytes)
+	if err != nil {
+		return true
+	}
+	return crl.NextUpdate.IsZero() || !crl.NextUpdate.After(now.Add(threshold))
 }
 
 // EnsureCAPEM 在需要导出仅密码配置时也保证 CA 存在。

@@ -31,6 +31,9 @@ import (
 // BundleFileName 是控制包文件名。
 const BundleFileName = "bundle.json"
 
+// crlRefreshWindow 是 CRL 到期前的自动刷新窗口。
+const crlRefreshWindow = 30 * 24 * time.Hour
+
 // Service 生成并下发运行控制包。
 type Service struct {
 	mu         sync.Mutex
@@ -350,7 +353,9 @@ func (s *Service) SyncAccounts(ctx context.Context) (bool, error) {
 	}
 	status, _ := s.AgentStatus()
 	retryFailed := !s.bundleConfirmed(data) && status["lastError"] != nil && status["lastError"] != ""
-	if !bytes.Equal(current, desired) || retryFailed {
+	// CRL 即使没有账号变化也必须定期续期，否则到期后 OpenVPN 会拒绝所有客户端证书。
+	crlNeedsRefresh := pki.CRLNeedsRefresh(bundle.CRLPEM, s.now(), crlRefreshWindow)
+	if !bytes.Equal(current, desired) || retryFailed || crlNeedsRefresh {
 		bundle.Snapshot = snapshot
 		bundle.CRLPEM, err = s.pki.CRLPEM(ctx)
 		if err != nil {
